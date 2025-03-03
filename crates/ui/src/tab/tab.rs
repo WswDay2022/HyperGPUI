@@ -4,8 +4,8 @@ use crate::{ActiveTheme, Selectable, Sizable, Size, StyledExt};
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     div, px, AnyElement, App, ClickEvent, Div, Edges, ElementId, Hsla, InteractiveElement,
-    IntoElement, ParentElement as _, Pixels, RenderOnce, SharedString, Stateful,
-    StatefulInteractiveElement, Styled, Window,
+    IntoElement, ParentElement, Pixels, RenderOnce, SharedString, StatefulInteractiveElement,
+    Styled, Window,
 };
 
 #[derive(Debug, Clone, Default, Copy, PartialEq, Eq, Hash)]
@@ -45,6 +45,23 @@ impl Default for TabStyle {
 }
 
 impl TabVariant {
+    fn height(&self, size: Size) -> Pixels {
+        match size {
+            Size::Small | Size::XSmall => match self {
+                TabVariant::Tab => px(24.),
+                TabVariant::Pill => px(24.),
+                TabVariant::Segmented => px(24.),
+                TabVariant::Underline => px(30.),
+            },
+            _ => match self {
+                TabVariant::Tab => px(30.),
+                TabVariant::Pill => px(31.),
+                TabVariant::Segmented => px(30.),
+                TabVariant::Underline => px(36.),
+            },
+        }
+    }
+
     fn inner_height(&self, size: Size) -> Pixels {
         match size {
             Size::Small | Size::XSmall => match self {
@@ -57,7 +74,7 @@ impl TabVariant {
                 TabVariant::Tab => px(30.),
                 TabVariant::Pill => px(31.),
                 TabVariant::Segmented => px(30.),
-                TabVariant::Underline => px(25.),
+                TabVariant::Underline => px(24.),
             },
         }
     }
@@ -122,7 +139,8 @@ impl TabVariant {
             },
             _ => match self {
                 TabVariant::Underline => Edges {
-                    bottom: px(4.),
+                    top: px(5.),
+                    bottom: px(3.),
                     ..Default::default()
                 },
                 _ => Edges::all(px(0.)),
@@ -233,7 +251,7 @@ impl TabVariant {
                 ..Default::default()
             },
             TabVariant::Pill => TabStyle {
-                fg: cx.theme().accent_foreground,
+                fg: cx.theme().primary,
                 bg: cx.theme().transparent,
                 borders: Edges::all(px(1.)),
                 border_color: cx.theme().primary,
@@ -322,10 +340,11 @@ impl TabVariant {
 #[derive(IntoElement)]
 pub struct Tab {
     id: ElementId,
-    base: Stateful<Div>,
-    label: AnyElement,
+    base: Div,
+    label: SharedString,
     prefix: Option<AnyElement>,
     suffix: Option<AnyElement>,
+    children: Vec<AnyElement>,
     variant: TabVariant,
     size: Size,
     disabled: bool,
@@ -336,31 +355,30 @@ pub struct Tab {
 impl From<&'static str> for Tab {
     fn from(label: &'static str) -> Self {
         let label = SharedString::from(label);
-        Self::new(label.clone(), label)
+        Self::new(label)
     }
 }
 
 impl From<String> for Tab {
     fn from(label: String) -> Self {
         let label = SharedString::from(label);
-        Self::new(label.clone(), label)
+        Self::new(label)
     }
 }
 
 impl From<SharedString> for Tab {
     fn from(label: SharedString) -> Self {
-        let label = SharedString::from(label);
-        Self::new(label.clone(), label)
+        Self::new(label)
     }
 }
 
 impl Tab {
-    pub fn new(id: impl Into<ElementId>, label: impl IntoElement) -> Self {
-        let id: ElementId = id.into();
+    pub fn new(label: impl Into<SharedString>) -> Self {
         Self {
-            id: id.clone(),
-            base: div().id(id).gap_1(),
-            label: label.into_any_element(),
+            id: ElementId::Integer(0),
+            base: div().gap_1(),
+            label: label.into(),
+            children: Vec::new(),
             disabled: false,
             selected: false,
             prefix: None,
@@ -369,6 +387,12 @@ impl Tab {
             size: Size::default(),
             on_click: None,
         }
+    }
+
+    /// Set id to the tab.
+    pub fn id(mut self, id: impl Into<ElementId>) -> Self {
+        self.id = id.into();
+        self
     }
 
     /// Set Tab Variant.
@@ -423,6 +447,12 @@ impl Tab {
     }
 }
 
+impl ParentElement for Tab {
+    fn extend(&mut self, elements: impl IntoIterator<Item = AnyElement>) {
+        self.children.extend(elements);
+    }
+}
+
 impl Selectable for Tab {
     fn element_id(&self) -> &ElementId {
         &self.id
@@ -470,13 +500,11 @@ impl RenderOnce for Tab {
         let inner_paddings = self.variant.inner_paddings(self.size);
         let inner_margins = self.variant.inner_margins(self.size);
         let inner_height = self.variant.inner_height(self.size);
-
-        let height = match self.size {
-            Size::Small | Size::XSmall => px(24.),
-            _ => px(31.),
-        };
+        let height = self.variant.height(self.size);
+        let has_label = !self.label.is_empty();
 
         self.base
+            .id(self.id)
             .flex()
             .items_center()
             .flex_shrink_0()
@@ -516,7 +544,8 @@ impl RenderOnce for Tab {
                     .margins(inner_margins)
                     .text_ellipsis()
                     .flex_shrink_0()
-                    .child(self.label)
+                    .when(has_label, |this| this.child(self.label))
+                    .when(!has_label, |this| this.children(self.children))
                     .bg(tab_style.inner_bg)
                     .rounded(tab_style.inner_radius)
                     .hover(|this| {
