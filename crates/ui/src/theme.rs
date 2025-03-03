@@ -214,7 +214,7 @@ pub struct ThemeColor {
 impl ThemeColor {
     pub fn light() -> Self {
         Self {
-            accent: hsl(240.0, 5.0, 96.0),
+            accent: hsl(240.0, 4.8, 93.9),
             accent_foreground: hsl(240.0, 5.9, 10.0),
             accordion: hsl(0.0, 0.0, 100.0),
             accordion_active: hsl(240.0, 5.9, 90.0),
