@@ -541,8 +541,9 @@ impl Theme {
 
 impl From<ThemeColor> for Theme {
     fn from(colors: ThemeColor) -> Self {
+        let mode = ThemeMode::default();
         Theme {
-            mode: ThemeMode::default(),
+            mode,
             transparent: Hsla::transparent_black(),
             font_size: px(16.),
             font_family: if cfg!(target_os = "macos") {
