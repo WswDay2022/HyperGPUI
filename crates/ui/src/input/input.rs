@@ -31,9 +31,9 @@ use crate::history::History;
 use crate::indicator::Indicator;
 use crate::input::clear_button;
 use crate::scroll::{Scrollbar, ScrollbarAxis, ScrollbarState};
-use crate::ActiveTheme;
 use crate::Size;
 use crate::StyledExt;
+use crate::{ActiveTheme, Root};
 use crate::{Sizable, StyleSized};
 
 actions!(
@@ -1371,7 +1371,12 @@ impl TextInput {
         self.focus_handle.is_focused(window) && self.blink_cursor.read(cx).visible()
     }
 
-    fn on_focus(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+    fn on_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let input_entity = cx.entity();
+        Root::update(window, cx, |root, _, _| {
+            root.focused_input = Some(input_entity)
+        });
+
         self.blink_cursor.update(cx, |cursor, cx| {
             cursor.start(cx);
         });
@@ -1379,6 +1384,10 @@ impl TextInput {
     }
 
     fn on_blur(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        Root::update(window, cx, |root, _, _| {
+            root.focused_input = None;
+        });
+
         self.unselect(window, cx);
         self.blink_cursor.update(cx, |cursor, cx| {
             cursor.stop(cx);
@@ -1392,13 +1401,8 @@ impl TextInput {
         });
     }
 
-    fn on_key_down_for_blink_cursor(
-        &mut self,
-        _: &KeyDownEvent,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.pause_blink_cursor(cx)
+    fn on_key_down(&mut self, _: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        self.pause_blink_cursor(cx);
     }
 
     pub(super) fn on_drag_move(
@@ -1692,7 +1696,7 @@ impl Render for TextInput {
             .on_action(cx.listener(Self::undo))
             .on_action(cx.listener(Self::redo))
             .on_action(cx.listener(Self::redo))
-            .on_key_down(cx.listener(Self::on_key_down_for_blink_cursor))
+            .on_key_down(cx.listener(Self::on_key_down))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_scroll_wheel(cx.listener(Self::on_scroll_wheel))
