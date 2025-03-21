@@ -29,6 +29,11 @@ const MAIN_DOCK_AREA: DockAreaTab = DockAreaTab {
     version: 5,
 };
 
+#[cfg(debug_assertions)]
+const STATE_FILE: &str = "target/layout.json";
+#[cfg(not(debug_assertions))]
+const STATE_FILE: &str = "layout.json";
+
 pub fn init(cx: &mut App) {
     cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
 
@@ -201,7 +206,7 @@ impl StoryWorkspace {
     fn save_state(state: &DockAreaState) -> Result<()> {
         println!("Save layout...");
         let json = serde_json::to_string_pretty(state)?;
-        std::fs::write("target/layout.json", json)?;
+        std::fs::write(STATE_FILE, json)?;
         Ok(())
     }
 
@@ -210,8 +215,7 @@ impl StoryWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<()> {
-        let fname = "target/layout.json";
-        let json = std::fs::read_to_string(fname)?;
+        let json = std::fs::read_to_string(STATE_FILE)?;
         let state = serde_json::from_str::<DockAreaState>(&json)?;
 
         // Check if the saved layout version is different from the current version
