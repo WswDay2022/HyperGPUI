@@ -16,6 +16,7 @@ pub struct AccordionStory {
     size: Size,
     bordered: bool,
     disabled: bool,
+    multiple: bool,
     focus_handle: FocusHandle,
 }
 
@@ -40,6 +41,7 @@ impl AccordionStory {
             open_ixs: Vec::new(),
             size: Size::default(),
             disabled: false,
+            multiple: false,
             focus_handle: cx.focus_handle(),
         }
     }
@@ -106,6 +108,16 @@ impl Render for AccordionStory {
                             })),
                     )
                     .child(
+                        Checkbox::new("multiple")
+                            .label("Multiple")
+                            .checked(self.multiple)
+                            .on_click(cx.listener(|this, checked, _, cx| {
+                                this.multiple = *checked;
+                                cx.notify();
+                            })),
+                    )
+
+                    .child(
                         Checkbox::new("disabled")
                             .label("Disabled")
                             .checked(self.disabled)
@@ -129,6 +141,7 @@ impl Render for AccordionStory {
                     .bordered(self.bordered)
                     .with_size(self.size)
                     .disabled(self.disabled)
+                    .multiple(self.multiple)
                     .item(|this|
                         this.open(self.open_ixs.contains(&0))
                             .icon(IconName::Info)
