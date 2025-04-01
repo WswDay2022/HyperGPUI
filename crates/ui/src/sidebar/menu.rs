@@ -1,8 +1,8 @@
 use crate::{h_flex, v_flex, ActiveTheme as _, Collapsible, Icon, IconName, StyledExt};
 use gpui::{
-    div, percentage, prelude::FluentBuilder as _, App, ClickEvent, InteractiveElement as _,
-    IntoElement, ParentElement as _, RenderOnce, SharedString, StatefulInteractiveElement as _,
-    Styled as _, Window,
+    div, percentage, prelude::FluentBuilder as _, App, ClickEvent, ElementId,
+    InteractiveElement as _, IntoElement, ParentElement as _, RenderOnce, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Window,
 };
 use std::rc::Rc;
 
@@ -48,7 +48,8 @@ impl RenderOnce for SidebarMenu {
         v_flex().gap_2().children(
             self.items
                 .into_iter()
-                .map(|item| item.collapsed(self.collapsed)),
+                .enumerate()
+                .map(|(ix, item)| item.id(ix).collapsed(self.collapsed)),
         )
     }
 }
@@ -56,6 +57,7 @@ impl RenderOnce for SidebarMenu {
 /// A sidebar menu item
 #[derive(IntoElement)]
 pub struct SidebarMenuItem {
+    id: ElementId,
     icon: Option<Icon>,
     label: SharedString,
     handler: Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>,
@@ -68,6 +70,7 @@ impl SidebarMenuItem {
     /// Create a new SidebarMenuItem with a label
     pub fn new(label: impl Into<SharedString>) -> Self {
         Self {
+            id: ElementId::Integer(0),
             icon: None,
             label: label.into(),
             handler: Rc::new(|_, _, _| {}),
@@ -80,6 +83,12 @@ impl SidebarMenuItem {
     /// Set the icon for the menu item
     pub fn icon(mut self, icon: Icon) -> Self {
         self.icon = Some(icon);
+        self
+    }
+
+    /// Set id to the menu item.
+    fn id(mut self, id: impl Into<ElementId>) -> Self {
+        self.id = id.into();
         self
     }
 
@@ -129,7 +138,7 @@ impl SidebarMenuItem {
         let is_submenu = self.is_submenu();
 
         h_flex()
-            .id("sidebar-menu-item")
+            .id(self.id.clone())
             .overflow_hidden()
             .flex_shrink_0()
             .p_2()
@@ -178,13 +187,19 @@ impl RenderOnce for SidebarMenuItem {
             .when(is_submenu && is_open && !is_collapsed, |this| {
                 this.child(
                     v_flex()
+                        .id("submenu")
                         .border_l_1()
                         .border_color(cx.theme().sidebar_border)
                         .gap_1()
                         .mx_3p5()
                         .px_2p5()
                         .py_0p5()
-                        .children(self.children),
+                        .children(
+                            self.children
+                                .into_iter()
+                                .enumerate()
+                                .map(|(ix, item)| item.id(ix)),
+                        ),
                 )
             })
     }
