@@ -4,15 +4,18 @@ use gpui_component::{
     button::{Button, ButtonVariants as _},
     dock::{DockArea, DockAreaState, DockEvent, DockItem, DockPlacement},
     popup_menu::PopupMenuExt,
-    IconName, Root, Sizable, Theme, TitleBar,
+    IconName, Root, Sizable,
 };
+#[cfg(not(target_os = "linux"))]
+use gpui_component::{Theme, TitleBar};
+
 use serde::Deserialize;
 use std::{sync::Arc, time::Duration};
 use story::{
     AccordionStory, AppState, AppTitleBar, Assets, ButtonStory, CalendarStory, DropdownStory,
     FormStory, IconStory, ImageStory, InputStory, ListStory, ModalStory, Open, PopupStory,
     ProgressStory, Quit, ResizableStory, ScrollableStory, SidebarStory, StoryContainer,
-    SwitchStory, TableStory, TextStory, TooltipStory,
+    SwitchStory, TableStory, TextStory, TooltipStory, WebViewStory,
 };
 
 #[derive(Clone, PartialEq, Eq, Deserialize)]
@@ -365,7 +368,7 @@ impl StoryWorkspace {
                     Arc::new(StoryContainer::panel::<AccordionStory>(window, cx)),
                     Arc::new(StoryContainer::panel::<SidebarStory>(window, cx)),
                     Arc::new(StoryContainer::panel::<FormStory>(window, cx)),
-                    // Arc::new(StoryContainer::panel::<WebViewStory>(window, cx)),
+                    Arc::new(StoryContainer::panel::<WebViewStory>(window, cx)),
                 ],
                 None,
                 &dock_area,
@@ -452,7 +455,7 @@ impl StoryWorkspace {
             14 => Arc::new(StoryContainer::panel::<ResizableStory>(window, cx)),
             15 => Arc::new(StoryContainer::panel::<ScrollableStory>(window, cx)),
             16 => Arc::new(StoryContainer::panel::<AccordionStory>(window, cx)),
-            // 17 => Arc::new(StoryContainer::panel::<WebViewStory>(window, cx)),
+            17 => Arc::new(StoryContainer::panel::<WebViewStory>(window, cx)),
             _ => Arc::new(StoryContainer::panel::<ButtonStory>(window, cx)),
         };
 
