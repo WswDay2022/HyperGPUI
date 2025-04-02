@@ -561,7 +561,7 @@ dependencies = [
  "bitflags 2.6.0",
  "cexpr",
  "clang-sys",
- "itertools 0.11.0",
+ "itertools 0.10.5",
  "lazy_static",
  "lazycell",
  "log",
@@ -584,7 +584,7 @@ dependencies = [
  "bitflags 2.6.0",
  "cexpr",
  "clang-sys",
- "itertools 0.11.0",
+ "itertools 0.10.5",
  "log",
  "prettyplease",
  "proc-macro2",
@@ -902,7 +902,7 @@ dependencies = [
  "serde_json",
  "syn 2.0.96",
  "tempfile",
- "toml 0.8.19",
+ "toml",
 ]
 
 [[package]]
@@ -1722,7 +1722,7 @@ dependencies = [
  "cc",
  "memchr",
  "rustc_version",
- "toml 0.8.19",
+ "toml",
  "vswhom",
  "winreg",
 ]
@@ -3437,7 +3437,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4979f22fdb869068da03c9f7528f8297c6fd2606bc3a4affe42e6a823fdb8da4"
 dependencies = [
  "cfg-if",
- "windows-targets 0.52.6",
+ "windows-targets 0.48.5",
 ]
 
 [[package]]
@@ -3455,12 +3455,6 @@ dependencies = [
  "bitflags 2.6.0",
  "libc",
 ]
-
-[[package]]
-name = "libyml"
-version = "0.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "64804cc6a5042d4f05379909ba25b503ec04e2c082151d62122d5dcaa274b961"
 
 [[package]]
 name = "lightningcss"
@@ -5518,9 +5512,9 @@ dependencies = [
 
 [[package]]
 name = "rust-i18n"
-version = "3.1.2"
+version = "3.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "039f57d22229db401af3458ca939300178e99e88b938573cea12b7c2b0f09724"
+checksum = "a2b6307cde881492032919adf26e254981604a6657b339ae23cce8358e9ee203"
 dependencies = [
  "globwalk",
  "once_cell",
@@ -5532,9 +5526,9 @@ dependencies = [
 
 [[package]]
 name = "rust-i18n-macro"
-version = "3.1.2"
+version = "3.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dde5c022360a2e54477882843d56b6f9bcb4bc62f504b651a2f497f0028d174f"
+checksum = "1c0dc724669fe2ddbbec5ed9daea8147a9030de87ebb46fdc7bb9315701d9912"
 dependencies = [
  "glob",
  "once_cell",
@@ -5543,15 +5537,15 @@ dependencies = [
  "rust-i18n-support",
  "serde",
  "serde_json",
- "serde_yml",
+ "serde_yaml",
  "syn 2.0.96",
 ]
 
 [[package]]
 name = "rust-i18n-support"
-version = "3.1.2"
+version = "3.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "75d2844d36f62b5d6b66f9cf8f8cbdbbbdcdb5fd37a473a9cc2fb45fdcf485d2"
+checksum = "b47501de04282525d0192c4b4133f9e3574e1fab3542ddc7bb109ff773dc108b"
 dependencies = [
  "arc-swap",
  "base62",
@@ -5564,9 +5558,9 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
- "serde_yml",
+ "serde_yaml",
  "siphasher 1.0.1",
- "toml 0.7.8",
+ "toml",
  "triomphe",
 ]
 
@@ -5967,20 +5961,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "serde_yml"
-version = "0.0.11"
+name = "serde_yaml"
+version = "0.9.34+deprecated"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "48e76bab63c3fd98d27c17f9cbce177f64a91f5e69ac04cafe04e1bb25d1dc3c"
+checksum = "6a8b1a1a2ebf674015cc02edccce75287f1a0130d394307b36743c2f5d504b47"
 dependencies = [
  "indexmap 2.7.1",
  "itoa 1.0.11",
- "libyml",
- "log",
- "memchr",
  "ryu",
  "serde",
- "serde_json",
- "tempfile",
+ "unsafe-libyaml",
 ]
 
 [[package]]
@@ -6547,7 +6537,7 @@ dependencies = [
  "cfg-expr",
  "heck 0.5.0",
  "pkg-config",
- "toml 0.8.19",
+ "toml",
  "version-compare",
 ]
 
@@ -6816,18 +6806,6 @@ dependencies = [
 
 [[package]]
 name = "toml"
-version = "0.7.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dd79e69d3b627db300ff956027cc6c3798cef26d22526befdfcd12feeb6d2257"
-dependencies = [
- "serde",
- "serde_spanned",
- "toml_datetime",
- "toml_edit 0.19.15",
-]
-
-[[package]]
-name = "toml"
 version = "0.8.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a1ed1f98e3fdc28d6d910e6737ae6ab1a93bf1985935a1193e68f93eeb68d24e"
@@ -6854,8 +6832,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1b5bb770da30e5cbfde35a2d7b9b8a2c4b8ef89548a7a6aeab5c9a576e3e7421"
 dependencies = [
  "indexmap 2.7.1",
- "serde",
- "serde_spanned",
  "toml_datetime",
  "winnow 0.5.40",
 ]
@@ -7086,6 +7062,12 @@ name = "unindent"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c7de7d73e1754487cb58364ee906a499937a0dfabd86bcb980fa99ec8c8fa2ce"
+
+[[package]]
+name = "unsafe-libyaml"
+version = "0.2.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "673aac59facbab8a9007c7f6108d11f63b603f7cabff99fabf650fea5c32b861"
 
 [[package]]
 name = "untrusted"
@@ -7620,7 +7602,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
