@@ -1,13 +1,14 @@
 use std::{rc::Rc, time::Duration};
 
 use gpui::{
-    actions, anchored, div, point, prelude::FluentBuilder as _, px, Animation, AnimationExt as _,
+    anchored, div, point, prelude::FluentBuilder as _, px, Animation, AnimationExt as _,
     AnyElement, App, ClickEvent, DefiniteLength, DismissEvent, Div, EventEmitter, FocusHandle,
     InteractiveElement as _, IntoElement, KeyBinding, MouseButton, ParentElement, Pixels,
     RenderOnce, Styled, Window,
 };
 
 use crate::{
+    actions::Cancel,
     button::{Button, ButtonVariants as _},
     h_flex,
     modal::overlay_color,
@@ -17,11 +18,9 @@ use crate::{
     v_flex, ActiveTheme, IconName, Placement, Sizable, StyledExt as _,
 };
 
-actions!(drawer, [Escape]);
-
 const CONTEXT: &str = "Drawer";
 pub fn init(cx: &mut App) {
-    cx.bind_keys([KeyBinding::new("escape", Escape, Some(CONTEXT))])
+    cx.bind_keys([KeyBinding::new("escape", Cancel, Some(CONTEXT))])
 }
 
 #[derive(IntoElement)]
@@ -154,7 +153,9 @@ impl RenderOnce for Drawer {
                             .track_focus(&self.focus_handle)
                             .on_action({
                                 let on_close = self.on_close.clone();
-                                move |_: &Escape, window, cx| {
+                                move |_: &Cancel, window, cx| {
+                                    cx.propagate();
+
                                     on_close(&ClickEvent::default(), window, cx);
                                     window.close_drawer(cx);
                                 }

@@ -1,6 +1,7 @@
 use std::time::Duration;
 use std::{cell::Cell, rc::Rc};
 
+use crate::actions::{Cancel, Confirm, SelectNext, SelectPrev};
 use crate::Icon;
 use crate::{
     input::{InputEvent, TextInput},
@@ -8,23 +9,22 @@ use crate::{
     v_flex, ActiveTheme, IconName, Size,
 };
 use gpui::{
-    actions, div, prelude::FluentBuilder, uniform_list, AnyElement, AppContext, Entity,
-    FocusHandle, Focusable, InteractiveElement, IntoElement, KeyBinding, Length,
-    ListSizingBehavior, MouseButton, ParentElement, Render, SharedString, Styled, Task,
-    UniformListScrollHandle, Window,
+    div, prelude::FluentBuilder, uniform_list, AnyElement, AppContext, Entity, FocusHandle,
+    Focusable, InteractiveElement, IntoElement, KeyBinding, Length, ListSizingBehavior,
+    MouseButton, ParentElement, Render, SharedString, Styled, Task, UniformListScrollHandle,
+    Window,
 };
-use gpui::{px, App, Context, EventEmitter, ScrollStrategy, Subscription};
+use gpui::{px, App, Context, EventEmitter, MouseDownEvent, ScrollStrategy, Subscription};
 use smol::Timer;
 
 use super::loading::Loading;
-
-actions!(list, [Cancel, Confirm, SelectPrev, SelectNext]);
 
 pub fn init(cx: &mut App) {
     let context: Option<&str> = Some("List");
     cx.bind_keys([
         KeyBinding::new("escape", Cancel, context),
-        KeyBinding::new("enter", Confirm, context),
+        KeyBinding::new("enter", Confirm { secondary: false }, context),
+        KeyBinding::new("secondary-enter", Confirm { secondary: true }, context),
         KeyBinding::new("up", SelectPrev, context),
         KeyBinding::new("down", SelectNext, context),
     ]);
@@ -112,7 +112,9 @@ pub trait ListDelegate: Sized + 'static {
     );
 
     /// Set the confirm and give the selected index, this is means user have clicked the item or pressed Enter.
-    fn confirm(&mut self, ix: usize, window: &mut Window, cx: &mut Context<List<Self>>) {}
+    ///
+    /// This will always to `set_selected_index` before confirm.
+    fn confirm(&mut self, secondary: bool, window: &mut Window, cx: &mut Context<List<Self>>) {}
 
     /// Cancel the selection, e.g.: Pressed ESC.
     fn cancel(&mut self, window: &mut Window, cx: &mut Context<List<Self>>) {}
@@ -347,7 +349,13 @@ where
                     });
                 });
             }
-            InputEvent::PressEnter => self.on_action_confirm(&Confirm, window, cx),
+            InputEvent::PressEnter { secondary } => self.on_action_confirm(
+                &Confirm {
+                    secondary: *secondary,
+                },
+                window,
+                cx,
+            ),
             _ => {}
         }
     }
@@ -389,15 +397,25 @@ where
     }
 
     fn on_action_cancel(&mut self, _: &Cancel, window: &mut Window, cx: &mut Context<Self>) {
+        if self.selected_index.is_none() {
+            cx.propagate();
+        }
+
         if self.reset_on_cancel {
             self.set_selected_index(None, window, cx);
         }
+
         self.delegate.cancel(window, cx);
         cx.emit(ListEvent::Cancel);
         cx.notify();
     }
 
-    fn on_action_confirm(&mut self, _: &Confirm, window: &mut Window, cx: &mut Context<Self>) {
+    fn on_action_confirm(
+        &mut self,
+        confirm: &Confirm,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.delegate.items_count(cx) == 0 {
             return;
         }
@@ -406,7 +424,9 @@ where
             return;
         };
 
-        self.delegate.confirm(ix, window, cx);
+        self.delegate
+            .set_selected_index(self.selected_index, window, cx);
+        self.delegate.confirm(confirm.secondary, window, cx);
         cx.emit(ListEvent::Confirm(ix));
         cx.notify();
     }
@@ -496,10 +516,16 @@ where
                 })
                 .on_mouse_down(
                     MouseButton::Left,
-                    cx.listener(move |this, _, window, cx| {
+                    cx.listener(move |this, ev: &MouseDownEvent, window, cx| {
                         this.right_clicked_index = None;
                         this.selected_index = Some(ix);
-                        this.on_action_confirm(&Confirm, window, cx);
+                        this.on_action_confirm(
+                            &Confirm {
+                                secondary: ev.modifiers.secondary(),
+                            },
+                            window,
+                            cx,
+                        );
                     }),
                 )
                 .on_mouse_down(

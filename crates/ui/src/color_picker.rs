@@ -6,19 +6,19 @@ use gpui::{
 };
 
 use crate::{
+    actions::Cancel,
     button::{Button, ButtonVariants},
     divider::Divider,
     h_flex,
     input::{InputEvent, TextInput},
-    popover::Escape,
     tooltip::Tooltip,
     v_flex, ActiveTheme as _, Colorize as _, Icon, Selectable as _, Sizable, Size, StyleSized,
 };
 
-const KEY_CONTEXT: &'static str = "ColorPicker";
+const CONTEXT: &'static str = "ColorPicker";
 
 pub fn init(cx: &mut App) {
-    cx.bind_keys([KeyBinding::new("escape", Escape, Some(KEY_CONTEXT))])
+    cx.bind_keys([KeyBinding::new("escape", Cancel, Some(CONTEXT))])
 }
 
 #[derive(Clone)]
@@ -73,7 +73,7 @@ pub struct ColorPicker {
 
 impl ColorPicker {
     pub fn new(id: impl Into<ElementId>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let color_input = cx.new(|cx| TextInput::new(window, cx).xsmall());
+        let color_input = cx.new(|cx| TextInput::new(window, cx).small());
 
         let _subscriptions = vec![cx.subscribe_in(
             &color_input,
@@ -85,7 +85,7 @@ impl ColorPicker {
                         this.hovered_color = Some(color);
                     }
                 }
-                InputEvent::PressEnter => {
+                InputEvent::PressEnter { .. } => {
                     let val = this.color_input.read(cx).text();
                     if let Ok(color) = Hsla::parse_hex(&val) {
                         this.open = false;
@@ -170,8 +170,11 @@ impl ColorPicker {
         self
     }
 
-    fn on_escape(&mut self, _: &Escape, _: &mut Window, cx: &mut Context<Self>) {
-        cx.propagate();
+    fn on_escape(&mut self, _: &Cancel, _: &mut Window, cx: &mut Context<Self>) {
+        if !self.open {
+            cx.propagate();
+        }
+
         self.open = false;
         cx.notify();
     }
@@ -314,7 +317,7 @@ impl Render for ColorPicker {
 
         div()
             .id(self.id.clone())
-            .key_context(KEY_CONTEXT)
+            .key_context(CONTEXT)
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::on_escape))
             .child(
@@ -358,10 +361,6 @@ impl Render for ColorPicker {
                     })
                     .when_some(self.label.clone(), |this, label| this.child(label))
                     .on_click(cx.listener(Self::toggle_picker))
-                    .on_mouse_up_out(
-                        MouseButton::Left,
-                        cx.listener(|view, _, window, cx| view.on_escape(&Escape, window, cx)),
-                    )
                     .child(
                         canvas(
                             move |bounds, _, cx| view.update(cx, |r, _| r.bounds = bounds),
@@ -394,7 +393,13 @@ impl Render for ColorPicker {
                                     .shadow_lg()
                                     .rounded(cx.theme().radius)
                                     .bg(cx.theme().background)
-                                    .child(self.render_colors(window, cx)),
+                                    .child(self.render_colors(window, cx))
+                                    .on_mouse_up_out(
+                                        MouseButton::Left,
+                                        cx.listener(|view, _, window, cx| {
+                                            view.on_escape(&Cancel, window, cx)
+                                        }),
+                                    ),
                             ),
                     )
                     .with_priority(1),

@@ -1,20 +1,18 @@
 use gpui::{
-    actions, anchored, canvas, deferred, div, prelude::FluentBuilder, px, rems, AnyElement, App,
-    AppContext, Bounds, ClickEvent, Context, DismissEvent, ElementId, Entity, EventEmitter,
-    FocusHandle, Focusable, InteractiveElement, IntoElement, KeyBinding, Length, ParentElement,
-    Pixels, Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Task,
-    WeakEntity, Window,
+    anchored, canvas, deferred, div, prelude::FluentBuilder, px, rems, AnyElement, App, AppContext,
+    Bounds, ClickEvent, Context, DismissEvent, ElementId, Entity, EventEmitter, FocusHandle,
+    Focusable, InteractiveElement, IntoElement, KeyBinding, Length, ParentElement, Pixels, Render,
+    SharedString, StatefulInteractiveElement, Styled, Subscription, Task, WeakEntity, Window,
 };
 use rust_i18n::t;
 
 use crate::{
+    actions::{Cancel, Confirm, SelectNext, SelectPrev},
     h_flex,
     input::clear_button,
-    list::{self, List, ListDelegate, ListItem},
+    list::{List, ListDelegate, ListItem},
     v_flex, ActiveTheme, Disableable as _, Icon, IconName, Sizable, Size, StyleSized, StyledExt,
 };
-
-actions!(dropdown, [Up, Down, Enter, Escape]);
 
 #[derive(Clone)]
 pub enum ListEvent {
@@ -29,10 +27,15 @@ pub enum ListEvent {
 const CONTEXT: &str = "Dropdown";
 pub fn init(cx: &mut App) {
     cx.bind_keys([
-        KeyBinding::new("up", Up, Some(CONTEXT)),
-        KeyBinding::new("down", Down, Some(CONTEXT)),
-        KeyBinding::new("enter", Enter, Some(CONTEXT)),
-        KeyBinding::new("escape", Escape, Some(CONTEXT)),
+        KeyBinding::new("up", SelectPrev, Some(CONTEXT)),
+        KeyBinding::new("down", SelectNext, Some(CONTEXT)),
+        KeyBinding::new("enter", Confirm { secondary: false }, Some(CONTEXT)),
+        KeyBinding::new(
+            "secondary-enter",
+            Confirm { secondary: true },
+            Some(CONTEXT),
+        ),
+        KeyBinding::new("escape", Cancel, Some(CONTEXT)),
     ])
 }
 
@@ -173,9 +176,7 @@ where
         });
     }
 
-    fn confirm(&mut self, ix: usize, window: &mut Window, cx: &mut Context<List<Self>>) {
-        self.selected_index = Some(ix);
-
+    fn confirm(&mut self, _secondary: bool, window: &mut Window, cx: &mut Context<List<Self>>) {
         let selected_value = self
             .selected_index
             .and_then(|ix| self.delegate.get(ix))
@@ -495,24 +496,25 @@ where
         cx.notify();
     }
 
-    fn up(&mut self, _: &Up, window: &mut Window, cx: &mut Context<Self>) {
+    fn up(&mut self, _: &SelectPrev, window: &mut Window, cx: &mut Context<Self>) {
         if !self.open {
             return;
         }
+
         self.list.focus_handle(cx).focus(window);
-        cx.dispatch_action(&list::SelectPrev);
+        cx.propagate();
     }
 
-    fn down(&mut self, _: &Down, window: &mut Window, cx: &mut Context<Self>) {
+    fn down(&mut self, _: &SelectNext, window: &mut Window, cx: &mut Context<Self>) {
         if !self.open {
             self.open = true;
         }
 
         self.list.focus_handle(cx).focus(window);
-        cx.dispatch_action(&list::SelectNext);
+        cx.propagate();
     }
 
-    fn enter(&mut self, _: &Enter, window: &mut Window, cx: &mut Context<Self>) {
+    fn enter(&mut self, _: &Confirm, window: &mut Window, cx: &mut Context<Self>) {
         // Propagate the event to the parent view, for example to the Modal to support ENTER to confirm.
         cx.propagate();
 
@@ -521,7 +523,6 @@ where
             cx.notify();
         } else {
             self.list.focus_handle(cx).focus(window);
-            cx.dispatch_action(&list::Confirm);
         }
     }
 
@@ -535,9 +536,10 @@ where
         cx.notify();
     }
 
-    fn escape(&mut self, _: &Escape, _: &mut Window, cx: &mut Context<Self>) {
-        // Propagate the event to the parent view, for example to the Modal to support ESC to close.
-        cx.propagate();
+    fn escape(&mut self, _: &Cancel, _: &mut Window, cx: &mut Context<Self>) {
+        if !self.open {
+            cx.propagate();
+        }
 
         self.open = false;
         cx.notify();
@@ -734,13 +736,10 @@ where
                                         .border_color(cx.theme().border)
                                         .rounded(popup_radius)
                                         .shadow_md()
-                                        .on_mouse_down_out(|_, _, cx| {
-                                            cx.dispatch_action(&Escape);
-                                        })
                                         .child(self.list.clone()),
                                 )
                                 .on_mouse_down_out(cx.listener(|this, _, window, cx| {
-                                    this.escape(&Escape, window, cx);
+                                    this.escape(&Cancel, window, cx);
                                 })),
                         ),
                     )
