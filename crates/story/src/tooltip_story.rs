@@ -1,6 +1,6 @@
 use gpui::{
-    div, App, AppContext, Context, Entity, Focusable, InteractiveElement, ParentElement, Render,
-    StatefulInteractiveElement, Styled, Window,
+    actions, div, App, AppContext, Context, Entity, Focusable, InteractiveElement, KeyBinding,
+    ParentElement, Render, StatefulInteractiveElement, Styled, Window,
 };
 
 use gpui_component::{
@@ -12,6 +12,12 @@ use gpui_component::{
     tooltip::Tooltip,
     v_flex, ActiveTheme, IconName,
 };
+
+actions!(tooltip, [Info]);
+
+pub fn init(cx: &mut App) {
+    cx.bind_keys([KeyBinding::new("ctrl-shift-delete", Info, Some("Tooltip"))]);
+}
 
 pub struct TooltipStory {
     focus_handle: gpui::FocusHandle,
@@ -50,45 +56,51 @@ impl Focusable for TooltipStory {
 impl Render for TooltipStory {
     fn render(
         &mut self,
-        _window: &mut gpui::Window,
+        window: &mut gpui::Window,
         _cx: &mut gpui::Context<Self>,
     ) -> impl gpui::IntoElement {
         v_flex()
             .p_4()
             .gap_5()
             .child(
-                div()
+                h_flex()
+                    .gap_3()
                     .child(
-                        Button::new("button")
-                            .label("Hover me")
-                            .with_variant(ButtonVariant::Primary),
+                        Button::new("btn0")
+                            .label("Search")
+                            .with_variant(ButtonVariant::Primary)
+                            .tooltip("This is a search Button."),
                     )
-                    .id("tooltip-1")
-                    .tooltip(|window, cx| Tooltip::new("This is a Button", window, cx)),
+                    .child(Button::new("btn1").label("Info").tooltip_with_action(
+                        "This is a tooltip with Action for display keybinding.",
+                        &Info,
+                        Some("Tooltip"),
+                        window,
+                    )),
             )
             .child(
                 h_flex()
                     .justify_center()
                     .child(Label::new("Hover me"))
                     .id("tooltip-2")
-                    .tooltip(|window, cx| Tooltip::new("This is a Label", window, cx)),
+                    .tooltip(|window, cx| Tooltip::new("This is a Label").build(window, cx)),
             )
             .child(
                 div()
                     .child(Checkbox::new("check").label("Remember me").checked(true))
                     .id("tooltip-3")
-                    .tooltip(|window, cx| Tooltip::new("Checked!", window, cx)),
+                    .tooltip(|window, cx| Tooltip::new("Checked!").build(window, cx)),
             )
             .child(
                 div()
                     .child(
-                        Button::new("button")
+                        Button::new("btn3")
                             .label("Hover me")
                             .with_variant(ButtonVariant::Primary),
                     )
                     .id("tooltip-4")
                     .tooltip(|window, cx| {
-                        Tooltip::new_element(window, cx, |_, cx| {
+                        Tooltip::element(|_, cx| {
                             h_flex()
                                 .gap_x_1()
                                 .child(IconName::Info)
@@ -100,6 +112,7 @@ impl Render for TooltipStory {
                                 .child(div().child("Danger").text_color(cx.theme().danger))
                                 .child(IconName::ArrowUp)
                         })
+                        .build(window, cx)
                     }),
             )
     }
