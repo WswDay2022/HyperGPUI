@@ -57,11 +57,12 @@ impl NumberInput {
     pub fn placeholder(
         self,
         placeholder: impl Into<SharedString>,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        self.input
-            .update(cx, |input, _| input.set_placeholder(placeholder));
+        self.input.update(cx, |input, cx| {
+            input.set_placeholder(placeholder, window, cx)
+        });
         self
     }
 
@@ -73,16 +74,22 @@ impl NumberInput {
     pub fn set_placeholder(
         &self,
         text: impl Into<SharedString>,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.input.update(cx, |input, _| {
-            input.set_placeholder(text);
+        self.input.update(cx, |input, cx| {
+            input.set_placeholder(text, window, cx);
         });
     }
 
-    pub fn pattern(self, pattern: regex::Regex, _: &mut Window, cx: &mut Context<Self>) -> Self {
-        self.input.update(cx, |input, _| input.set_pattern(pattern));
+    pub fn pattern(
+        self,
+        pattern: regex::Regex,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        self.input
+            .update(cx, |input, cx| input.set_pattern(pattern, window, cx));
         self
     }
 
