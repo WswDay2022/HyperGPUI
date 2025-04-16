@@ -4,10 +4,8 @@ use gpui_component::{
     button::{Button, ButtonVariants as _},
     dock::{DockArea, DockAreaState, DockEvent, DockItem, DockPlacement},
     popup_menu::PopupMenuExt,
-    IconName, Root, Sizable,
+    IconName, Root, Sizable, Theme,
 };
-#[cfg(not(target_os = "linux"))]
-use gpui_component::{Theme, TitleBar};
 
 use serde::Deserialize;
 use std::{sync::Arc, time::Duration};
@@ -61,9 +59,6 @@ struct DockAreaTab {
 
 impl StoryWorkspace {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        // There will crash on Linux.
-        // https://github.com/longbridge/gpui-component/issues/104
-        #[cfg(not(target_os = "linux"))]
         window
             .observe_window_appearance(|window, cx| {
                 Theme::sync_system_appearance(Some(window), cx);
@@ -395,7 +390,7 @@ impl StoryWorkspace {
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(window_bounds)),
                 #[cfg(not(target_os = "linux"))]
-                titlebar: Some(TitleBar::title_bar_options()),
+                titlebar: Some(gpui_component::TitleBar::title_bar_options()),
                 window_min_size: Some(gpui::Size {
                     width: px(640.),
                     height: px(480.),
