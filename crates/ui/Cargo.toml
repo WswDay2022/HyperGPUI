@@ -41,6 +41,7 @@ minify-html = "0.15.0"
 # Calendar
 chrono = "0.4.38"
 syntect = { version = "5.2", features = ["plist-load"] }
+schemars = "0.8.22"
 
 [dev-dependencies]
 indoc = "2"

@@ -3,6 +3,7 @@ use std::ops::{Deref, DerefMut};
 use gpui::{
     hsla, point, px, App, BoxShadow, Global, Hsla, Pixels, SharedString, Window, WindowAppearance,
 };
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{scroll::ScrollbarShow, Colorize as _};
@@ -630,7 +631,9 @@ impl From<ThemeColor> for Theme {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, PartialOrd, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, PartialOrd, Eq, Hash, Serialize, Deserialize, JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum ThemeMode {
     Light,
@@ -642,6 +645,14 @@ impl ThemeMode {
     #[inline(always)]
     pub fn is_dark(&self) -> bool {
         matches!(self, Self::Dark)
+    }
+
+    /// Return lower_case theme name: `light`, `dark`.
+    pub fn name(&self) -> &'static str {
+        match self {
+            ThemeMode::Light => "light",
+            ThemeMode::Dark => "dark",
+        }
     }
 }
 
