@@ -1,17 +1,15 @@
 use gpui::{
-    actions, div, prelude::FluentBuilder as _, px, App, AppContext as _, ClickEvent, Context,
-    Entity, FocusHandle, Focusable, InteractiveElement, IntoElement, KeyBinding,
-    ParentElement as _, Render, SharedString, Styled, Subscription, Window,
+    actions, div, App, AppContext as _, Context, Entity, FocusHandle, Focusable,
+    InteractiveElement, IntoElement, KeyBinding, ParentElement as _, Render, Styled, Subscription,
+    Window,
 };
-use regex::Regex;
 
 use crate::section;
 use gpui_component::{
     button::{Button, ButtonVariant, ButtonVariants as _},
-    checkbox::Checkbox,
     h_flex,
-    input::{InputEvent, NumberInput, NumberInputEvent, OtpInput, StepAction, TextInput},
-    v_flex, FocusableCycle, Icon, IconName, Sizable,
+    input::{InputEvent, TextInput},
+    v_flex, FocusableCycle, Icon, IconName, Sizable, StyledExt,
 };
 
 actions!(input_story, [Tab, TabPrev]);
@@ -28,11 +26,6 @@ pub fn init(cx: &mut App) {
 pub struct InputStory {
     input1: Entity<TextInput>,
     input2: Entity<TextInput>,
-    textarea: Entity<TextInput>,
-    number_input1_value: i64,
-    number_input1: Entity<NumberInput>,
-    number_input2: Entity<NumberInput>,
-    number_input2_value: u64,
     mask_input: Entity<TextInput>,
     disabled_input: Entity<TextInput>,
     prefix_input1: Entity<TextInput>,
@@ -40,12 +33,6 @@ pub struct InputStory {
     both_input1: Entity<TextInput>,
     large_input: Entity<TextInput>,
     small_input: Entity<TextInput>,
-    otp_masked: bool,
-    otp_input: Entity<OtpInput>,
-    otp_value: Option<SharedString>,
-    otp_input_small: Entity<OtpInput>,
-    otp_input_large: Entity<OtpInput>,
-    opt_input_sized: Entity<OtpInput>,
 
     _subscriptions: Vec<Subscription>,
 }
@@ -81,52 +68,6 @@ impl InputStory {
         });
 
         let input2 = cx.new(|cx| TextInput::new(window, cx).placeholder("Enter text here..."));
-
-        let textarea = cx.new(|cx| {
-            let mut input = TextInput::new(window, cx)
-                .multi_line()
-                .rows(10)
-                .placeholder("Enter text here...");
-            input.set_text(
-                unindent::unindent(
-                    r#"Hello 世界，this is GPUI component.
-
-                The GPUI Component is a collection of UI components for GPUI framework, including.
-
-                Button, Input, Checkbox, Radio, Dropdown, Tab, and more...
-
-                Here is an application that is built by using GPUI Component.
-
-                > This application is still under development, not published yet.
-
-                ![image](https://github.com/user-attachments/assets/559a648d-19df-4b5a-b563-b78cc79c8894)
-
-                ![image](https://github.com/user-attachments/assets/5e06ad5d-7ea0-43db-8d13-86a240da4c8d)
-
-                ## Demo
-
-                If you want to see the demo, here is a some demo applications.
-                "#,
-                ),
-                window,
-                cx,
-            );
-            input
-        });
-
-        let number_input1_value = 1;
-        let number_input1 = cx.new(|cx| {
-            let input = NumberInput::new(window, cx).placeholder("Number Input", window, cx);
-            input.set_value(number_input1_value.to_string(), window, cx);
-            input
-        });
-
-        let number_input2 = cx.new(|cx| {
-            NumberInput::new(window, cx)
-                .placeholder("Unsized Integer Number Input", window, cx)
-                .pattern(Regex::new(r"^\d+$").unwrap(), window, cx)
-                .small()
-        });
 
         let mask_input = cx.new(|cx| {
             let mut input = TextInput::new(window, cx)
@@ -170,31 +111,14 @@ impl InputStory {
                 .placeholder("This input have prefix and suffix.")
         });
 
-        let otp_input = cx.new(|cx| OtpInput::new(6, window, cx).masked(true));
-
         let _subscriptions = vec![
             cx.subscribe_in(&input1, window, Self::on_input_event),
             cx.subscribe_in(&input2, window, Self::on_input_event),
-            cx.subscribe_in(&textarea, window, Self::on_input_event),
-            cx.subscribe_in(&number_input1, window, Self::on_number_input1_event),
-            cx.subscribe_in(&number_input2, window, Self::on_number_input2_event),
-            cx.subscribe(&otp_input, |this, _, ev: &InputEvent, cx| match ev {
-                InputEvent::Change(text) => {
-                    this.otp_value = Some(text.clone());
-                    cx.notify();
-                }
-                _ => {}
-            }),
         ];
 
         Self {
             input1,
             input2,
-            textarea,
-            number_input1,
-            number_input1_value,
-            number_input2,
-            number_input2_value: 0,
             mask_input,
             disabled_input: cx.new(|cx| {
                 let mut input = TextInput::new(window, cx);
@@ -216,30 +140,6 @@ impl InputStory {
             prefix_input1,
             suffix_input1,
             both_input1,
-            otp_masked: true,
-            otp_input,
-            otp_value: None,
-            otp_input_small: cx.new(|cx| {
-                OtpInput::new(6, window, cx)
-                    .default_value("123456")
-                    .masked(true)
-                    .small()
-                    .groups(1)
-            }),
-            otp_input_large: cx.new(|cx| {
-                OtpInput::new(6, window, cx)
-                    .groups(3)
-                    .large()
-                    .default_value("012345")
-                    .masked(true)
-            }),
-            opt_input_sized: cx.new(|cx| {
-                OtpInput::new(4, window, cx)
-                    .groups(1)
-                    .masked(true)
-                    .default_value("654321")
-                    .with_size(px(55.))
-            }),
             _subscriptions,
         }
     }
@@ -266,124 +166,6 @@ impl InputStory {
             InputEvent::Blur => println!("Blur"),
         };
     }
-
-    fn on_number_input1_event(
-        &mut self,
-        _: &Entity<NumberInput>,
-        event: &NumberInputEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        match event {
-            NumberInputEvent::Input(input_event) => match input_event {
-                InputEvent::Change(text) => {
-                    if let Ok(value) = text.parse::<i64>() {
-                        self.number_input1_value = value;
-                    }
-                    println!("Change: {}", text);
-                }
-                InputEvent::PressEnter { secondary } => {
-                    println!("PressEnter secondary: {}", secondary)
-                }
-                InputEvent::Focus => println!("Focus"),
-                InputEvent::Blur => println!("Blur"),
-            },
-            NumberInputEvent::Step(step_action) => match step_action {
-                StepAction::Decrement => {
-                    self.number_input1_value = self.number_input1_value - 1;
-                    self.number_input1.update(cx, |input, cx| {
-                        input.set_value(self.number_input1_value.to_string(), window, cx);
-                    });
-                }
-                StepAction::Increment => {
-                    self.number_input1_value = self.number_input1_value + 1;
-                    self.number_input1.update(cx, |input, cx| {
-                        input.set_value(self.number_input1_value.to_string(), window, cx);
-                    });
-                }
-            },
-        }
-    }
-
-    fn on_number_input2_event(
-        &mut self,
-        _: &Entity<NumberInput>,
-        event: &NumberInputEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        match event {
-            NumberInputEvent::Input(input_event) => match input_event {
-                InputEvent::Change(text) => {
-                    if let Ok(value) = text.parse::<u64>() {
-                        self.number_input2_value = value;
-                    }
-                    println!("Change: {}", text);
-                }
-                InputEvent::PressEnter { secondary } => {
-                    println!("PressEnter secondary: {}", secondary);
-                }
-                InputEvent::Focus => println!("Focus"),
-                InputEvent::Blur => println!("Blur"),
-            },
-            NumberInputEvent::Step(step_action) => match step_action {
-                StepAction::Decrement => {
-                    if self.number_input2_value.le(&0) {
-                        return;
-                    }
-
-                    self.number_input2_value = self.number_input2_value - 1;
-                    self.number_input2.update(cx, |input, cx| {
-                        input.set_value(self.number_input2_value.to_string(), window, cx);
-                    });
-                }
-                StepAction::Increment => {
-                    self.number_input2_value = self.number_input2_value + 1;
-                    self.number_input2.update(cx, |input, cx| {
-                        input.set_value(self.number_input2_value.to_string(), window, cx);
-                    });
-                }
-            },
-        }
-    }
-
-    fn toggle_opt_masked(&mut self, _: &bool, window: &mut Window, cx: &mut Context<Self>) {
-        self.otp_masked = !self.otp_masked;
-        self.otp_input.update(cx, |input, cx| {
-            input.set_masked(self.otp_masked, window, cx)
-        });
-        self.otp_input_small.update(cx, |input, cx| {
-            input.set_masked(self.otp_masked, window, cx)
-        });
-        self.otp_input_large.update(cx, |input, cx| {
-            input.set_masked(self.otp_masked, window, cx)
-        });
-        self.opt_input_sized.update(cx, |input, cx| {
-            input.set_masked(self.otp_masked, window, cx)
-        });
-    }
-
-    fn on_insert_text_to_textarea(
-        &mut self,
-        _: &ClickEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.textarea.update(cx, |input, cx| {
-            input.insert("Hello 你好", window, cx);
-        });
-    }
-
-    fn on_replace_text_to_textarea(
-        &mut self,
-        _: &ClickEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.textarea.update(cx, |input, cx| {
-            input.replace("Hello 你好", window, cx);
-        });
-    }
 }
 
 impl FocusableCycle for InputStory {
@@ -398,7 +180,6 @@ impl FocusableCycle for InputStory {
             self.suffix_input1.focus_handle(cx),
             self.large_input.focus_handle(cx),
             self.small_input.focus_handle(cx),
-            self.otp_input.focus_handle(cx),
         ]
         .to_vec()
     }
@@ -420,97 +201,33 @@ impl Render for InputStory {
             .justify_start()
             .gap_3()
             .child(
-                h_flex()
-                    .gap_3()
-                    .items_start()
-                    .child(
-                        section("Normal Input", cx)
-                            .child(self.input1.clone())
-                            .child(self.input2.clone())
-                            .child(
-                                v_flex()
-                                    .gap_y_4()
-                                    .w_full()
-                                    .child("Number Input")
-                                    .child(self.number_input1.clone())
-                                    .child(self.number_input2.clone()),
-                            ),
-                    )
-                    .child(
-                        section("Textarea", cx).child(
-                            v_flex()
-                                .gap_2()
-                                .w_full()
-                                .child(self.textarea.clone())
-                                .child(
-                                    h_flex()
-                                        .gap_2()
-                                        .child(
-                                            Button::new("btn-insert-text")
-                                                .xsmall()
-                                                .label("Insert Text")
-                                                .on_click(
-                                                    cx.listener(Self::on_insert_text_to_textarea),
-                                                ),
-                                        )
-                                        .child(
-                                            Button::new("btn-replace-text")
-                                                .xsmall()
-                                                .label("Replace Text")
-                                                .on_click(
-                                                    cx.listener(Self::on_replace_text_to_textarea),
-                                                ),
-                                        ),
-                                ),
-                        ),
-                    )
-                    .child(
-                        section("Input State", cx)
-                            .child(self.disabled_input.clone())
-                            .child(self.mask_input.clone()),
-                    ),
+                section("Normal Input")
+                    .v_flex()
+                    .max_w_md()
+                    .child(self.input1.clone())
+                    .child(self.input2.clone()),
             )
             .child(
-                h_flex()
-                    .gap_3()
-                    .items_start()
-                    .child(
-                        section("Prefix and Suffix", cx)
-                            .child(self.prefix_input1.clone())
-                            .child(self.both_input1.clone())
-                            .child(self.suffix_input1.clone()),
-                    )
-                    .child(
-                        section("Input Size", cx)
-                            .child(self.large_input.clone())
-                            .child(self.small_input.clone()),
-                    ),
+                section("Input State")
+                    .v_flex()
+                    .max_w_md()
+                    .child(self.disabled_input.clone())
+                    .child(self.mask_input.clone()),
             )
             .child(
-                section(
-                    h_flex()
-                        .items_center()
-                        .justify_between()
-                        .child("OTP Input")
-                        .child(
-                            Checkbox::new("otp-mask")
-                                .label("Masked")
-                                .checked(self.otp_masked)
-                                .on_click(cx.listener(Self::toggle_opt_masked)),
-                        ),
-                    cx,
-                )
-                .child(
-                    v_flex()
-                        .gap_3()
-                        .child(self.otp_input_small.clone())
-                        .child(self.otp_input.clone())
-                        .when_some(self.otp_value.clone(), |this, otp| {
-                            this.child(format!("Your OTP: {}", otp))
-                        })
-                        .child(self.otp_input_large.clone())
-                        .child(self.opt_input_sized.clone()),
-                ),
+                section("Prefix and Suffix")
+                    .v_flex()
+                    .max_w_md()
+                    .child(self.prefix_input1.clone())
+                    .child(self.both_input1.clone())
+                    .child(self.suffix_input1.clone()),
+            )
+            .child(
+                section("Input Size")
+                    .v_flex()
+                    .max_w_md()
+                    .child(self.large_input.clone())
+                    .child(self.small_input.clone()),
             )
             .child(
                 h_flex()

@@ -16,18 +16,18 @@ use gpui_component::{
 
 use crate::section;
 
-pub struct TextStory {
+pub struct LabelStory {
     focus_handle: gpui::FocusHandle,
     masked: bool,
 }
 
-impl super::Story for TextStory {
+impl super::Story for LabelStory {
     fn title() -> &'static str {
-        "Text"
+        "Label"
     }
 
     fn description() -> &'static str {
-        "The text render testing and examples"
+        "Label used to display text or other content."
     }
 
     fn new_view(window: &mut Window, cx: &mut App) -> Entity<impl Render + Focusable> {
@@ -35,7 +35,7 @@ impl super::Story for TextStory {
     }
 }
 
-impl TextStory {
+impl LabelStory {
     pub(crate) fn new(_: &mut Window, cx: &mut App) -> Self {
         Self {
             focus_handle: cx.focus_handle(),
@@ -52,17 +52,17 @@ impl TextStory {
         println!("Check value changed: {}", checked);
     }
 }
-impl Focusable for TextStory {
+impl Focusable for LabelStory {
     fn focus_handle(&self, _: &gpui::App) -> gpui::FocusHandle {
         self.focus_handle.clone()
     }
 }
-impl Render for TextStory {
+impl Render for LabelStory {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .gap_6()
             .child(
-                section("Label", cx)
+                section("Label")
                     .items_start()
                     .child(
                         v_flex()
@@ -93,7 +93,7 @@ impl Render for TextStory {
                 h_flex()
                     .gap_3()
                     .child(
-                        section("Link", cx).child(
+                        section("Link").child(
                             h_flex()
                                 .items_start()
                                 .gap_3()
@@ -131,7 +131,7 @@ impl Render for TextStory {
                         ),
                     )
                     .child(
-                        section("Clipboard", cx).child(
+                        section("Clipboard").child(
                             h_flex()
                                 .w_full()
                                 .gap_4()
@@ -167,7 +167,7 @@ impl Render for TextStory {
                     ),
             )
             .child(
-                section("Maksed Label", cx).child(
+                section("Maksed Label").child(
                     v_flex()
                         .w_full()
                         .gap_4()
@@ -191,7 +191,7 @@ impl Render for TextStory {
                 ),
             )
             .child(
-                section("Tag", cx)
+                section("Tag")
                     .child(
                         h_flex()
                             .gap_2()
@@ -219,7 +219,7 @@ impl Render for TextStory {
                     ),
             )
             .child(
-                section("Tag::color", cx).child(
+                section("Tag::color").child(
                     v_flex().gap_4().child(
                         h_flex().gap_2().flex_wrap().children(
                             ColorName::all()
@@ -231,7 +231,7 @@ impl Render for TextStory {
                 ),
             )
             .child(
-                section("Kbd", cx).child(
+                section("Kbd").child(
                     h_flex()
                         .gap_2()
                         .child(Kbd::new(Keystroke::parse("cmd-shift-p").unwrap()))

@@ -1,73 +1,99 @@
 mod accordion_story;
+mod alert_story;
 mod assets;
+mod badge_story;
 mod button_story;
 mod calendar_story;
+mod checkbox_story;
+mod drawer_story;
 mod dropdown_story;
 mod form_story;
 mod icon_story;
 mod image_story;
 mod input_story;
+mod kbd_story;
+mod label_story;
 mod list_story;
+mod menu_story;
 mod modal_story;
-mod popup_story;
+mod notification_story;
+mod number_input_story;
+mod otp_input_story;
+mod popover_story;
 mod progress_story;
+mod radio_story;
 mod resizable_story;
 mod scrollable_story;
 mod sidebar_story;
+mod slider_story;
 mod switch_story;
 mod table_story;
 mod tabs_story;
-mod text_story;
+mod tag_story;
+mod textarea_story;
 mod title_bar;
 mod toggle_story;
 mod tooltip_story;
 mod webview_story;
+mod welcome_story;
 
 pub use assets::Assets;
-
-pub use accordion_story::AccordionStory;
-pub use button_story::ButtonStory;
-pub use calendar_story::CalendarStory;
-pub use dropdown_story::DropdownStory;
-pub use form_story::FormStory;
-pub use tabs_story::TabsStory;
-pub use toggle_story::ToggleStory;
-
 use gpui::{
-    actions, div, impl_internal_actions, prelude::FluentBuilder as _, px, size, AnyElement,
+    actions, div, impl_internal_actions, prelude::FluentBuilder as _, px, rems, size, AnyElement,
     AnyView, App, AppContext, Bounds, Context, Div, Entity, EventEmitter, Focusable, Global, Hsla,
-    InteractiveElement, IntoElement, KeyBinding, Menu, MenuItem, ParentElement, Render,
-    SharedString, StatefulInteractiveElement, Styled as _, Window, WindowBounds, WindowKind,
+    InteractiveElement, IntoElement, KeyBinding, Menu, MenuItem, ParentElement, Render, RenderOnce,
+    SharedString, StatefulInteractiveElement, Styled, Window, WindowBounds, WindowKind,
     WindowOptions,
 };
+
+pub use accordion_story::AccordionStory;
+pub use alert_story::AlertStory;
+pub use badge_story::BadgeStory;
+pub use button_story::ButtonStory;
+pub use calendar_story::CalendarStory;
+pub use checkbox_story::CheckboxStory;
+pub use drawer_story::DrawerStory;
+pub use dropdown_story::DropdownStory;
+pub use form_story::FormStory;
 pub use icon_story::IconStory;
 pub use image_story::ImageStory;
 pub use input_story::InputStory;
+pub use kbd_story::KbdStory;
+pub use label_story::LabelStory;
 pub use list_story::ListStory;
+pub use menu_story::MenuStory;
 pub use modal_story::ModalStory;
-pub use popup_story::PopupStory;
+pub use notification_story::NotificationStory;
+pub use number_input_story::NumberInputStory;
+pub use otp_input_story::OtpInputStory;
+pub use popover_story::PopoverStory;
 pub use progress_story::ProgressStory;
+pub use radio_story::RadioStory;
 pub use resizable_story::ResizableStory;
 pub use scrollable_story::ScrollableStory;
 use serde::{Deserialize, Serialize};
 pub use sidebar_story::SidebarStory;
+pub use slider_story::SliderStory;
 pub use switch_story::SwitchStory;
 pub use table_story::TableStory;
-pub use text_story::TextStory;
+pub use tabs_story::TabsStory;
+pub use tag_story::TagStory;
+pub use textarea_story::TextareaStory;
 pub use title_bar::AppTitleBar;
+pub use toggle_story::ToggleStory;
 pub use tooltip_story::TooltipStory;
 pub use webview_story::WebViewStory;
+pub use welcome_story::WelcomeStory;
 
 use gpui_component::{
     button::Button,
-    divider::Divider,
+    context_menu::ContextMenuExt,
     dock::{register_panel, Panel, PanelControl, PanelEvent, PanelInfo, PanelState, TitleStyle},
     h_flex,
-    label::Label,
     notification::Notification,
     popup_menu::PopupMenu,
     scroll::ScrollbarShow,
-    v_flex, ActiveTheme, ContextModal, IconName, Root, TitleBar,
+    v_flex, ActiveTheme, ContextModal, IconName, Root, StyledExt, TitleBar,
 };
 
 #[derive(Clone, PartialEq, Eq, Deserialize)]
@@ -208,10 +234,14 @@ pub fn init(cx: &mut App) {
     gpui_component::init(cx);
     AppState::init(cx);
     input_story::init(cx);
+    number_input_story::init(cx);
+    textarea_story::init(cx);
     dropdown_story::init(cx);
-    popup_story::init(cx);
+    popover_story::init(cx);
+    menu_story::init(cx);
     webview_story::init(cx);
     tooltip_story::init(cx);
+    otp_input_story::init(cx);
 
     let http_client = std::sync::Arc::new(
         reqwest_client::ReqwestClient::user_agent("gpui-component/story").unwrap(),
@@ -287,28 +317,93 @@ pub fn init(cx: &mut App) {
 
 actions!(story, [ShowPanelInfo]);
 
-pub fn section(title: impl IntoElement, cx: &App) -> Div {
-    use gpui_component::ActiveTheme;
-    let theme = cx.theme();
+#[derive(IntoElement)]
+struct StorySection {
+    base: Div,
+    title: AnyElement,
+    children: Vec<AnyElement>,
+}
 
-    h_flex()
-        .items_center()
-        .gap_4()
-        .p_4()
-        .w_full()
-        .rounded(cx.theme().radius)
-        .border_1()
-        .border_color(theme.border)
-        .flex_wrap()
-        .justify_around()
-        .child(div().flex_none().w_full().child(title))
+impl StorySection {
+    #[allow(unused)]
+    fn max_w_md(mut self) -> Self {
+        self.base = self.base.max_w(rems(48.));
+        self
+    }
+
+    #[allow(unused)]
+    fn max_w_lg(mut self) -> Self {
+        self.base = self.base.max_w(rems(64.));
+        self
+    }
+
+    #[allow(unused)]
+    fn max_w_xl(mut self) -> Self {
+        self.base = self.base.max_w(rems(80.));
+        self
+    }
+
+    #[allow(unused)]
+    fn max_w_2xl(mut self) -> Self {
+        self.base = self.base.max_w(rems(96.));
+        self
+    }
+}
+
+impl ParentElement for StorySection {
+    fn extend(&mut self, elements: impl IntoIterator<Item = AnyElement>) {
+        self.children.extend(elements);
+    }
+}
+
+impl Styled for StorySection {
+    fn style(&mut self) -> &mut gpui::StyleRefinement {
+        self.base.style()
+    }
+}
+
+impl RenderOnce for StorySection {
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        v_flex()
+            .gap_2()
+            .mb_5()
+            .w_full()
+            .child(
+                h_flex()
+                    .justify_between()
+                    .w_full()
+                    .gap_4()
+                    .child(self.title),
+            )
+            .child(
+                div()
+                    .p_4()
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .rounded_lg()
+                    .v_flex()
+                    .items_center()
+                    .justify_center()
+                    .child(self.base.gap_4().w_full().children(self.children)),
+            )
+    }
+}
+
+impl ContextMenuExt for StorySection {}
+
+pub(crate) fn section(title: impl IntoElement) -> StorySection {
+    StorySection {
+        title: title.into_any_element(),
+        base: h_flex().flex_wrap().justify_center().items_center(),
+        children: vec![],
+    }
 }
 
 pub struct StoryContainer {
     focus_handle: gpui::FocusHandle,
-    name: SharedString,
-    title_bg: Option<Hsla>,
-    description: SharedString,
+    pub name: SharedString,
+    pub title_bg: Option<Hsla>,
+    pub description: SharedString,
     width: Option<gpui::Pixels>,
     height: Option<gpui::Pixels>,
     story: Option<AnyView>,
@@ -323,7 +418,7 @@ pub enum ContainerEvent {
     Close,
 }
 
-pub trait Story: Focusable + Render {
+pub trait Story: Focusable + Render + Sized {
     fn klass() -> &'static str {
         std::any::type_name::<Self>().split("::").last().unwrap()
     }
@@ -419,6 +514,7 @@ impl StoryContainer {
         self.story_klass = Some(story_klass.into());
         self
     }
+
     pub fn on_active(mut self, on_active: fn(AnyView, bool, &mut Window, &mut App)) -> Self {
         self.on_active = Some(on_active);
         self
@@ -504,13 +600,13 @@ impl StoryState {
             "InputStory" => story!(InputStory),
             "ListStory" => story!(ListStory),
             "ModalStory" => story!(ModalStory),
-            "PopupStory" => story!(PopupStory),
+            "PopoverStory" => story!(PopoverStory),
             "ProgressStory" => story!(ProgressStory),
             "ResizableStory" => story!(ResizableStory),
             "ScrollableStory" => story!(ScrollableStory),
             "SwitchStory" => story!(SwitchStory),
             "TableStory" => story!(TableStory),
-            "TextStory" => story!(TextStory),
+            "LabelStory" => story!(LabelStory),
             "TooltipStory" => story!(TooltipStory),
             "WebViewStory" => story!(WebViewStory),
             "AccordionStory" => story!(AccordionStory),
@@ -615,17 +711,6 @@ impl Render for StoryContainer {
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::on_action_panel_info))
             .on_action(cx.listener(Self::on_action_toggle_search))
-            .when(self.description.len() > 0, |this| {
-                this.child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_4()
-                        .p_4()
-                        .child(Label::new(self.description.clone()).text_size(px(16.0)))
-                        .child(Divider::horizontal().label("This is a divider")),
-                )
-            })
             .when_some(self.story.clone(), |this, story| {
                 this.child(
                     v_flex()
