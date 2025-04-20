@@ -13,11 +13,11 @@ use unicode_segmentation::*;
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     actions, div, impl_internal_actions, point, px, relative, AnyElement, App, AppContext, Bounds,
-    ClickEvent, ClipboardItem, Context, DefiniteLength, Entity, EntityInputHandler, EventEmitter,
-    FocusHandle, Focusable, InteractiveElement as _, IntoElement, KeyBinding, KeyDownEvent,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, Point,
-    Rems, Render, ScrollHandle, ScrollWheelEvent, SharedString, Styled as _, Subscription,
-    UTF16Selection, Window, WrappedLine,
+    ClipboardItem, Context, DefiniteLength, Entity, EntityInputHandler, EventEmitter, FocusHandle,
+    Focusable, InteractiveElement as _, IntoElement, KeyBinding, KeyDownEvent, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, Point, Rems, Render,
+    ScrollHandle, ScrollWheelEvent, SharedString, Styled as _, Subscription, UTF16Selection,
+    Window, WrappedLine,
 };
 
 // TODO:
@@ -85,6 +85,7 @@ actions!(
         MoveToPreviousWord,
         MoveToNextWord,
         TextChanged,
+        Escape
     ]
 );
 
@@ -116,6 +117,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("ctrl-delete", DeleteToNextWordEnd, Some(CONTEXT)),
         KeyBinding::new("enter", Enter { secondary: false }, Some(CONTEXT)),
         KeyBinding::new("secondary-enter", Enter { secondary: true }, Some(CONTEXT)),
+        KeyBinding::new("escape", Escape, Some(CONTEXT)),
         KeyBinding::new("up", Up, Some(CONTEXT)),
         KeyBinding::new("down", Down, Some(CONTEXT)),
         KeyBinding::new("left", Left, Some(CONTEXT)),
@@ -233,6 +235,7 @@ pub struct TextInput {
     pub(super) mask_toggle: bool,
     pub(super) appearance: bool,
     pub(super) cleanable: bool,
+    pub(super) clean_on_escape: bool,
     pub(super) size: Size,
     pub(super) rows: usize,
     pub(super) min_rows: usize,
@@ -295,6 +298,7 @@ impl TextInput {
             mask_toggle: false,
             appearance: true,
             cleanable: false,
+            clean_on_escape: false,
             loading: false,
             prefix: None,
             suffix: None,
@@ -659,6 +663,12 @@ impl TextInput {
     /// Set true to show the clear button when the input field is not empty.
     pub fn cleanable(mut self) -> Self {
         self.cleanable = true;
+        self
+    }
+
+    /// Set true to clear the input by pressing Escape key.
+    pub fn clean_on_escape(mut self) -> Self {
+        self.clean_on_escape = true;
         self
     }
 
@@ -1059,8 +1069,18 @@ impl TextInput {
         cx.notify();
     }
 
-    fn clean(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+    fn clean(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.replace_text("", window, cx);
+    }
+
+    fn escape(&mut self, _: &Escape, window: &mut Window, cx: &mut Context<Self>) {
+        if self.selected_range.len() > 0 {
+            return self.unselect(window, cx);
+        }
+
+        if self.clean_on_escape {
+            self.clean(window, cx);
+        }
     }
 
     fn on_mouse_down(
@@ -1788,6 +1808,7 @@ impl Render for TextInput {
                     .on_action(cx.listener(Self::delete_previous_word))
                     .on_action(cx.listener(Self::delete_next_word))
                     .on_action(cx.listener(Self::enter))
+                    .on_action(cx.listener(Self::escape))
             })
             .on_action(cx.listener(Self::left))
             .on_action(cx.listener(Self::right))
@@ -1868,7 +1889,11 @@ impl Render for TextInput {
                     })
                     .children(self.render_toggle_mask_button(window, cx))
                     .when(show_clear_button, |this| {
-                        this.child(clear_button(cx).on_click(cx.listener(Self::clean)))
+                        this.child(
+                            clear_button(cx).on_click(cx.listener(|view, _, window, cx| {
+                                view.clean(window, cx);
+                            })),
+                        )
                     })
                     .children(suffix),
             )
