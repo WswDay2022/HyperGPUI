@@ -34,7 +34,7 @@ use crate::indicator::Indicator;
 use crate::input::clear_button;
 use crate::scroll::{Scrollbar, ScrollbarAxis, ScrollbarState};
 use crate::{h_flex, StyledExt};
-use crate::{ActiveTheme, Root};
+use crate::ActiveTheme;
 use crate::{IconName, Size};
 use crate::{Sizable, StyleSized};
 

@@ -5,7 +5,7 @@ use gpui::{
 };
 use smallvec::SmallVec;
 
-use crate::{ActiveTheme as _, ContextModal as _, Root};
+use crate::{ActiveTheme as _, Root};
 
 use super::TextInput;
 

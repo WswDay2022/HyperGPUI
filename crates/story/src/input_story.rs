@@ -9,7 +9,7 @@ use gpui_component::{
     button::{Button, ButtonVariant, ButtonVariants as _},
     h_flex,
     input::{InputEvent, TextInput},
-    v_flex, ContextModal, FocusableCycle, Icon, IconName, Root, Sizable,
+    v_flex, ContextModal, FocusableCycle, Icon, IconName, Sizable,
 };
 
 actions!(input_story, [Tab, TabPrev]);
