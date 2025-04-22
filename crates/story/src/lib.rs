@@ -95,7 +95,7 @@ use gpui_component::{
     notification::Notification,
     popup_menu::PopupMenu,
     scroll::ScrollbarShow,
-    v_flex, ActiveTheme, ContextModal, IconName, Root, StyledExt, TitleBar,
+    v_flex, ActiveTheme, ContextModal, IconName, Root, TitleBar,
 };
 
 #[derive(Clone, PartialEq, Eq, Deserialize)]
@@ -378,15 +378,14 @@ impl RenderOnce for StorySection {
                     .child(self.title),
             )
             .child(
-                div()
+                v_flex()
                     .p_4()
                     .border_1()
                     .border_color(cx.theme().border)
                     .rounded_lg()
-                    .v_flex()
                     .items_center()
                     .justify_center()
-                    .child(self.base.gap_4().w_full().children(self.children)),
+                    .child(self.base.children(self.children)),
             )
     }
 }
@@ -396,7 +395,12 @@ impl ContextMenuExt for StorySection {}
 pub(crate) fn section(title: impl IntoElement) -> StorySection {
     StorySection {
         title: title.into_any_element(),
-        base: h_flex().flex_wrap().justify_center().items_center(),
+        base: h_flex()
+            .flex_wrap()
+            .justify_center()
+            .items_center()
+            .w_full()
+            .gap_4(),
         children: vec![],
     }
 }
