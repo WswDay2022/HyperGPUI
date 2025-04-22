@@ -5,7 +5,7 @@ use gpui::{
 };
 use smallvec::SmallVec;
 
-use crate::ActiveTheme as _;
+use crate::{ActiveTheme as _, ContextModal as _, Root};
 
 use super::TextInput;
 
@@ -501,6 +501,31 @@ impl Element for TextElement {
             ElementInputHandler::new(bounds, self.input.clone()),
             cx,
         );
+
+        // Set Root focused_input when self is focused
+        if focused {
+            let input_view = self.input.clone();
+            if Root::read(window, cx).focused_input.as_ref() != Some(&input_view) {
+                Root::update(window, cx, |root, _, cx| {
+                    root.focused_input = Some(input_view);
+                    cx.notify();
+                });
+            }
+        }
+
+        // And reset focused_input when next_frame start
+
+        window.on_next_frame({
+            let input_view = self.input.clone();
+            move |window, cx| {
+                if !focused && Root::read(window, cx).focused_input.as_ref() == Some(&input_view) {
+                    Root::update(window, cx, |root, _, cx| {
+                        root.focused_input = None;
+                        cx.notify();
+                    });
+                }
+            }
+        });
 
         // Paint selections
         if let Some(path) = prepaint.selection_path.take() {
