@@ -1,18 +1,18 @@
 use std::{
-    collections::HashSet,
     hash::Hash,
     ops::Deref,
-    sync::{Arc, LazyLock, Mutex},
+    sync::{Arc, LazyLock},
 };
 
 use gpui::{
-    hash, px, App, Asset, Bounds, Element, ElementId, GlobalElementId, Hitbox, ImageCacheError,
-    InteractiveElement, Interactivity, IntoElement, Pixels, RenderImage, SharedString, Size,
-    StyleRefinement, Styled, Window,
+    hash, px, App, Asset, AssetLogger, Bounds, Element, ElementId, GlobalElementId, Hitbox,
+    ImageCacheError, InteractiveElement, Interactivity, IntoElement, Pixels, RenderImage,
+    SharedString, StyleRefinement, Styled, Task, Window,
 };
 use image::Frame;
 use smallvec::SmallVec;
 
+use futures_util::{future::Shared, FutureExt};
 use image::ImageBuffer;
 
 const SCALE: f32 = 2.;
@@ -79,43 +79,9 @@ impl Hash for ImageSource {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct ImageData {
-    image: Arc<RenderImage>,
-    size: Size<Pixels>,
-    source: ImageSource,
-    uses: Arc<Mutex<HashSet<u64>>>,
-}
-
-impl ImageData {
-    fn new(source: ImageSource, image: Arc<RenderImage>, size: Size<Pixels>) -> Self {
-        Self {
-            source,
-            image,
-            size,
-            uses: Arc::new(Mutex::new(HashSet::new())),
-        }
-    }
-
-    fn use_image(&self, global_id: &GlobalElementId) -> Arc<RenderImage> {
-        self.uses.lock().unwrap().insert(hash(global_id));
-        self.image.clone()
-    }
-
-    fn remove_use(&mut self, global_id: &GlobalElementId, window: &mut Window, cx: &mut App) {
-        let mut uses = self.uses.lock().unwrap();
-        uses.remove(&hash(global_id));
-        if uses.len() == 0 {
-            // println!("dropping image: {:?}", self.image);
-            cx.remove_asset::<SvgImageLoader>(&self.source);
-            _ = window.drop_image(self.image.clone());
-        }
-    }
-}
-
 impl Asset for SvgImageLoader {
     type Source = ImageSource;
-    type Output = Result<ImageData, ImageCacheError>;
+    type Output = Result<Arc<RenderImage>, ImageCacheError>;
 
     fn load(
         source: Self::Source,
@@ -149,7 +115,6 @@ impl Asset for SvgImageLoader {
             )
             .ok_or(usvg::Error::InvalidSize)?;
 
-            let img_size = gpui::size(px(pixmap.width() as f32), px(pixmap.height() as f32));
             let transform = resvg::tiny_skia::Transform::from_scale(SCALE, SCALE);
 
             resvg::render(&tree, transform, &mut pixmap.as_mut());
@@ -169,7 +134,7 @@ impl Asset for SvgImageLoader {
             }
 
             let image = Arc::new(RenderImage::new(SmallVec::from_elem(Frame::new(buffer), 1)));
-            Ok(ImageData::new(source, image, img_size))
+            Ok(image)
         }
     }
 }
@@ -208,11 +173,38 @@ impl IntoElement for SvgImg {
     }
 }
 
-struct SvgImgState(Option<(u64, ImageData)>);
+fn load_svg(
+    source: &ImageSource,
+    window: &mut Window,
+    cx: &mut App,
+) -> Shared<Task<Result<Arc<RenderImage>, ImageCacheError>>> {
+    let fut = AssetLogger::<SvgImageLoader>::load(source.clone(), cx);
+    let task = cx.background_executor().spawn(fut).shared();
+
+    let entity = window.current_view();
+    window
+        .spawn(cx, {
+            let task = task.clone();
+            async move |cx| {
+                _ = task.await;
+                cx.on_next_frame(move |_, cx| {
+                    cx.notify(entity);
+                });
+            }
+        })
+        .detach();
+    task
+}
+
+struct SvgImgState {
+    hash: u64,
+    image: Option<Arc<RenderImage>>,
+    task: Shared<Task<Result<Arc<RenderImage>, ImageCacheError>>>,
+}
 
 impl Element for SvgImg {
-    type RequestLayoutState = Option<ImageData>;
-    type PrepaintState = (Option<Hitbox>, Option<ImageData>);
+    type RequestLayoutState = Option<Arc<RenderImage>>;
+    type PrepaintState = (Option<Hitbox>, Option<Arc<RenderImage>>);
 
     fn id(&self) -> Option<ElementId> {
         Some(self.id.clone())
@@ -235,34 +227,45 @@ impl Element for SvgImg {
         let source = &self.source;
         let source_hash = hash(source);
 
-        window.with_element_state::<SvgImgState, _>(global_id, |state, window| {
+        window.with_element_state::<Option<SvgImgState>, _>(global_id, |state, window| {
             match state {
-                Some(mut state) => {
-                    if let Some((prev_hash, mut prev_image)) = state.0.take() {
-                        if source_hash == prev_hash {
-                            return (
-                                (layout_id, Some(prev_image.clone())),
-                                SvgImgState(Some((prev_hash, prev_image))),
-                            );
-                        } else {
-                            // Drop the previous image from the cache.
-                            // Here can't remove directly, because same the image is being used by another element.
-                            prev_image.remove_use(global_id, window, cx);
+                Some(state) => {
+                    // Try to keep the previous image if it's still loading.
+                    let mut prev_image = None;
+                    if let Some(mut state) = state {
+                        prev_image = state.image.clone();
+                        if source_hash == state.hash {
+                            state.image = state
+                                .task
+                                .clone()
+                                .now_or_never()
+                                .transpose()
+                                .ok()
+                                .flatten()
+                                .or(state.image);
+
+                            return ((layout_id, state.image.clone()), Some(state));
                         }
                     }
 
-                    let image = window
-                        .use_asset::<SvgImageLoader>(&source, cx)
-                        .transpose()
-                        .ok()
-                        .flatten();
+                    let task = load_svg(source, window, cx);
+                    let mut image = task.clone().now_or_never().transpose().ok().flatten();
+                    if let Some(new_image) = image.as_ref() {
+                        _ = window.drop_image(new_image.clone());
+                    } else {
+                        image = prev_image;
+                    }
 
                     (
                         (layout_id, image.clone()),
-                        SvgImgState(image.map(|image| (source_hash, image))),
+                        Some(SvgImgState {
+                            hash: source_hash,
+                            image,
+                            task,
+                        }),
                     )
                 }
-                None => ((layout_id, None), SvgImgState(None)),
+                None => ((layout_id, None), None),
             }
         })
     }
@@ -297,10 +300,10 @@ impl Element for SvgImg {
         cx: &mut App,
     ) {
         let hitbox = state.0.as_ref();
-        let Some(image_data) = state.1.take() else {
+        let Some(image) = state.1.take() else {
             return;
         };
-        let size = image_data.size;
+        let size = image.size(0).map(|x| x.0 as f32);
 
         self.interactivity
             .paint(global_id, bounds, hitbox, window, cx, |_, window, _| {
@@ -313,8 +316,8 @@ impl Element for SvgImg {
                     bounds.size.height / size.height
                 };
 
-                let ratio = ratio.min(1.0);
-                let new_size = size.map(|dim| dim * ratio);
+                let ratio = ratio.0.min(1.0);
+                let new_size = size.map(|dim| px(dim) * ratio);
 
                 let new_origin = gpui::Point {
                     x: bounds.origin.x + px(((bounds.size.width - new_size.width) / 2.).into()),
@@ -326,15 +329,8 @@ impl Element for SvgImg {
                     size: new_size.map(|size| size.ceil()),
                 };
 
-                match window.paint_image(
-                    img_bounds,
-                    px(0.).into(),
-                    image_data.use_image(&global_id.unwrap()),
-                    0,
-                    false,
-                ) {
-                    Ok(_) => {}
-                    Err(err) => eprintln!("failed to paint svg image: {:?}", err),
+                if let Err(err) = window.paint_image(img_bounds, px(0.).into(), image, 0, false) {
+                    eprintln!("failed to paint svg image: {:?}", err);
                 }
             })
     }
