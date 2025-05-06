@@ -212,9 +212,10 @@ impl Default for Icon {
 impl Clone for Icon {
     fn clone(&self) -> Self {
         let mut this = Self::default().path(self.path.clone());
-        if let Some(size) = self.size {
-            this = this.with_size(size);
-        }
+        this.style = self.style.clone();
+        this.rotation = self.rotation;
+        this.size = self.size;
+        this.text_color = self.text_color;
         this
     }
 }

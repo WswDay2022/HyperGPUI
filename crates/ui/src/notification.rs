@@ -1,7 +1,7 @@
 use std::{
     any::TypeId,
     collections::{HashMap, VecDeque},
-    sync::Arc,
+    rc::Rc,
     time::Duration,
 };
 
@@ -19,11 +19,24 @@ use crate::{
     h_flex, v_flex, ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt,
 };
 
+#[derive(Debug, Clone, Copy, Default)]
 pub enum NotificationType {
+    #[default]
     Info,
     Success,
     Warning,
     Error,
+}
+
+impl NotificationType {
+    fn icon(&self, cx: &App) -> Icon {
+        match self {
+            Self::Info => Icon::new(IconName::Info).text_color(cx.theme().info),
+            Self::Success => Icon::new(IconName::CircleCheck).text_color(cx.theme().success),
+            Self::Warning => Icon::new(IconName::TriangleAlert).text_color(cx.theme().warning),
+            Self::Error => Icon::new(IconName::CircleX).text_color(cx.theme().danger),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Clone, Hash, Eq)]
@@ -51,12 +64,13 @@ pub struct Notification {
     ///
     /// None means the notification will be added to the end of the list.
     id: NotificationId,
-    type_: NotificationType,
+    type_: Option<NotificationType>,
     title: Option<SharedString>,
     message: SharedString,
     icon: Option<Icon>,
     autohide: bool,
-    on_click: Option<Arc<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
+    action_builder: Option<Rc<dyn Fn(&mut Window, &mut Context<Self>) -> Button>>,
+    on_click: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
     closing: bool,
 }
 
@@ -91,6 +105,7 @@ impl From<(NotificationType, SharedString)> for Notification {
 }
 
 struct DefaultIdType;
+
 impl Notification {
     /// Create a new notification with the given content.
     ///
@@ -103,9 +118,10 @@ impl Notification {
             id: id.into(),
             title: None,
             message: message.into(),
-            type_: NotificationType::Info,
+            type_: None,
             icon: None,
             autohide: true,
+            action_builder: None,
             on_click: None,
             closing: false,
         }
@@ -162,7 +178,7 @@ impl Notification {
 
     /// Set the type of the notification, default is NotificationType::Info.
     pub fn with_type(mut self, type_: NotificationType) -> Self {
-        self.type_ = type_;
+        self.type_ = Some(type_);
         self
     }
 
@@ -177,11 +193,21 @@ impl Notification {
         mut self,
         on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     ) -> Self {
-        self.on_click = Some(Arc::new(on_click));
+        self.on_click = Some(Rc::new(on_click));
         self
     }
 
-    fn dismiss(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+    /// Set the action button of the notification.
+    pub fn action<F>(mut self, action: F) -> Self
+    where
+        F: Fn(&mut Window, &mut Context<Self>) -> Button + 'static,
+    {
+        self.action_builder = Some(Rc::new(action));
+        self
+    }
+
+    /// Dismiss the notification.
+    pub fn dismiss(&mut self, _: &mut Window, cx: &mut Context<Self>) {
         self.closing = true;
         cx.notify();
 
@@ -203,25 +229,15 @@ impl Notification {
 impl EventEmitter<DismissEvent> for Notification {}
 impl FluentBuilder for Notification {}
 impl Render for Notification {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let closing = self.closing;
-        let icon = match self.icon.clone() {
-            Some(icon) => icon,
-            None => match self.type_ {
-                NotificationType::Info => Icon::new(IconName::Info).text_color(crate::blue_500()),
-                NotificationType::Success => {
-                    Icon::new(IconName::CircleCheck).text_color(crate::green_500())
-                }
-                NotificationType::Warning => {
-                    Icon::new(IconName::TriangleAlert).text_color(crate::yellow_500())
-                }
-                NotificationType::Error => {
-                    Icon::new(IconName::CircleX).text_color(crate::red_500())
-                }
-            },
+        let icon = match self.type_ {
+            None => self.icon.clone(),
+            Some(type_) => Some(type_.icon(cx)),
         };
+        let has_icon = icon.is_some();
 
-        div()
+        h_flex()
             .id("notification")
             .group("")
             .occlude()
@@ -235,20 +251,25 @@ impl Render for Notification {
             .py_2()
             .px_4()
             .gap_3()
-            .child(div().absolute().top_3().left_4().child(icon))
+            .when_some(icon, |this, icon| {
+                this.child(div().absolute().top_3().left_4().child(icon))
+            })
             .child(
                 v_flex()
-                    .pl_6()
-                    .gap_1()
+                    .flex_1()
+                    .when(has_icon, |this| this.pl_6())
                     .when_some(self.title.clone(), |this, title| {
                         this.child(div().text_sm().font_semibold().child(title))
                     })
                     .overflow_hidden()
                     .child(div().text_sm().child(self.message.clone())),
             )
+            .when_some(self.action_builder.clone(), |this, action_builder| {
+                this.child(action_builder(window, cx).small().outline().mr_1())
+            })
             .when_some(self.on_click.clone(), |this, on_click| {
                 this.on_click(cx.listener(move |view, event, window, cx| {
-                    view.dismiss(event, window, cx);
+                    view.dismiss(window, cx);
                     on_click(event, window, cx);
                 }))
             })
@@ -265,7 +286,9 @@ impl Render for Notification {
                                 .icon(IconName::Close)
                                 .ghost()
                                 .xsmall()
-                                .on_click(cx.listener(Self::dismiss)),
+                                .on_click(
+                                    cx.listener(|this, _, window, cx| this.dismiss(window, cx)),
+                                ),
                         ),
                 )
             })
@@ -332,9 +355,9 @@ impl NotificationList {
             cx.spawn_in(window, async move |_, cx| {
                 Timer::after(Duration::from_secs(5)).await;
 
-                if let Err(err) = notification.update_in(cx, |note, window, cx| {
-                    note.dismiss(&ClickEvent::default(), window, cx)
-                }) {
+                if let Err(err) =
+                    notification.update_in(cx, |note, window, cx| note.dismiss(window, cx))
+                {
                     println!("failed to auto hide notification: {:?}", err);
                 }
             })
