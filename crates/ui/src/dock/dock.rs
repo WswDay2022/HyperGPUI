@@ -66,7 +66,7 @@ pub struct Dock {
     pub(super) placement: DockPlacement,
     dock_area: WeakEntity<DockArea>,
     pub(crate) panel: DockItem,
-    /// The size of the dock.
+    /// The size is means the width or height of the Dock, if the placement is left or right, the size is width, otherwise the size is height.
     pub(super) size: Pixels,
     pub(super) open: bool,
     /// Whether the Dock is collapsible, default: true
@@ -104,7 +104,7 @@ impl Dock {
             panel,
             open: true,
             collapsible: true,
-            size: px(200.),
+            size: px(200.0),
             resizing: false,
         }
     }
@@ -147,7 +147,7 @@ impl Dock {
     pub(super) fn from_state(
         dock_area: WeakEntity<DockArea>,
         placement: DockPlacement,
-        size: impl Into<Pixels>,
+        size: Pixels,
         panel: DockItem,
         open: bool,
         window: &mut Window,
@@ -176,7 +176,7 @@ impl Dock {
             dock_area,
             panel,
             open,
-            size: size.into(),
+            size,
             collapsible: true,
             resizing: false,
         }
@@ -249,8 +249,8 @@ impl Dock {
     }
 
     /// Set the size of the Dock.
-    pub fn set_size(&mut self, size: impl Into<Pixels>, _: &mut Window, cx: &mut Context<Self>) {
-        self.size = size.into();
+    pub fn set_size(&mut self, size: Pixels, _: &mut Window, cx: &mut Context<Self>) {
+        self.size = size.max(PANEL_MIN_SIZE);
         cx.notify();
     }
 
@@ -301,7 +301,6 @@ impl Dock {
                 cx.new(|_| info.deref().clone())
             })
     }
-
     fn resize(&mut self, mouse_position: Point<Pixels>, _: &mut Window, cx: &mut Context<Self>) {
         if !self.resizing {
             return;
@@ -313,6 +312,28 @@ impl Dock {
             .expect("DockArea is missing")
             .read(cx);
         let area_bounds = dock_area.bounds;
+        let mut left_dock_size = Pixels(0.0);
+        let mut right_dock_size = Pixels(0.0);
+
+        // Get the size of the left dock if it's open and not the current dock
+        if let Some(left_dock) = &dock_area.left_dock {
+            if left_dock.entity_id() != cx.entity().entity_id() {
+                let left_dock_read = left_dock.read(cx);
+                if left_dock_read.is_open() {
+                    left_dock_size = left_dock_read.size;
+                }
+            }
+        }
+
+        // Get the size of the right dock if it's open and not the current dock
+        if let Some(right_dock) = &dock_area.right_dock {
+            if right_dock.entity_id() != cx.entity().entity_id() {
+                let right_dock_read = right_dock.read(cx);
+                if right_dock_read.is_open() {
+                    right_dock_size = right_dock_read.size;
+                }
+            }
+        }
 
         let size = match self.placement {
             DockPlacement::Left => mouse_position.x - area_bounds.left(),
@@ -320,7 +341,21 @@ impl Dock {
             DockPlacement::Bottom => area_bounds.bottom() - mouse_position.y,
             DockPlacement::Center => unreachable!(),
         };
-        self.size = size.max(PANEL_MIN_SIZE);
+        match self.placement {
+            DockPlacement::Left => {
+                let max_size = area_bounds.size.width - PANEL_MIN_SIZE - right_dock_size;
+                self.size = size.clamp(PANEL_MIN_SIZE, max_size);
+            }
+            DockPlacement::Right => {
+                let max_size = area_bounds.size.width - PANEL_MIN_SIZE - left_dock_size;
+                self.size = size.clamp(PANEL_MIN_SIZE, max_size);
+            }
+            DockPlacement::Bottom => {
+                let max_size = area_bounds.size.height - PANEL_MIN_SIZE;
+                self.size = size.clamp(PANEL_MIN_SIZE, max_size);
+            }
+            DockPlacement::Center => unreachable!(),
+        }
 
         cx.notify();
     }
@@ -337,14 +372,13 @@ impl Render for Dock {
         }
 
         let cache_style = StyleRefinement::default().absolute().size_full();
-        let dock_size = self.size;
 
         div()
             .relative()
             .overflow_hidden()
             .map(|this| match self.placement {
-                DockPlacement::Left | DockPlacement::Right => this.h_flex().h_full().w(dock_size),
-                DockPlacement::Bottom => this.w_full().h(dock_size),
+                DockPlacement::Left | DockPlacement::Right => this.h_flex().h_full().w(self.size),
+                DockPlacement::Bottom => this.w_full().h(self.size),
                 DockPlacement::Center => unreachable!(),
             })
             // Bottom Dock should keep the title bar, then user can click the Toggle button

@@ -100,8 +100,7 @@ impl From<Bounds<Pixels>> for TileMeta {
 pub enum PanelInfo {
     #[serde(rename = "stack")]
     Stack {
-        #[serde(default)]
-        ratios: Vec<f32>,
+        sizes: Vec<Pixels>,
         axis: usize, // 0 for horizontal, 1 for vertical
     },
     #[serde(rename = "tabs")]
@@ -113,9 +112,9 @@ pub enum PanelInfo {
 }
 
 impl PanelInfo {
-    pub fn stack(ratios: Vec<f32>, axis: Axis) -> Self {
+    pub fn stack(sizes: Vec<Pixels>, axis: Axis) -> Self {
         Self::Stack {
-            ratios,
+            sizes,
             axis: if axis == Axis::Horizontal { 0 } else { 1 },
         }
     }
@@ -143,9 +142,9 @@ impl PanelInfo {
         }
     }
 
-    pub fn ratios(&self) -> Option<&Vec<f32>> {
+    pub fn sizes(&self) -> Option<&Vec<Pixels>> {
         match self {
-            Self::Stack { ratios, .. } => Some(ratios),
+            Self::Stack { sizes, .. } => Some(sizes),
             _ => None,
         }
     }
@@ -195,14 +194,14 @@ impl PanelState {
             .collect();
 
         match info {
-            PanelInfo::Stack { ratios, axis } => {
+            PanelInfo::Stack { sizes, axis } => {
                 let axis = if axis == 0 {
                     Axis::Horizontal
                 } else {
                     Axis::Vertical
                 };
-                let ratios = ratios.iter().map(|&ratio| Some(ratio)).collect();
-                DockItem::split_with_sizes(axis, items, ratios, &dock_area, window, cx)
+                let sizes = sizes.iter().map(|s| Some(*s)).collect_vec();
+                DockItem::split_with_sizes(axis, items, sizes, &dock_area, window, cx)
             }
             PanelInfo::Tabs { active_index } => {
                 if items.len() == 1 {
@@ -240,6 +239,8 @@ impl PanelState {
 
 #[cfg(test)]
 mod tests {
+    use gpui::px;
+
     use super::*;
     #[test]
     fn test_deserialize_item_state() {
@@ -258,7 +259,7 @@ mod tests {
 
         let left_dock = state.left_dock.unwrap();
         assert_eq!(left_dock.open, true);
-        assert_eq!(left_dock.size, px(350.));
+        assert_eq!(left_dock.size, px(350.0));
         assert_eq!(left_dock.placement, DockPlacement::Left);
         assert_eq!(left_dock.panel.panel_name, "TabPanel");
         assert_eq!(left_dock.panel.children.len(), 1);
@@ -266,14 +267,14 @@ mod tests {
 
         let bottom_dock = state.bottom_dock.unwrap();
         assert_eq!(bottom_dock.open, true);
-        assert_eq!(bottom_dock.size, px(200.));
+        assert_eq!(bottom_dock.size, px(200.0));
         assert_eq!(bottom_dock.panel.panel_name, "TabPanel");
         assert_eq!(bottom_dock.panel.children.len(), 2);
         assert_eq!(bottom_dock.panel.children[0].panel_name, "StoryContainer");
 
         let right_dock = state.right_dock.unwrap();
         assert_eq!(right_dock.open, true);
-        assert_eq!(right_dock.size, px(320.));
+        assert_eq!(right_dock.size, px(320.0));
         assert_eq!(right_dock.panel.panel_name, "TabPanel");
         assert_eq!(right_dock.panel.children.len(), 1);
         assert_eq!(right_dock.panel.children[0].panel_name, "StoryContainer");
