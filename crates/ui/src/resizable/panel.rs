@@ -1,14 +1,17 @@
-use std::{ops::Deref, rc::Rc};
+use std::{
+    ops::{Deref, Range},
+    rc::Rc,
+};
 
 use gpui::{
-    canvas, div, prelude::FluentBuilder, px, relative, Along, AnyElement, AnyView, App, AppContext,
-    Axis, Bounds, Context, Element, Empty, Entity, EntityId, EventEmitter, IntoElement, IsZero,
+    canvas, div, prelude::FluentBuilder, px, Along, AnyElement, AnyView, App, AppContext, Axis,
+    Bounds, Context, Element, Empty, Entity, EntityId, EventEmitter, IntoElement, IsZero,
     MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Render, Style, Styled, WeakEntity, Window,
 };
 
 use crate::{h_flex, v_flex, AxisExt};
 
-use super::resize_handle;
+use super::{resizable_panel, resize_handle};
 
 pub(crate) const PANEL_MIN_SIZE: Pixels = px(100.);
 
@@ -31,6 +34,7 @@ pub struct ResizablePanelGroup {
     sizes: Vec<Pixels>,
     axis: Axis,
     size: Option<Pixels>,
+
     bounds: Bounds<Pixels>,
     resizing_panel_ix: Option<usize>,
 }
@@ -63,20 +67,19 @@ impl ResizablePanelGroup {
         cx.notify();
     }
 
-    /// Add a resizable panel to the group.
+    /// Add a panel to the group.
+    ///
+    /// - The `axis` will be set to the same axis as the group.
+    /// - The `initial_size` will be set to the average size of all panels if not provided.
+    /// - The `group` will be set to the group entity.
     pub fn child(mut self, panel: ResizablePanel, cx: &mut Context<Self>) -> Self {
-        self.add_child(panel, cx);
+        self._insert_child(panel, self.panels.len(), cx);
         self
     }
 
     /// Add a ResizablePanelGroup as a child to the group.
     pub fn group(self, group: ResizablePanelGroup, cx: &mut Context<Self>) -> Self {
-        let group: ResizablePanelGroup = group;
-        let size = group.size;
-        let panel = ResizablePanel::new()
-            .content_view(cx.new(|_| group).into())
-            .when_some(size, |this, size| this.size(size));
-        self.child(panel, cx)
+        self.child(resizable_panel().content_view(cx.new(|_| group).into()), cx)
     }
 
     /// Set size of the resizable panel group
@@ -98,29 +101,46 @@ impl ResizablePanelGroup {
         self.sizes.iter().fold(px(0.0), |acc, &size| acc + size)
     }
 
-    pub fn add_child(&mut self, panel: ResizablePanel, cx: &mut Context<Self>) {
-        let mut panel = panel;
-        panel.axis = self.axis;
-        panel.group = Some(cx.entity().downgrade());
-        self.sizes.push(panel.initial_size.unwrap_or_default());
-        self.panels.push(cx.new(|_| panel));
-    }
-
+    /// Insert child to panel group.
+    ///
+    /// - The `ix` is the index of the panel to insert.
+    /// - The `axis` will be set to the same axis as the group.
+    /// - The `initial_size` will be set to the average size of all panels if not provided.
+    /// - The `group` will be set to the group entity.
     pub fn insert_child(
         &mut self,
         panel: ResizablePanel,
         ix: usize,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self._insert_child(panel, ix, cx);
+        window.on_next_frame({
+            let view = cx.entity();
+            move |window, cx| {
+                view.update(cx, |this, cx| {
+                    this.sync_real_panel_sizes(window, cx);
+                })
+            }
+        });
+        cx.notify()
+    }
+
+    fn _insert_child(&mut self, panel: ResizablePanel, ix: usize, cx: &mut Context<Self>) {
         let mut panel = panel;
         panel.axis = self.axis;
         panel.group = Some(cx.entity().downgrade());
+        let initial_size = match panel.initial_size {
+            // Use the initial size if provided.
+            Some(size) => size,
+            // Split to add child, use average size of all panels
+            None => (self.total_size() / (self.panels.len() + 1) as f32).max(PANEL_MIN_SIZE),
+        };
 
-        self.sizes
-            .insert(ix, panel.initial_size.unwrap_or_default());
+        // Here we need allows `initial_size` is none, for some children use flex auto size.
+
+        self.sizes.insert(ix, initial_size);
         self.panels.insert(ix, cx.new(|_| panel));
-        cx.notify()
     }
 
     /// Replace a child panel with a new panel at the given index.
@@ -131,17 +151,14 @@ impl ResizablePanelGroup {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let old_panel = self.panels[ix].read(cx);
+
         let mut panel = panel;
-
-        let old_panel = self.panels[ix].clone();
-        let old_panel_initial_size = old_panel.read(cx).initial_size;
-        let old_panel_size_ratio = old_panel.read(cx).size_ratio;
-
-        panel.initial_size = old_panel_initial_size;
-        panel.size_ratio = old_panel_size_ratio;
+        panel.initial_size = old_panel.initial_size;
+        panel.size = old_panel.size;
         panel.axis = self.axis;
         panel.group = Some(cx.entity().downgrade());
-        self.sizes[ix] = panel.initial_size.unwrap_or_default();
+
         self.panels[ix] = cx.new(|_| panel);
         cx.notify()
     }
@@ -185,8 +202,16 @@ impl ResizablePanelGroup {
 
     fn sync_real_panel_sizes(&mut self, _: &Window, cx: &App) {
         for (i, panel) in self.panels.iter().enumerate() {
-            self.sizes[i] = panel.read(cx).bounds.size.along(self.axis)
+            self.sizes[i] = panel.read(cx).bounds.size.along(self.axis).floor();
         }
+    }
+
+    fn panel_size_range(&self, ix: usize, cx: &App) -> Range<Pixels> {
+        let Some(panel) = self.panels.get(ix) else {
+            return PANEL_MIN_SIZE..Pixels::MAX;
+        };
+
+        panel.read(cx).size_range.clone()
     }
 
     /// The `ix`` is the index of the panel to resize,
@@ -205,38 +230,43 @@ impl ResizablePanelGroup {
         }
         let size = size.floor();
         let container_size = self.bounds.size.along(self.axis);
-
         self.sync_real_panel_sizes(window, cx);
 
-        let mut changed = size - self.sizes[ix];
-        let is_expand = changed > px(0.);
+        let move_changed = size - self.sizes[ix];
+        if move_changed == px(0.) {
+            return;
+        }
+        let size_range = self.panel_size_range(ix, cx);
+        let new_size = size.clamp(size_range.start, size_range.end);
+        let is_expand = move_changed > px(0.);
 
         let main_ix = ix;
         let mut new_sizes = self.sizes.clone();
 
         if is_expand {
-            new_sizes[ix] = size;
+            let mut changed = new_size - self.sizes[ix];
+            new_sizes[ix] = new_size;
 
-            // Now to expand logic is correct.
             while changed > px(0.) && ix < self.panels.len() - 1 {
                 ix += 1;
-                let available_size = (new_sizes[ix] - PANEL_MIN_SIZE).max(px(0.));
+                let size_range = self.panel_size_range(ix, cx);
+                let available_size = (new_sizes[ix] - size_range.start).max(px(0.));
                 let to_reduce = changed.min(available_size);
                 new_sizes[ix] -= to_reduce;
                 changed -= to_reduce;
             }
         } else {
-            let new_size = size.max(PANEL_MIN_SIZE);
-            new_sizes[ix] = new_size;
-            changed = size - PANEL_MIN_SIZE;
+            let mut changed = new_size - size;
             new_sizes[ix + 1] += self.sizes[ix] - new_size;
+            new_sizes[ix] = new_size;
 
-            while changed < px(0.) && ix > 0 {
+            while changed > px(0.) && ix > 0 {
                 ix -= 1;
-                let available_size = self.sizes[ix] - PANEL_MIN_SIZE;
-                let to_increase = (changed).min(available_size);
-                new_sizes[ix] += to_increase;
-                changed += to_increase;
+                let size_range = self.panel_size_range(ix, cx);
+                let available_size = (new_sizes[ix] - size_range.start).max(px(0.));
+                let to_reduce = changed.min(available_size);
+                changed -= to_reduce;
+                new_sizes[ix] -= to_reduce;
             }
         }
 
@@ -244,20 +274,19 @@ impl ResizablePanelGroup {
         let total_size: Pixels = new_sizes.iter().map(|s| s.0).sum::<f32>().into();
         if total_size > container_size {
             let overflow = total_size - container_size;
-            new_sizes[main_ix] = (new_sizes[main_ix] - overflow).max(PANEL_MIN_SIZE);
+            new_sizes[main_ix] = (new_sizes[main_ix] - overflow).max(size_range.start);
         }
 
-        let total_size = new_sizes.iter().fold(px(0.0), |acc, &size| acc + size);
-        self.sizes = new_sizes;
         for (i, panel) in self.panels.iter().enumerate() {
-            let size = self.sizes[i];
-            if size > px(0.) {
+            let size = new_sizes[i];
+            let is_changed = self.sizes[i] != size;
+            if size > px(0.) && is_changed {
                 panel.update(cx, |this, _| {
                     this.size = Some(size);
-                    this.size_ratio = Some(size / total_size);
                 });
             }
         }
+        self.sizes = new_sizes;
     }
 }
 impl EventEmitter<ResizablePanelEvent> for ResizablePanelGroup {}
@@ -303,8 +332,8 @@ pub struct ResizablePanel {
     initial_size: Option<Pixels>,
     /// size is the size that the panel has when it is resized or adjusted by flex layout.
     size: Option<Pixels>,
-    /// the size ratio that the panel has relative to its group
-    size_ratio: Option<f32>,
+    /// size range limit of this panel.
+    size_range: Range<Pixels>,
     axis: Axis,
     content_builder: Option<Rc<dyn Fn(&mut Window, &mut App) -> AnyElement>>,
     content_view: Option<AnyView>,
@@ -320,7 +349,7 @@ impl ResizablePanel {
             group: None,
             initial_size: None,
             size: None,
-            size_ratio: None,
+            size_range: (PANEL_MIN_SIZE..Pixels::MAX),
             axis: Axis::Horizontal,
             content_builder: None,
             content_view: None,
@@ -352,18 +381,28 @@ impl ResizablePanel {
     }
 
     /// Set the initial size of the panel.
-    pub fn size(mut self, size: Pixels) -> Self {
-        self.initial_size = Some(size);
+    pub fn size(mut self, size: impl Into<Pixels>) -> Self {
+        self.initial_size = Some(size.into());
+        self
+    }
+
+    /// Set the size range to limit panel resize.
+    ///
+    /// Default is [`PANEL_MIN_SIZE`] to [`Pixels::MAX`].
+    pub fn size_range(mut self, range: impl Into<Range<Pixels>>) -> Self {
+        self.size_range = range.into();
         self
     }
 
     /// Save the real panel size, and update group sizes
     fn update_size(&mut self, bounds: Bounds<Pixels>, _: &mut Window, cx: &mut Context<Self>) {
-        let new_size = bounds.size.along(self.axis);
         self.bounds = bounds;
-        self.size_ratio = None;
-        self.size = Some(new_size);
+        let new_size = bounds.size.along(self.axis);
+        if self.size == Some(new_size) {
+            return;
+        }
 
+        self.size = Some(new_size);
         let entity_id = cx.entity().entity_id();
         if let Some(group) = self.group.as_ref() {
             _ = group.update(cx, |view, _| {
@@ -372,7 +411,7 @@ impl ResizablePanel {
                 }
             });
         }
-        cx.notify();
+        // cx.notify();
     }
 }
 
@@ -388,39 +427,34 @@ impl Render for ResizablePanel {
         }
 
         let view = cx.entity().clone();
-        let total_size = self
-            .group
-            .as_ref()
-            .and_then(|group| group.upgrade())
-            .map(|group| group.read(cx).total_size());
+        let size_range = self.size_range.clone();
 
         div()
             .flex()
             .flex_grow()
             .size_full()
             .relative()
-            .when(self.initial_size.is_none(), |this| this.flex_shrink())
-            .when(self.axis.is_vertical(), |this| this.min_h(PANEL_MIN_SIZE))
-            .when(self.axis.is_horizontal(), |this| this.min_w(PANEL_MIN_SIZE))
-            .when_some(self.initial_size, |this, size| {
-                if size.is_zero() {
-                    this
-                } else {
-                    // The `self.size` is None, that mean the initial size for the panel, so we need set flex_shrink_0
-                    // To let it keep the initial size.
-                    this.when(self.size.is_none() && size > px(0.), |this| {
-                        this.flex_shrink_0()
-                    })
-                    .flex_basis(size)
-                }
+            .when(self.axis.is_vertical(), |this| {
+                this.min_h(size_range.start).max_h(size_range.end)
             })
-            .map(|this| match (self.size_ratio, self.size, total_size) {
-                (Some(size_ratio), _, _) => this.flex_basis(relative(size_ratio)),
-                (None, Some(size), Some(total_size)) => {
-                    this.flex_basis(relative(size / total_size))
-                }
-                (None, Some(size), None) => this.flex_basis(size),
-                _ => this,
+            .when(self.axis.is_horizontal(), |this| {
+                this.min_w(size_range.start).max_w(size_range.end)
+            })
+            // 1. initial_size is None, to use auto size.
+            // 2. initial_size is Some and size is none, to use the initial size of the panel for first time render.
+            // 3. initial_size is Some and size is Some, use `size`.
+            .when(self.initial_size.is_none(), |this| this.flex_shrink())
+            .when_some(self.initial_size, |this, initial_size| {
+                // The `self.size` is None, that mean the initial size for the panel,
+                // so we need set `flex_shrink_0` To let it keep the initial size.
+                this.when(self.size.is_none() && !initial_size.is_zero(), |this| {
+                    this.flex_shrink_0()
+                })
+                .flex_basis(initial_size)
+            })
+            .map(|this| match self.size {
+                Some(size) => this.flex_basis(size),
+                None => this,
             })
             .child({
                 canvas(
