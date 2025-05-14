@@ -8,7 +8,7 @@ use crate::section;
 use gpui_component::{
     button::{Button, ButtonVariant, ButtonVariants as _},
     h_flex,
-    input::{InputEvent, TextInput},
+    input::{InputEvent, MaskPattern, TextInput},
     v_flex, ContextModal, FocusableCycle, Icon, IconName, Sizable,
 };
 
@@ -34,6 +34,9 @@ pub struct InputStory {
     both_input1: Entity<TextInput>,
     large_input: Entity<TextInput>,
     small_input: Entity<TextInput>,
+    phone_input: Entity<TextInput>,
+    mask_input2: Entity<TextInput>,
+    currency_input: Entity<TextInput>,
 
     _subscriptions: Vec<Subscription>,
 }
@@ -118,9 +121,19 @@ impl InputStory {
                 .placeholder("This input have prefix and suffix.")
         });
 
+        let phone_input = cx.new(|cx| TextInput::new(window, cx).mask_pattern("(999)-999-9999"));
+        let mask_input2 = cx.new(|cx| TextInput::new(window, cx).mask_pattern("AAA-###-AAA"));
+        let currency_input = cx.new(|cx| {
+            TextInput::new(window, cx).mask_pattern(MaskPattern::Number {
+                separator: Some(','),
+                fraction: Some(3),
+            })
+        });
+
         let _subscriptions = vec![
             cx.subscribe_in(&input1, window, Self::on_input_event),
             cx.subscribe_in(&input2, window, Self::on_input_event),
+            cx.subscribe_in(&phone_input, window, Self::on_input_event),
         ];
 
         Self {
@@ -148,6 +161,9 @@ impl InputStory {
             prefix_input1,
             suffix_input1,
             both_input1,
+            phone_input,
+            mask_input2,
+            currency_input,
             _subscriptions,
         }
     }
@@ -227,6 +243,40 @@ impl Render for InputStory {
                     .child(self.prefix_input1.clone())
                     .child(self.both_input1.clone())
                     .child(self.suffix_input1.clone()),
+            )
+            .child(
+                section("Currency Input with thousands separator")
+                    .max_w_md()
+                    .child(self.currency_input.clone())
+                    .child(
+                        div().child(format!("Value: {:?}", self.currency_input.read(cx).text())),
+                    ),
+            )
+            .child(
+                section("Input with mask pattern: (999)-999-9999")
+                    .max_w_md()
+                    .child(self.phone_input.clone())
+                    .child(
+                        v_flex()
+                            .child(format!("Value: {:?}", self.phone_input.read(cx).text()))
+                            .child(format!(
+                                "Unmask Value: {:?}",
+                                self.phone_input.read(cx).unmask_text()
+                            )),
+                    ),
+            )
+            .child(
+                section("Input with mask pattern: AAA-###-AAA")
+                    .max_w_md()
+                    .child(self.mask_input2.clone())
+                    .child(
+                        v_flex()
+                            .child(format!("Value: {:?}", self.mask_input2.read(cx).text()))
+                            .child(format!(
+                                "Unmask Value: {:?}",
+                                self.mask_input2.read(cx).unmask_text()
+                            )),
+                    ),
             )
             .child(
                 section("Input Size")

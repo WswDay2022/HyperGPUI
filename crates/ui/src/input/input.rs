@@ -26,6 +26,7 @@ use gpui::{
 use super::blink_cursor::BlinkCursor;
 use super::change::Change;
 use super::element::TextElement;
+use super::mask_pattern::MaskPattern;
 use super::number_input;
 
 use crate::button::{Button, ButtonVariants as _};
@@ -243,7 +244,7 @@ pub struct TextInput {
     /// For special case, e.g.: NumberInput + - button
     pub(super) no_gap: bool,
     pub(super) height: Option<gpui::DefiniteLength>,
-    pattern: Option<regex::Regex>,
+    pub(super) pattern: Option<regex::Regex>,
     validate: Option<Box<dyn Fn(&str) -> bool + 'static>>,
     pub(crate) scroll_handle: ScrollHandle,
     scrollbar_state: Rc<Cell<ScrollbarState>>,
@@ -252,6 +253,8 @@ pub struct TextInput {
     /// To remember the horizontal column (x-coordinate) of the cursor position.
     preferred_x_offset: Option<Pixels>,
     _subscriptions: Vec<Subscription>,
+    /// The mask pattern for formatting the input text
+    pub(crate) mask_pattern: MaskPattern,
 }
 
 impl EventEmitter<InputEvent> for TextInput {}
@@ -320,6 +323,7 @@ impl TextInput {
             scroll_size: gpui::size(px(0.), px(0.)),
             preferred_x_offset: None,
             _subscriptions,
+            mask_pattern: MaskPattern::default(),
         }
     }
 
@@ -502,7 +506,7 @@ impl TextInput {
         self.replace_text(text, window, cx);
         self.history.ignore = false;
         // Ensure cursor to start when set text
-        self.selected_range = 0..0;
+        self.selected_range = self.text.len()..self.text.len();
 
         cx.notify();
     }
@@ -553,19 +557,19 @@ impl TextInput {
         cx.notify();
     }
 
-    /// Set with masked state.
+    /// Set with password masked state.
     pub fn masked(mut self, masked: bool) -> Self {
         self.masked = masked;
         self
     }
 
-    /// Set the masked state of the input field.
+    /// Set the password masked state of the input field.
     pub fn set_masked(&mut self, masked: bool, _: &mut Window, cx: &mut Context<Self>) {
         self.masked = masked;
         cx.notify();
     }
 
-    /// Set to enable toggle button for mask state.
+    /// Set to enable toggle button for password mask state.
     pub fn mask_toggle(mut self) -> Self {
         self.mask_toggle = true;
         self
@@ -711,6 +715,11 @@ impl TextInput {
     /// Return the text of the input field.
     pub fn text(&self) -> &SharedString {
         &self.text
+    }
+
+    /// Return the text without mask.
+    pub fn unmask_text(&self) -> SharedString {
+        self.mask_pattern.unmask(&self.text).into()
     }
 
     pub fn disabled(&self) -> bool {
@@ -1543,6 +1552,10 @@ impl TextInput {
             }
         }
 
+        if !self.mask_pattern.is_valid(new_text) {
+            return false;
+        }
+
         self.pattern
             .as_ref()
             .map(|p| p.is_match(new_text))
@@ -1576,6 +1589,36 @@ impl TextInput {
                     }),
                 ),
         )
+    }
+
+    /// Set the mask pattern for formatting the input text.
+    ///
+    /// The pattern can contain:
+    /// - 9: Any digit or dot
+    /// - A: Any letter
+    /// - *: Any character
+    /// - Other characters will be treated as literal mask characters
+    ///
+    /// Example: "(999)999-999" for phone numbers
+    pub fn mask_pattern(mut self, pattern: impl Into<MaskPattern>) -> Self {
+        self.mask_pattern = pattern.into();
+        if let Some(placeholder) = self.mask_pattern.placeholder() {
+            self.placeholder = placeholder.into();
+        }
+        self
+    }
+
+    pub fn set_mask_pattern(
+        &mut self,
+        pattern: impl Into<MaskPattern>,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.mask_pattern = pattern.into();
+        if let Some(placeholder) = self.mask_pattern.placeholder() {
+            self.placeholder = placeholder.into();
+        }
+        cx.notify();
     }
 }
 
@@ -1644,18 +1687,23 @@ impl EntityInputHandler for TextInput {
 
         let pending_text: SharedString =
             (self.text[0..range.start].to_owned() + new_text + &self.text[range.end..]).into();
+        // Check if the new text is valid
         if !self.is_valid_input(&pending_text) {
             return;
         }
 
-        self.push_history(&range, new_text, window, cx);
-        self.text = pending_text;
-        self.selected_range = range.start + new_text.len()..range.start + new_text.len();
+        let mask_text = self.mask_pattern.mask(&pending_text);
+        let new_text_len = (new_text.len() + mask_text.len()).saturating_sub(pending_text.len());
+        let new_pos = (range.start + new_text_len).min(mask_text.len());
+
+        self.push_history(&range, &new_text, window, cx);
+        self.text = mask_text;
+        self.selected_range = new_pos..new_pos;
         self.marked_range.take();
         self.update_preferred_x_offset(cx);
         self.update_scroll_offset(None, cx);
         self.check_to_auto_grow(window, cx);
-        cx.emit(InputEvent::Change(self.text.clone()));
+        cx.emit(InputEvent::Change(self.unmask_text()));
         cx.notify();
     }
 
@@ -1690,7 +1738,7 @@ impl EntityInputHandler for TextInput {
             .map(|range_utf16| self.range_from_utf16(range_utf16))
             .map(|new_range| new_range.start + range.start..new_range.end + range.end)
             .unwrap_or_else(|| range.start + new_text.len()..range.start + new_text.len());
-        cx.emit(InputEvent::Change(self.text.clone()));
+        cx.emit(InputEvent::Change(self.unmask_text()));
         cx.notify();
     }
 
@@ -1834,7 +1882,6 @@ impl Render for TextInput {
             .on_action(cx.listener(Self::paste))
             .on_action(cx.listener(Self::cut))
             .on_action(cx.listener(Self::undo))
-            .on_action(cx.listener(Self::redo))
             .on_action(cx.listener(Self::redo))
             .on_key_down(cx.listener(Self::on_key_down))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
