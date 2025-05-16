@@ -4,7 +4,7 @@ use gpui::{
 };
 use gpui_component::{
     h_flex,
-    input::{InputEvent, TextInput},
+    input::{InputEvent, InputState, TextInput},
     v_flex,
     webview::WebView,
     wry, ActiveTheme,
@@ -18,7 +18,7 @@ pub fn init(_: &mut App) {
 pub struct WebViewStory {
     focus_handle: FocusHandle,
     webview: Entity<WebView>,
-    address_input: Entity<TextInput>,
+    address_input: Entity<InputState>,
 }
 
 impl super::Story for WebViewStory {
@@ -76,13 +76,10 @@ impl WebViewStory {
             WebView::new(webview, window, cx)
         });
 
-        let address_input = cx.new(|cx| {
-            let mut input = TextInput::new(window, cx);
-            input.set_text("https://google.com", window, cx);
-            input
-        });
+        let address_input =
+            cx.new(|cx| InputState::new(window, cx).default_value("https://google.com"));
 
-        let url = address_input.read(cx).text().clone();
+        let url = address_input.read(cx).value().clone();
         webview.update(cx, |view, _| {
             view.load_url(&url);
         });
@@ -98,7 +95,7 @@ impl WebViewStory {
                 &address_input,
                 |this: &mut Self, input, event: &InputEvent, cx| match event {
                     InputEvent::PressEnter { .. } => {
-                        let url = input.read(cx).text().clone();
+                        let url = input.read(cx).value().clone();
                         this.webview.update(cx, |view, _| {
                             view.load_url(&url);
                         });
@@ -133,13 +130,17 @@ impl Focusable for WebViewStory {
 impl Render for WebViewStory {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let webview = self.webview.clone();
-        let address_input = self.address_input.clone();
 
         v_flex()
             .p_2()
             .gap_3()
             .size_full()
-            .child(h_flex().gap_2().items_center().child(address_input.clone()))
+            .child(
+                h_flex()
+                    .gap_2()
+                    .items_center()
+                    .child(TextInput::new(&self.address_input)),
+            )
             .child(
                 div()
                     .flex_1()

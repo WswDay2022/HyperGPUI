@@ -2,14 +2,17 @@ use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement as _,
     Render, Styled as _, Window,
 };
-use gpui_component::{calendar::Calendar, v_flex};
+use gpui_component::{
+    calendar::{Calendar, CalendarState},
+    v_flex,
+};
 
 use crate::section;
 
 pub struct CalendarStory {
     focus_handle: FocusHandle,
-    calendar: Entity<Calendar>,
-    calendar_wide: Entity<Calendar>,
+    calendar: Entity<CalendarState>,
+    calendar_wide: Entity<CalendarState>,
 }
 
 impl super::Story for CalendarStory {
@@ -32,8 +35,8 @@ impl CalendarStory {
     }
 
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let calendar = cx.new(|cx| Calendar::new(window, cx));
-        let calendar_wide = cx.new(|cx| Calendar::new(window, cx).number_of_months(3));
+        let calendar = cx.new(|cx| CalendarState::new(window, cx));
+        let calendar_wide = cx.new(|cx| CalendarState::new(window, cx));
 
         Self {
             calendar,
@@ -44,7 +47,7 @@ impl CalendarStory {
 }
 
 impl Focusable for CalendarStory {
-    fn focus_handle(&self, _: &App) -> gpui::FocusHandle {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus_handle.clone()
     }
 }
@@ -53,11 +56,15 @@ impl Render for CalendarStory {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .gap_3()
-            .child(section("Normal").max_w_md().child(self.calendar.clone()))
+            .child(
+                section("Normal")
+                    .max_w_md()
+                    .child(Calendar::new(&self.calendar)),
+            )
             .child(
                 section("With 3 Months")
                     .max_w_md()
-                    .child(self.calendar_wide.clone()),
+                    .child(Calendar::new(&self.calendar_wide).number_of_months(3)),
             )
     }
 }

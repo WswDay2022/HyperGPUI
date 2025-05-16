@@ -2,12 +2,13 @@ use std::time::Duration;
 use std::{cell::Cell, rc::Rc};
 
 use crate::actions::{Cancel, Confirm, SelectNext, SelectPrev};
-use crate::Icon;
+use crate::input::InputState;
 use crate::{
     input::{InputEvent, TextInput},
     scroll::{Scrollbar, ScrollbarState},
     v_flex, ActiveTheme, IconName, Size,
 };
+use crate::{Icon, Sizable as _};
 use gpui::{
     div, prelude::FluentBuilder, uniform_list, AnyElement, AppContext, Entity, FocusHandle,
     Focusable, InteractiveElement, IntoElement, KeyBinding, Length, ListSizingBehavior,
@@ -148,7 +149,7 @@ pub struct List<D: ListDelegate> {
     focus_handle: FocusHandle,
     delegate: D,
     max_height: Option<Length>,
-    query_input: Option<Entity<TextInput>>,
+    query_input: Option<Entity<InputState>>,
     last_query: Option<String>,
     selectable: bool,
     querying: bool,
@@ -170,11 +171,9 @@ where
 {
     pub fn new(delegate: D, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let query_input = cx.new(|cx| {
-            TextInput::new(window, cx)
-                .appearance(false)
-                .prefix(|_, cx| Icon::new(IconName::Search).text_color(cx.theme().muted_foreground))
+            InputState::new(window, cx)
+                // .prefix(|_, cx| Icon::new(IconName::Search).text_color(cx.theme().muted_foreground))
                 .placeholder(t!("List.search_placeholder"))
-                .cleanable()
         });
 
         let _query_input_subscription =
@@ -202,12 +201,7 @@ where
     }
 
     /// Set the size
-    pub fn set_size(&mut self, size: Size, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(input) = &self.query_input {
-            input.update(cx, |input, cx| {
-                input.set_size(size, window, cx);
-            })
-        }
+    pub fn set_size(&mut self, size: Size, _: &mut Window, _: &mut Context<Self>) {
         self.size = size;
     }
 
@@ -235,7 +229,7 @@ where
 
     pub fn set_query_input(
         &mut self,
-        query_input: Entity<TextInput>,
+        query_input: Entity<InputState>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -245,7 +239,7 @@ where
     }
 
     /// Get the query input entity.
-    pub fn query_input(&self) -> Option<&Entity<TextInput>> {
+    pub fn query_input(&self) -> Option<&Entity<InputState>> {
         self.query_input.as_ref()
     }
 
@@ -310,7 +304,7 @@ where
 
     fn on_query_input_event(
         &mut self,
-        _: &Entity<TextInput>,
+        _: &Entity<InputState>,
         event: &InputEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -566,7 +560,7 @@ where
         };
 
         let initial_view = if let Some(input) = &self.query_input {
-            if input.read(cx).text().is_empty() {
+            if input.read(cx).value().is_empty() {
                 self.delegate().render_initial(window, cx)
             } else {
                 None
@@ -591,7 +585,16 @@ where
                         })
                         .border_b_1()
                         .border_color(cx.theme().border)
-                        .child(input),
+                        .child(
+                            TextInput::new(&input)
+                                .with_size(self.size)
+                                .prefix(
+                                    Icon::new(IconName::Search)
+                                        .text_color(cx.theme().muted_foreground),
+                                )
+                                .cleanable()
+                                .appearance(false),
+                        ),
                 )
             })
             .when(loading, |this| {

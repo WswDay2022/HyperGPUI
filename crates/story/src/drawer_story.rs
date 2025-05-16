@@ -11,9 +11,9 @@ use raw_window_handle::HasWindowHandle;
 use gpui_component::{
     button::{Button, ButtonVariant, ButtonVariants as _},
     checkbox::Checkbox,
-    date_picker::DatePicker,
+    date_picker::{DatePicker, DatePickerState},
     h_flex,
-    input::TextInput,
+    input::{InputState, TextInput},
     list::{List, ListDelegate, ListItem},
     v_flex,
     webview::WebView,
@@ -159,9 +159,9 @@ pub struct DrawerStory {
     drawer_placement: Option<Placement>,
     selected_value: Option<SharedString>,
     list: Entity<List<ListItemDeletegate>>,
-    input1: Entity<TextInput>,
-    input2: Entity<TextInput>,
-    date_picker: Entity<DatePicker>,
+    input1: Entity<InputState>,
+    input2: Entity<InputState>,
+    date: Entity<DatePickerState>,
     modal_overlay: bool,
     model_show_close: bool,
     model_padding: bool,
@@ -263,12 +263,11 @@ impl DrawerStory {
             list
         });
 
-        let input1 = cx.new(|cx| TextInput::new(window, cx).placeholder("Your Name"));
+        let input1 = cx.new(|cx| InputState::new(window, cx).placeholder("Your Name"));
         let input2 = cx.new(|cx| {
-            TextInput::new(window, cx).placeholder("For test focus back on modal close.")
+            InputState::new(window, cx).placeholder("For test focus back on modal close.")
         });
-        let date_picker = cx
-            .new(|cx| DatePicker::new("birthday-picker", window, cx).placeholder("Date of Birth"));
+        let date = cx.new(|cx| DatePickerState::new(window, cx));
 
         Self {
             focus_handle: cx.focus_handle(),
@@ -277,7 +276,7 @@ impl DrawerStory {
             list,
             input1,
             input2,
-            date_picker,
+            date,
             modal_overlay: true,
             model_show_close: true,
             model_padding: true,
@@ -292,8 +291,6 @@ impl DrawerStory {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let input = self.input1.clone();
-        let date_picker = self.date_picker.clone();
         let list = self.list.clone();
 
         let list_h = match placement {
@@ -302,13 +299,15 @@ impl DrawerStory {
         };
 
         let overlay = self.modal_overlay;
+        let input1 = self.input1.clone();
+        let date = self.date.clone();
         window.open_drawer_at(placement, cx, move |this, _, cx| {
             this.overlay(overlay)
                 .size(px(400.))
                 .title("Drawer Title")
                 .gap_4()
-                .child(input.clone())
-                .child(date_picker.clone())
+                .child(TextInput::new(&input1))
+                .child(DatePicker::new(&date).placeholder("Date of Birth"))
                 .child(
                     Button::new("send-notification")
                         .child("Test Notification")
@@ -462,7 +461,7 @@ impl Render for DrawerStory {
                     .child(
                         section("Focus back test")
                             .max_w_md()
-                            .child(self.input2.clone())
+                            .child(TextInput::new(&self.input2))
                             .child(
                                 Button::new("test-action")
                                     .label("Test Action")

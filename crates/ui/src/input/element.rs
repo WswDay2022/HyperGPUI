@@ -1,24 +1,34 @@
 use gpui::{
     fill, point, px, relative, size, App, Bounds, Corners, Element, ElementId, ElementInputHandler,
     Entity, GlobalElementId, IntoElement, LayoutId, MouseButton, MouseMoveEvent, PaintQuad, Path,
-    Pixels, Point, Style, TextAlign, TextRun, UnderlineStyle, Window, WrappedLine,
+    Pixels, Point, SharedString, Style, TextAlign, TextRun, UnderlineStyle, Window, WrappedLine,
 };
 use smallvec::SmallVec;
 
 use crate::{ActiveTheme as _, Root};
 
-use super::TextInput;
+use super::InputState;
 
 const RIGHT_MARGIN: Pixels = px(5.);
 const BOTTOM_MARGIN: Pixels = px(20.);
 
 pub(super) struct TextElement {
-    input: Entity<TextInput>,
+    input: Entity<InputState>,
+    placeholder: SharedString,
 }
 
 impl TextElement {
-    pub(super) fn new(input: Entity<TextInput>) -> Self {
-        Self { input }
+    pub(super) fn new(input: Entity<InputState>) -> Self {
+        Self {
+            input,
+            placeholder: SharedString::default(),
+        }
+    }
+
+    /// Set the placeholder text of the input field.
+    pub fn placeholder(mut self, placeholder: impl Into<SharedString>) -> Self {
+        self.placeholder = placeholder.into();
+        self
     }
 
     fn paint_mouse_listeners(&mut self, window: &mut Window, _: &mut App) {
@@ -374,7 +384,7 @@ impl Element for TextElement {
         let line_height = window.line_height();
         let input = self.input.read(cx);
         let text = input.text.clone();
-        let placeholder = input.placeholder.clone();
+        let placeholder = self.placeholder.clone();
         let style = window.text_style();
         let mut bounds = bounds;
 
@@ -504,10 +514,10 @@ impl Element for TextElement {
 
         // Set Root focused_input when self is focused
         if focused {
-            let input_view = self.input.clone();
-            if Root::read(window, cx).focused_input.as_ref() != Some(&input_view) {
+            let state = self.input.clone();
+            if Root::read(window, cx).focused_input.as_ref() != Some(&state) {
                 Root::update(window, cx, |root, _, cx| {
-                    root.focused_input = Some(input_view);
+                    root.focused_input = Some(state);
                     cx.notify();
                 });
             }
@@ -515,9 +525,9 @@ impl Element for TextElement {
 
         // And reset focused_input when next_frame start
         window.on_next_frame({
-            let input_view = self.input.clone();
+            let state = self.input.clone();
             move |window, cx| {
-                if !focused && Root::read(window, cx).focused_input.as_ref() == Some(&input_view) {
+                if !focused && Root::read(window, cx).focused_input.as_ref() == Some(&state) {
                     Root::update(window, cx, |root, _, cx| {
                         root.focused_input = None;
                         cx.notify();

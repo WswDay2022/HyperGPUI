@@ -7,10 +7,10 @@ use gpui::{
 use gpui_component::{
     button::{Button, ButtonVariant, ButtonVariants as _},
     checkbox::Checkbox,
-    date_picker::DatePicker,
-    dropdown::Dropdown,
+    date_picker::{DatePicker, DatePickerState},
+    dropdown::{Dropdown, DropdownState},
     h_flex,
-    input::TextInput,
+    input::{InputState, TextInput},
     modal::ModalButtonProps,
     v_flex, ContextModal as _,
 };
@@ -21,10 +21,10 @@ actions!(modal_story, [TestAction]);
 pub struct ModalStory {
     focus_handle: FocusHandle,
     selected_value: Option<SharedString>,
-    input1: Entity<TextInput>,
-    input2: Entity<TextInput>,
-    date_picker: Entity<DatePicker>,
-    dropdown: Entity<Dropdown<Vec<String>>>,
+    input1: Entity<InputState>,
+    input2: Entity<InputState>,
+    date: Entity<DatePickerState>,
+    dropdown: Entity<DropdownState<Vec<String>>>,
     modal_overlay: bool,
     model_show_close: bool,
     model_padding: bool,
@@ -52,15 +52,13 @@ impl ModalStory {
     }
 
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let input1 = cx.new(|cx| TextInput::new(window, cx).placeholder("Your Name"));
+        let input1 = cx.new(|cx| InputState::new(window, cx).placeholder("Your Name"));
         let input2 = cx.new(|cx| {
-            TextInput::new(window, cx).placeholder("For test focus back on modal close.")
+            InputState::new(window, cx).placeholder("For test focus back on modal close.")
         });
-        let date_picker = cx
-            .new(|cx| DatePicker::new("birthday-picker", window, cx).placeholder("Date of Birth"));
+        let date = cx.new(|cx| DatePickerState::new(window, cx));
         let dropdown = cx.new(|cx| {
-            Dropdown::new(
-                "dropdown1",
+            DropdownState::new(
                 vec![
                     "Option 1".to_string(),
                     "Option 2".to_string(),
@@ -77,7 +75,7 @@ impl ModalStory {
             selected_value: None,
             input1,
             input2,
-            date_picker,
+            date,
             dropdown,
             modal_overlay: true,
             model_show_close: true,
@@ -93,7 +91,7 @@ impl ModalStory {
         let modal_padding = self.model_padding;
         let overlay_closable = self.overlay_closable;
         let input1 = self.input1.clone();
-        let date_picker = self.date_picker.clone();
+        let date = self.date.clone();
         let dropdown = self.dropdown.clone();
         let view = cx.entity().clone();
         let keyboard = self.model_keyboard;
@@ -111,20 +109,20 @@ impl ModalStory {
                         .gap_3()
                         .child("This is a modal dialog.")
                         .child("You can put anything here.")
-                        .child(input1.clone())
-                        .child(dropdown.clone())
-                        .child(date_picker.clone()),
+                        .child(TextInput::new(&input1))
+                        .child(Dropdown::new(&dropdown))
+                        .child(DatePicker::new(&date).placeholder("Date of Birth")),
                 )
                 .footer({
                     let view = view.clone();
                     let input1 = input1.clone();
-                    let date_picker = date_picker.clone();
+                    let date = date.clone();
                     move |_, _, _, _cx| {
                         vec![
                             Button::new("confirm").primary().label("Confirm").on_click({
                                 let view = view.clone();
                                 let input1 = input1.clone();
-                                let date_picker = date_picker.clone();
+                                let date = date.clone();
                                 move |_, window, cx| {
                                     window.close_modal(cx);
 
@@ -132,8 +130,8 @@ impl ModalStory {
                                         view.selected_value = Some(
                                             format!(
                                                 "Hello, {}, date: {}",
-                                                input1.read(cx).text(),
-                                                date_picker.read(cx).date()
+                                                input1.read(cx).value(),
+                                                date.read(cx).date()
                                             )
                                             .into(),
                                         )
@@ -252,7 +250,7 @@ impl Render for ModalStory {
                     .child(
                         section("Focus back test")
                             .max_w_md()
-                            .child(self.input2.clone())
+                            .child(TextInput::new(&self.input2))
                             .child(
                                 Button::new("test-action")
                                     .label("Test Action")

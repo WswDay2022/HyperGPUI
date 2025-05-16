@@ -5,19 +5,19 @@ use gpui::{
 };
 use gpui_component::{
     calendar,
-    date_picker::{DatePicker, DatePickerEvent, DateRangePreset},
+    date_picker::{DatePicker, DatePickerEvent, DatePickerState, DateRangePreset},
     v_flex, Sizable as _,
 };
 
 use crate::section;
 
 pub struct DatePickerStory {
-    date_picker: Entity<DatePicker>,
-    date_picker_small: Entity<DatePicker>,
-    date_picker_large: Entity<DatePicker>,
+    date_picker: Entity<DatePickerState>,
+    date_picker_small: Entity<DatePickerState>,
+    date_picker_large: Entity<DatePickerState>,
     date_picker_value: Option<String>,
-    date_range_picker: Entity<DatePicker>,
-    default_range_mode_picker: Entity<DatePicker>,
+    date_range_picker: Entity<DatePickerState>,
+    default_range_mode_picker: Entity<DatePickerState>,
 
     _subscriptions: Vec<Subscription>,
 }
@@ -42,56 +42,15 @@ impl DatePickerStory {
     }
 
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let presets = vec![
-            DateRangePreset::single(
-                "Yesterday",
-                (Utc::now() - Duration::days(1)).naive_local().date(),
-            ),
-            DateRangePreset::single(
-                "Last Week",
-                (Utc::now() - Duration::weeks(1)).naive_local().date(),
-            ),
-            DateRangePreset::single(
-                "Last Month",
-                (Utc::now() - Duration::days(30)).naive_local().date(),
-            ),
-        ];
-        let range_presets = vec![
-            DateRangePreset::range(
-                "Last 7 Days",
-                (Utc::now() - Duration::days(7)).naive_local().date(),
-                Utc::now().naive_local().date(),
-            ),
-            DateRangePreset::range(
-                "Last 14 Days",
-                (Utc::now() - Duration::days(14)).naive_local().date(),
-                Utc::now().naive_local().date(),
-            ),
-            DateRangePreset::range(
-                "Last 30 Days",
-                (Utc::now() - Duration::days(30)).naive_local().date(),
-                Utc::now().naive_local().date(),
-            ),
-            DateRangePreset::range(
-                "Last 90 Days",
-                (Utc::now() - Duration::days(90)).naive_local().date(),
-                Utc::now().naive_local().date(),
-            ),
-        ];
         let now = chrono::Local::now().naive_local().date();
         let date_picker = cx.new(|cx| {
-            let mut picker = DatePicker::new("date_picker_medium", window, cx)
-                .cleanable()
-                .presets(presets);
+            let mut picker = DatePickerState::new(window, cx);
             picker.set_date(now, window, cx);
             picker.set_disabled(vec![0, 6], window, cx);
             picker
         });
         let date_picker_large = cx.new(|cx| {
-            let mut picker = DatePicker::new("date_picker_large", window, cx)
-                .large()
-                .date_format("%Y-%m-%d")
-                .width(px(300.));
+            let mut picker = DatePickerState::new(window, cx).date_format("%Y-%m-%d");
             picker.set_disabled(
                 calendar::Matcher::range(Some(now), now.checked_add_days(Days::new(7))),
                 window,
@@ -105,9 +64,7 @@ impl DatePickerStory {
             picker
         });
         let date_picker_small = cx.new(|cx| {
-            let mut picker = DatePicker::new("date_picker_small", window, cx)
-                .small()
-                .width(px(180.));
+            let mut picker = DatePickerState::new(window, cx);
             picker.set_disabled(
                 calendar::Matcher::interval(Some(now), now.checked_add_days(Days::new(5))),
                 window,
@@ -117,10 +74,7 @@ impl DatePickerStory {
             picker
         });
         let date_range_picker = cx.new(|cx| {
-            let mut picker = DatePicker::new("date_range_picker", window, cx)
-                .number_of_months(2)
-                .cleanable()
-                .presets(range_presets.clone());
+            let mut picker = DatePickerState::new(window, cx);
             picker.set_date(
                 (now, now.checked_add_days(Days::new(4)).unwrap()),
                 window,
@@ -129,12 +83,7 @@ impl DatePickerStory {
             picker
         });
 
-        let default_range_mode_picker = cx.new(|cx| {
-            DatePicker::range_picker("default_range_mode_picker", window, cx)
-                .placeholder("Range mode picker")
-                .cleanable()
-                .presets(range_presets.clone())
-        });
+        let default_range_mode_picker = cx.new(|cx| DatePickerState::range(window, cx));
 
         let _subscriptions = vec![
             cx.subscribe(&date_picker, |this, _, ev, _| match ev {
@@ -174,28 +123,81 @@ impl Focusable for DatePickerStory {
 
 impl Render for DatePickerStory {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let presets = vec![
+            DateRangePreset::single(
+                "Yesterday",
+                (Utc::now() - Duration::days(1)).naive_local().date(),
+            ),
+            DateRangePreset::single(
+                "Last Week",
+                (Utc::now() - Duration::weeks(1)).naive_local().date(),
+            ),
+            DateRangePreset::single(
+                "Last Month",
+                (Utc::now() - Duration::days(30)).naive_local().date(),
+            ),
+        ];
+        let range_presets = vec![
+            DateRangePreset::range(
+                "Last 7 Days",
+                (Utc::now() - Duration::days(7)).naive_local().date(),
+                Utc::now().naive_local().date(),
+            ),
+            DateRangePreset::range(
+                "Last 14 Days",
+                (Utc::now() - Duration::days(14)).naive_local().date(),
+                Utc::now().naive_local().date(),
+            ),
+            DateRangePreset::range(
+                "Last 30 Days",
+                (Utc::now() - Duration::days(30)).naive_local().date(),
+                Utc::now().naive_local().date(),
+            ),
+            DateRangePreset::range(
+                "Last 90 Days",
+                (Utc::now() - Duration::days(90)).naive_local().date(),
+                Utc::now().naive_local().date(),
+            ),
+        ];
+
         v_flex()
             .gap_3()
-            .child(section("Normal").max_w_md().child(self.date_picker.clone()))
             .child(
-                section("Small with 180px width")
-                    .max_w_md()
-                    .child(self.date_picker_small.clone()),
+                section("Normal").max_w_md().child(
+                    DatePicker::new(&self.date_picker)
+                        .cleanable()
+                        .presets(presets),
+                ),
             )
             .child(
-                section("Large")
-                    .max_w_md()
-                    .child(self.date_picker_large.clone()),
+                section("Small with 180px width").max_w_md().child(
+                    DatePicker::new(&self.date_picker_small)
+                        .small()
+                        .width(px(180.)),
+                ),
             )
             .child(
-                section("Date Range")
-                    .max_w_md()
-                    .child(self.date_range_picker.clone()),
+                section("Large").max_w_md().child(
+                    DatePicker::new(&self.date_picker_large)
+                        .large()
+                        .width(px(300.)),
+                ),
             )
             .child(
-                section("Default Range Mode")
-                    .max_w_md()
-                    .child(self.default_range_mode_picker.clone()),
+                section("Date Range").max_w_md().child(
+                    DatePicker::new(&self.date_range_picker)
+                        .number_of_months(2)
+                        .cleanable()
+                        .presets(range_presets.clone()),
+                ),
+            )
+            .child(
+                section("Default Range Mode").max_w_md().child(
+                    DatePicker::new(&self.default_range_mode_picker)
+                        .placeholder("Range mode picker")
+                        .cleanable()
+                        .presets(range_presets.clone()),
+                ),
             )
             .child(
                 section("Date Picker Value").max_w_md().child(
