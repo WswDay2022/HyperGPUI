@@ -10,7 +10,7 @@ use crate::{ActiveTheme as _, Root};
 use super::InputState;
 
 const RIGHT_MARGIN: Pixels = px(5.);
-const BOTTOM_MARGIN: Pixels = px(20.);
+const BOTTOM_MARGIN_ROWS: usize = 1;
 
 pub(super) struct TextElement {
     input: Entity<InputState>,
@@ -59,6 +59,12 @@ impl TextElement {
         let mut scroll_offset = input.scroll_handle.offset();
         let mut cursor = None;
 
+        // If the input has a fixed height (Otherwise is auto-grow), we need to add a bottom margin to the input.
+        let bottom_margin = if input.is_auto_grow() {
+            px(0.) + line_height
+        } else {
+            BOTTOM_MARGIN_ROWS * line_height + line_height
+        };
         // The cursor corresponds to the current cursor position in the text no only the line.
         let mut cursor_pos = None;
         let mut cursor_start = None;
@@ -114,16 +120,17 @@ impl TextElement {
                     } else {
                         scroll_offset.x
                     };
-                scroll_offset.y =
-                    if scroll_offset.y + cursor_pos.y > (bounds.size.height - BOTTOM_MARGIN) {
-                        // cursor is out of bottom
-                        bounds.size.height - BOTTOM_MARGIN - cursor_pos.y
-                    } else if scroll_offset.y + cursor_pos.y < px(0.) {
-                        // cursor is out of top
-                        scroll_offset.y - cursor_pos.y
-                    } else {
-                        scroll_offset.y
-                    };
+                scroll_offset.y = if scroll_offset.y + cursor_pos.y + line_height
+                    > bounds.size.height - bottom_margin
+                {
+                    // cursor is out of bottom
+                    bounds.size.height - bottom_margin - cursor_pos.y
+                } else if scroll_offset.y + cursor_pos.y < px(0.) {
+                    // cursor is out of top
+                    scroll_offset.y - cursor_pos.y
+                } else {
+                    scroll_offset.y
+                };
 
                 if input.selection_reversed {
                     if scroll_offset.x + cursor_start.x < px(0.) {
@@ -353,20 +360,22 @@ impl Element for TextElement {
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
         let input = self.input.read(cx);
+        let line_height = window.line_height();
+
         let mut style = Style::default();
         style.size.width = relative(1.).into();
         if self.input.read(cx).is_multi_line() {
             style.flex_grow = 1.0;
-            if let Some(h) = input.height {
+            if let Some(h) = input.mode.height() {
                 style.size.height = h.into();
-                style.min_size.height = window.line_height().into();
+                style.min_size.height = line_height.into();
             } else {
                 style.size.height = relative(1.).into();
-                style.min_size.height = (input.rows.max(1) as f32 * window.line_height()).into();
+                style.min_size.height = (input.mode.rows() * line_height).into();
             }
         } else {
             // For single-line inputs, the minimum height should be the line height
-            style.size.height = window.line_height().into();
+            style.size.height = line_height.into();
         };
 
         (window.request_layout(style, [], cx), ())
@@ -572,25 +581,21 @@ impl Element for TextElement {
             .map(|l| l.width())
             .max()
             .unwrap_or_default();
-        let height = prepaint
-            .lines
-            .iter()
-            .map(|l| l.size(line_height).height.0)
-            .sum::<f32>();
+        let height = offset_y;
+        let scroll_size = size(width, height);
 
-        let scroll_size = size(width, px(height));
-
-        self.input.update(cx, |input, _cx| {
+        self.input.update(cx, |input, cx| {
             input.last_layout = Some(prepaint.lines.clone());
             input.last_bounds = Some(bounds);
             input.last_cursor_offset = Some(input.cursor_offset());
             input.last_line_height = line_height;
-            input.input_bounds = input_bounds;
+            input.set_input_bounds(input_bounds, cx);
             input.last_selected_range = Some(selected_range);
+            input.scroll_size = scroll_size;
             input
                 .scroll_handle
                 .set_offset(prepaint.cursor_scroll_offset);
-            input.scroll_size = scroll_size;
+            cx.notify();
         });
 
         self.paint_mouse_listeners(window, cx);

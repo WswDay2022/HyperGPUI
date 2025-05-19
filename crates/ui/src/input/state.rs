@@ -24,7 +24,7 @@ use gpui::{
 
 use super::{
     blink_cursor::BlinkCursor, change::Change, element::TextElement, mask_pattern::MaskPattern,
-    number_input,
+    number_input, text_wrapper::TextWrapper,
 };
 use crate::{history::History, scroll::ScrollbarState, Root};
 
@@ -191,11 +191,101 @@ pub fn init(cx: &mut App) {
     number_input::init(cx);
 }
 
+#[derive(Debug, Default, Clone)]
+pub enum InputMode {
+    #[default]
+    SingleLine,
+    MultiLine {
+        rows: usize,
+        height: Option<DefiniteLength>,
+    },
+    AutoGrow {
+        rows: usize,
+        min_rows: usize,
+        max_rows: usize,
+    },
+}
+
+impl InputMode {
+    pub(super) fn set_rows(&mut self, new_rows: usize) {
+        match self {
+            InputMode::MultiLine { rows, .. } => {
+                *rows = new_rows;
+            }
+            InputMode::AutoGrow {
+                rows,
+                min_rows,
+                max_rows,
+            } => {
+                *rows = new_rows.clamp(*min_rows, *max_rows);
+            }
+            _ => {}
+        }
+    }
+
+    pub(super) fn update_auto_grow(&mut self, text_wrapper: &TextWrapper) {
+        match self {
+            Self::AutoGrow { .. } => {
+                let wrapped_lines = text_wrapper.wrapped_lines.len();
+                self.set_rows(wrapped_lines);
+            }
+            _ => {}
+        }
+    }
+
+    /// At least 1 row be return.
+    pub(super) fn rows(&self) -> usize {
+        match self {
+            InputMode::MultiLine { rows, .. } => *rows,
+            InputMode::AutoGrow { rows, .. } => *rows,
+            _ => 1,
+        }
+        .max(1)
+    }
+
+    /// At least 1 row be return.
+    #[allow(unused)]
+    pub(super) fn min_rows(&self) -> usize {
+        match self {
+            InputMode::MultiLine { .. } => 1,
+            InputMode::AutoGrow { min_rows, .. } => *min_rows,
+            _ => 1,
+        }
+        .max(1)
+    }
+
+    #[allow(unused)]
+    pub(super) fn max_rows(&self) -> usize {
+        match self {
+            InputMode::MultiLine { .. } => usize::MAX,
+            InputMode::AutoGrow { max_rows, .. } => *max_rows,
+            _ => 1,
+        }
+    }
+
+    pub(super) fn set_height(&mut self, new_height: Option<DefiniteLength>) {
+        match self {
+            InputMode::MultiLine { height, .. } => {
+                *height = new_height;
+            }
+            _ => {}
+        }
+    }
+
+    pub(super) fn height(&self) -> Option<DefiniteLength> {
+        match self {
+            InputMode::MultiLine { height, .. } => *height,
+            _ => None,
+        }
+    }
+}
+
 /// InputState to keep editing state of the [`super::TextInput`].
 pub struct InputState {
     pub(super) focus_handle: FocusHandle,
+    pub(super) mode: InputMode,
     pub(super) text: SharedString,
-    pub(super) multi_line: bool,
+    pub(super) text_wrapper: TextWrapper,
     pub(super) history: History<Change>,
     pub(super) blink_cursor: Entity<BlinkCursor>,
     pub(super) loading: bool,
@@ -221,10 +311,6 @@ pub struct InputState {
     pub(super) disabled: bool,
     pub(super) masked: bool,
     pub(super) clean_on_escape: bool,
-    pub(super) height: Option<DefiniteLength>,
-    pub(super) rows: usize,
-    pub(super) min_rows: usize,
-    pub(super) max_rows: Option<usize>,
     pub(super) pattern: Option<regex::Regex>,
     pub(super) validate: Option<Box<dyn Fn(&str) -> bool + 'static>>,
     pub(crate) scroll_handle: ScrollHandle,
@@ -244,6 +330,9 @@ pub struct InputState {
 impl EventEmitter<InputEvent> for InputState {}
 
 impl InputState {
+    /// Create a Input state with default [`InputMode::SingleLine`] mode.
+    ///
+    /// See also: [`Self::multi_line`], [`Self::auto_grow`] to set other mode.
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus_handle = cx.focus_handle();
         let blink_cursor = cx.new(|_| BlinkCursor::new());
@@ -267,10 +356,16 @@ impl InputState {
             cx.on_blur(&focus_handle, window, Self::on_blur),
         ];
 
+        let text_style = window.text_style();
+
         Self {
             focus_handle: focus_handle.clone(),
             text: "".into(),
-            multi_line: false,
+            text_wrapper: TextWrapper::new(
+                text_style.font(),
+                text_style.font_size.to_pixels(window.rem_size()),
+                None,
+            ),
             blink_cursor,
             history,
             selected_range: 0..0,
@@ -285,10 +380,7 @@ impl InputState {
             loading: false,
             pattern: None,
             validate: None,
-            rows: 2,
-            min_rows: 2,
-            max_rows: None,
-            height: None,
+            mode: InputMode::SingleLine,
             last_layout: None,
             last_bounds: None,
             last_selected_range: None,
@@ -304,9 +396,24 @@ impl InputState {
         }
     }
 
-    /// Use the text input field as a multi-line Textarea.
+    /// Set Input to use [`InputMode::MultiLine`] mode.
+    ///
+    /// Default rows is 2.
     pub fn multi_line(mut self) -> Self {
-        self.multi_line = true;
+        self.mode = InputMode::MultiLine {
+            rows: 2,
+            height: None,
+        };
+        self
+    }
+
+    /// Set Input to use [`InputMode::AutoGrow`] mode with min, max rows limit.
+    pub fn auto_grow(mut self, min_rows: usize, max_rows: usize) -> Self {
+        self.mode = InputMode::AutoGrow {
+            rows: min_rows,
+            min_rows: min_rows,
+            max_rows: max_rows,
+        };
         self
     }
 
@@ -456,12 +563,20 @@ impl InputState {
 
     #[inline]
     pub(super) fn is_multi_line(&self) -> bool {
-        self.multi_line
+        matches!(
+            self.mode,
+            InputMode::MultiLine { .. } | InputMode::AutoGrow { .. }
+        )
     }
 
     #[inline]
     pub(super) fn is_single_line(&self) -> bool {
-        !self.multi_line
+        matches!(self.mode, InputMode::SingleLine)
+    }
+
+    #[inline]
+    pub(super) fn is_auto_grow(&self) -> bool {
+        matches!(self.mode, InputMode::AutoGrow { .. })
     }
 
     /// Set the number of rows for the multi-line Textarea.
@@ -470,20 +585,19 @@ impl InputState {
     ///
     /// default: 2
     pub fn rows(mut self, rows: usize) -> Self {
-        self.rows = rows;
-        self.min_rows = rows;
-        self
-    }
-
-    /// Set the maximum number of rows for the multi-line Textarea.
-    ///
-    /// If max_rows is more than rows, then will enable auto-grow.
-    ///
-    /// This is only used when `multi_line` is set to true.
-    ///
-    /// default: None
-    pub fn max_rows(mut self, max_rows: usize) -> Self {
-        self.max_rows = Some(max_rows);
+        match self.mode {
+            InputMode::MultiLine { height, .. } => {
+                self.mode = InputMode::MultiLine { rows, height };
+            }
+            InputMode::AutoGrow { max_rows, .. } => {
+                self.mode = InputMode::AutoGrow {
+                    rows,
+                    min_rows: rows,
+                    max_rows,
+                };
+            }
+            _ => {}
+        }
         self
     }
 
@@ -992,23 +1106,6 @@ impl InputState {
         });
     }
 
-    fn check_to_auto_grow(&mut self, _: &mut Window, cx: &mut Context<Self>) {
-        if !self.is_multi_line() {
-            return;
-        }
-        let Some(max_rows) = self.max_rows else {
-            return;
-        };
-
-        let changed_rows = ((self.scroll_size.height - self.input_bounds.size.height)
-            / self.last_line_height) as isize;
-
-        self.rows = (self.rows as isize + changed_rows)
-            .clamp(self.min_rows as isize, max_rows as isize)
-            .max(0) as usize;
-        cx.notify();
-    }
-
     pub(super) fn clean(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.replace_text("", window, cx);
     }
@@ -1111,7 +1208,7 @@ impl InputState {
     pub(super) fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(clipboard) = cx.read_from_clipboard() {
             let mut new_text = clipboard.text().unwrap_or_default();
-            if !self.multi_line {
+            if !self.is_multi_line() {
                 new_text = new_text.replace('\n', "");
             }
 
@@ -1527,6 +1624,18 @@ impl InputState {
         }
         cx.notify();
     }
+
+    pub(super) fn set_input_bounds(&mut self, new_bounds: Bounds<Pixels>, cx: &mut Context<Self>) {
+        let wrap_width_changed = self.input_bounds.size.width != new_bounds.size.width;
+        self.input_bounds = new_bounds;
+
+        // Update text_wrapper wrap_width if changed.
+        if wrap_width_changed {
+            self.text_wrapper
+                .set_wrap_width(Some(new_bounds.size.width), cx);
+            self.mode.update_auto_grow(&self.text_wrapper);
+        }
+    }
 }
 
 impl EntityInputHandler for InputState {
@@ -1568,6 +1677,10 @@ impl EntityInputHandler for InputState {
         self.marked_range = None;
     }
 
+    /// Replace text in range.
+    ///
+    /// - If the new text is invalid, it will not be replaced.
+    /// - If `range_utf16` is not provided, the current selected range will be used.
     fn replace_text_in_range(
         &mut self,
         range_utf16: Option<Range<usize>>,
@@ -1598,11 +1711,12 @@ impl EntityInputHandler for InputState {
 
         self.push_history(&range, &new_text, window, cx);
         self.text = mask_text;
+        self.text_wrapper.update(self.text.clone(), cx);
         self.selected_range = new_pos..new_pos;
         self.marked_range.take();
         self.update_preferred_x_offset(cx);
         self.update_scroll_offset(None, cx);
-        self.check_to_auto_grow(window, cx);
+        self.mode.update_auto_grow(&self.text_wrapper);
         cx.emit(InputEvent::Change(self.unmask_value()));
         cx.notify();
     }
