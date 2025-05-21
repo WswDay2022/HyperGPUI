@@ -1517,14 +1517,13 @@ impl InputState {
         let mut index = 0;
         let mut y_offset = px(0.);
 
-        for line in lines.iter() {
+        for (_, line) in lines.iter().enumerate() {
             let line_origin = self.line_origin_with_y_offset(&mut y_offset, &line, line_height);
             let pos = inner_position - line_origin;
-            let closest_index = line.unwrapped_layout.closest_index_for_x(pos.x);
 
             // Return offset by use closest_index_for_x if is single line mode.
             if self.is_single_line() {
-                return closest_index;
+                return line.unwrapped_layout.closest_index_for_x(pos.x);
             }
 
             let index_result = line.closest_index_for_position(pos, line_height);
@@ -1536,13 +1535,14 @@ impl InputState {
                 // The fallback index is saved in Err from `index_for_position` method.
                 index += index_result.unwrap_err();
                 break;
-            } else if line.len() == 0 {
-                // empty line
+            } else if line.text.trim_end_matches(|c| c == '\r').len() == 0 {
+                // empty line on Windows is `\r`, other is ''
                 let line_bounds = Bounds {
                     origin: line_origin,
                     size: gpui::size(bounds.size.width, line_height),
                 };
                 let pos = inner_position;
+                index += line.len();
                 if line_bounds.contains(&pos) {
                     break;
                 }
@@ -1550,7 +1550,7 @@ impl InputState {
                 index += line.len();
             }
 
-            // add 1 for \n
+            // +1 for revert `lines` split `\n`
             index += 1;
         }
 
