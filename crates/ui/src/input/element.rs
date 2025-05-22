@@ -1,16 +1,13 @@
-use std::ops::Range;
-
 use gpui::{
-    fill, hash, point, px, relative, size, App, Bounds, Corners, Element, ElementId,
-    ElementInputHandler, Entity, GlobalElementId, HighlightStyle, IntoElement, LayoutId,
-    MouseButton, MouseMoveEvent, PaintQuad, Path, Pixels, Point, SharedString, Style, TextAlign,
-    TextRun, UnderlineStyle, Window, WrappedLine,
+    fill, point, px, relative, size, App, Bounds, Corners, Element, ElementId, ElementInputHandler,
+    Entity, GlobalElementId, IntoElement, LayoutId, MouseButton, MouseMoveEvent, PaintQuad, Path,
+    Pixels, Point, SharedString, Style, TextAlign, TextRun, UnderlineStyle, Window, WrappedLine,
 };
 use smallvec::SmallVec;
 
 use crate::{ActiveTheme as _, Root};
 
-use super::{mode::InputMode, InputState};
+use super::{code_highlighter::LineHighlightStyle, mode::InputMode, InputState};
 
 const RIGHT_MARGIN: Pixels = px(5.);
 const BOTTOM_MARGIN_ROWS: usize = 1;
@@ -310,35 +307,14 @@ impl TextElement {
         builder.build().ok()
     }
 
-    fn highlight_text(&self, cx: &mut App) -> Option<Vec<(Range<usize>, HighlightStyle)>> {
-        let input = self.input.read(cx);
-        let text = input.text.as_ref();
-
-        let cache_key = hash(&text);
-
-        match &input.mode {
-            InputMode::CodeEditor {
-                highlighter, cache, ..
-            } => {
-                if cache.0 == cache_key {
-                    return Some(cache.1.clone());
-                }
-
-                if let Some(highlighter) = highlighter {
-                    let styles = highlighter.highlight(&text);
-                    self.input.update(cx, |input, _cx| {
-                        input
-                            .mode
-                            .set_code_editor_cache((cache_key, styles.clone()));
-                    });
-
-                    Some(styles)
-                } else {
-                    None
-                }
+    fn highlight_lines(&mut self, cx: &mut App) -> Option<Vec<LineHighlightStyle>> {
+        self.input.update(cx, |state, cx| match &mut state.mode {
+            InputMode::CodeEditor { highlighter, .. } => {
+                highlighter.update(state.text.clone(), false, cx);
+                Some(highlighter.lines.clone())
             }
             _ => None,
-        }
+        })
     }
 }
 
@@ -432,17 +408,18 @@ impl Element for TextElement {
         window: &mut Window,
         cx: &mut App,
     ) -> Self::PrepaintState {
-        let highlights = self.highlight_text(cx);
+        let highlight_lines = self.highlight_lines(cx);
         let multi_line = self.input.read(cx).is_multi_line();
         let line_height = window.line_height();
         let input = self.input.read(cx);
         let text = input.text.clone();
+        let is_empty = text.is_empty();
         let placeholder = self.placeholder.clone();
         let style = window.text_style();
         let font_size = style.font_size.to_pixels(window.rem_size());
         let mut bounds = bounds;
 
-        let (display_text, text_color) = if text.is_empty() {
+        let (display_text, text_color) = if is_empty {
             (placeholder, cx.theme().muted_foreground)
         } else if input.masked {
             (
@@ -531,22 +508,18 @@ impl Element for TextElement {
             .into_iter()
             .filter(|run| run.len > 0)
             .collect()
-        } else {
-            if let Some(highlights) = highlights {
+        } else if !is_empty {
+            if let Some(highlight_lines) = highlight_lines {
                 let mut runs = vec![];
-                for (range, style) in highlights {
-                    let run = text_style
-                        .clone()
-                        .highlight(style)
-                        .to_run(range.end - range.start);
-                    if run.len > 0 {
-                        runs.push(run);
-                    }
+                for style in highlight_lines {
+                    runs.extend(style.to_run(&text_style));
                 }
-                runs
+                runs.into_iter().filter(|run| run.len > 0).collect()
             } else {
                 vec![run]
             }
+        } else {
+            vec![run]
         };
 
         let wrap_width = if multi_line {
