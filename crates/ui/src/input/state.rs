@@ -225,6 +225,7 @@ pub struct InputState {
     pub(super) selection_reversed: bool,
     /// The index of the current line, zero-based.
     pub(super) current_line_index: Option<usize>,
+    /// The marked range is the temporary insert text on IME typing.
     pub(super) marked_range: Option<Range<usize>>,
     pub(super) last_layout: Option<SmallVec<[WrappedLine; 1]>>,
     pub(super) last_cursor_offset: Option<usize>,
@@ -1302,6 +1303,9 @@ impl InputState {
     }
 
     pub(super) fn escape(&mut self, _: &Escape, window: &mut Window, cx: &mut Context<Self>) {
+        if self.marked_range.is_some() {
+            self.unmark_text(window, cx);
+        }
         if self.selected_range.len() > 0 {
             return self.unselect(window, cx);
         }
@@ -1319,6 +1323,14 @@ impl InputState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // If there have IME marked range and is empty (Means pressed Esc to abort IME typing)
+        // Clear the marked range.
+        if let Some(marked_range) = &self.marked_range {
+            if marked_range.len() == 0 {
+                self.marked_range = None;
+            }
+        }
+
         self.selecting = true;
         let offset = self.index_for_mouse_position(event.position, window, cx);
         // Double click to select word
@@ -1468,6 +1480,10 @@ impl InputState {
     }
 
     pub(super) fn cursor_offset(&self) -> usize {
+        if let Some(marked_range) = &self.marked_range {
+            return marked_range.end;
+        }
+
         if self.selection_reversed {
             self.selected_range.start
         } else {
@@ -1938,6 +1954,7 @@ impl EntityInputHandler for InputState {
         cx.notify();
     }
 
+    /// Mark text is the IME temporary insert on typing.
     fn replace_and_mark_text_in_range(
         &mut self,
         range_utf16: Option<Range<usize>>,
@@ -1963,12 +1980,20 @@ impl EntityInputHandler for InputState {
 
         self.push_history(&range, new_text, window, cx);
         self.text = pending_text;
-        self.marked_range = Some(range.start..range.start + new_text.len());
-        self.selected_range = new_selected_range_utf16
-            .as_ref()
-            .map(|range_utf16| self.range_from_utf16(range_utf16))
-            .map(|new_range| new_range.start + range.start..new_range.end + range.end)
-            .unwrap_or_else(|| range.start + new_text.len()..range.start + new_text.len());
+        self.text_wrapper.update(self.text.clone(), false, cx);
+        if new_text.is_empty() {
+            // Cancel selection, when cancel IME input.
+            self.selected_range = range.start..range.start;
+            self.marked_range = None;
+        } else {
+            self.marked_range = Some(range.start..range.start + new_text.len());
+            self.selected_range = new_selected_range_utf16
+                .as_ref()
+                .map(|range_utf16| self.range_from_utf16(range_utf16))
+                .map(|new_range| new_range.start + range.start..new_range.end + range.end)
+                .unwrap_or_else(|| range.start + new_text.len()..range.start + new_text.len());
+        }
+        self.mode.update_auto_grow(&self.text_wrapper);
         cx.emit(InputEvent::Change(self.unmask_value()));
         cx.notify();
     }
@@ -1988,36 +2013,44 @@ impl EntityInputHandler for InputState {
 
         let mut start_origin = None;
         let mut end_origin = None;
+        let line_number_origin = point(self.line_number_width, px(0.));
         let mut y_offset = px(0.);
         let mut index_offset = 0;
 
         for line in lines.iter() {
-            if let Some(p) =
-                line.position_for_index(range.start.saturating_sub(index_offset), line_height)
-            {
-                start_origin = Some(p + point(px(0.), y_offset));
-            }
-            if let Some(p) =
-                line.position_for_index(range.end.saturating_sub(index_offset), line_height)
-            {
-                end_origin = Some(p + point(px(0.), y_offset));
-            }
-
-            y_offset += line.size(line_height).height;
             if start_origin.is_some() && end_origin.is_some() {
                 break;
             }
 
-            index_offset += line.len();
+            if start_origin.is_none() {
+                if let Some(p) =
+                    line.position_for_index(range.start.saturating_sub(index_offset), line_height)
+                {
+                    start_origin = Some(p + point(px(0.), y_offset));
+                }
+            }
+
+            if end_origin.is_none() {
+                if let Some(p) =
+                    line.position_for_index(range.end.saturating_sub(index_offset), line_height)
+                {
+                    end_origin = Some(p + point(px(0.), y_offset));
+                }
+            }
+
+            index_offset += line.len() + 1;
+            y_offset += line.size(line_height).height;
         }
 
         let start_origin = start_origin.unwrap_or_default();
-        let end_origin = end_origin.unwrap_or_default();
+        let mut end_origin = end_origin.unwrap_or_default();
+        // Ensure at same line.
+        end_origin.y = start_origin.y;
 
         Some(Bounds::from_corners(
-            bounds.origin + start_origin,
+            bounds.origin + line_number_origin + start_origin,
             // + line_height for show IME panel under the cursor line.
-            bounds.origin + point(end_origin.x, end_origin.y + line_height),
+            bounds.origin + line_number_origin + point(end_origin.x, end_origin.y + line_height),
         ))
     }
 
