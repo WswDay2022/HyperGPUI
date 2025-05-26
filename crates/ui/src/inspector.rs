@@ -11,7 +11,6 @@ use crate::{
     clipboard::Clipboard,
     description_list::DescriptionList,
     h_flex,
-    highlighter::HighlightTheme,
     input::{InputState, TextInput},
     link::Link,
     v_flex, ActiveTheme, IconName, Selectable, Sizable, TITLE_BAR_HEIGHT,
@@ -60,15 +59,9 @@ pub struct DivInspector {
 
 impl DivInspector {
     pub fn new(window: &mut Window, cx: &mut App) -> Self {
-        let theme = if cx.theme().is_dark() {
-            HighlightTheme::default_dark()
-        } else {
-            HighlightTheme::default_light()
-        };
-
         let input_state = cx.new(|cx| {
             InputState::new(window, cx)
-                .code_editor(Some("json"), theme)
+                .code_editor(Some("json"))
                 .line_number(false)
                 .disabled(true)
         });
@@ -134,7 +127,9 @@ impl Render for DivInspector {
                                 .w_full()
                                 .font_family("Monaco")
                                 .text_size(px(12.))
-                                .child(TextInput::new(&input_state).h_full()),
+                                .border_1()
+                                .border_color(cx.theme().border)
+                                .child(TextInput::new(&input_state).h_full().appearance(false)),
                         ),
                 )
             },
@@ -150,6 +145,7 @@ fn render_inspector(
     let inspector_element_id = inspector.active_element_id();
     let source_location =
         inspector_element_id.map(|id| SharedString::new(format!("{}", id.path.source_location)));
+    let element_global_id = inspector_element_id.map(|id| format!("{}", id.path.global_id));
 
     v_flex()
         .id("inspector")
@@ -202,6 +198,7 @@ fn render_inspector(
                 .flex_1()
                 .p_3()
                 .gap_3()
+                .text_sm()
                 .when_some(source_location, |this, source_location| {
                     this.child(
                         h_flex()
@@ -215,6 +212,7 @@ fn render_inspector(
                             .child(Clipboard::new("copy-source-location").value(source_location)),
                     )
                 })
+                .children(element_global_id)
                 .children(inspector.render_inspector_states(window, cx)),
         )
         .into_any_element()
