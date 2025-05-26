@@ -1304,10 +1304,12 @@ impl InputState {
                         cx,
                     );
                     removed_len += tab_indent.len();
-                }
 
-                // +1 for "\n"
-                offset += line.len().saturating_sub(tab_indent.len()) + 1;
+                    // +1 for "\n"
+                    offset += line.len().saturating_sub(tab_indent.len()) + 1;
+                } else {
+                    offset += line.len() + 1;
+                }
             }
 
             self.selected_range = start_offset..selected_range.end.saturating_sub(removed_len);
