@@ -1,8 +1,10 @@
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use gpui::{DefiniteLength, SharedString};
 
-use super::code_highlighter::CodeHighlighter;
+use crate::highlighter::SyntaxHighlighter;
+
 use super::text_wrapper::TextWrapper;
 
 #[derive(Debug, Copy, Clone)]
@@ -47,7 +49,7 @@ pub enum InputMode {
         height: Option<DefiniteLength>,
         /// Show line number
         line_number: bool,
-        highlighter: CodeHighlighter,
+        highlighter: Rc<RefCell<SyntaxHighlighter>>,
     },
     AutoGrow {
         rows: usize,
@@ -151,9 +153,10 @@ impl InputMode {
         }
     }
 
-    pub(super) fn highlighter(&self) -> Option<Rc<crate::highlighter::Highlighter<'static>>> {
+    #[allow(unused)]
+    pub(super) fn highlighter(&self) -> Option<&Rc<RefCell<SyntaxHighlighter>>> {
         match &self {
-            InputMode::CodeEditor { highlighter, .. } => Some(highlighter.highlighter.clone()),
+            InputMode::CodeEditor { highlighter, .. } => Some(highlighter),
             _ => None,
         }
     }

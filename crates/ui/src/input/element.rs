@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use gpui::{
     fill, point, px, relative, size, App, Bounds, Corners, Element, ElementId, ElementInputHandler,
     Entity, GlobalElementId, IntoElement, LayoutId, MouseButton, MouseMoveEvent, PaintQuad, Path,
@@ -5,7 +7,7 @@ use gpui::{
 };
 use smallvec::SmallVec;
 
-use crate::{ActiveTheme as _, Root};
+use crate::{highlighter::LanguageRegistry, ActiveTheme as _, Root};
 
 use super::{code_highlighter::LineHighlightStyle, mode::InputMode, InputState};
 
@@ -321,10 +323,24 @@ impl TextElement {
     }
 
     fn highlight_lines(&mut self, cx: &mut App) -> Option<Vec<LineHighlightStyle>> {
-        self.input.update(cx, |state, cx| match &mut state.mode {
+        let theme = LanguageRegistry::global(cx)
+            .theme(cx.theme().is_dark())
+            .clone();
+        self.input.update(cx, |state, _| match &mut state.mode {
             InputMode::CodeEditor { highlighter, .. } => {
-                highlighter.update(state.text.clone(), false, cx);
-                Some(highlighter.lines.clone())
+                let mut offset = 0;
+                let mut lines = vec![];
+                for line in state.text.split('\n') {
+                    let range = offset..offset + line.len();
+                    let styles = highlighter.borrow().styles(&range, &theme);
+
+                    lines.push(LineHighlightStyle {
+                        offset,
+                        styles: Rc::new(styles),
+                    });
+                    offset += line.len() + 1;
+                }
+                Some(lines)
             }
             _ => None,
         })
@@ -704,13 +720,11 @@ impl Element for TextElement {
 
                 // Paint the current line background
                 if prepaint.current_line_index == ix {
-                    if let Some(bg_color) = self
-                        .input
-                        .read(cx)
-                        .mode
-                        .highlighter()
-                        .and_then(|h| h.theme(cx.theme().is_dark()).settings().line_highlight)
-                        .map(crate::highlighter::color_to_hsla)
+                    let is_dark = cx.theme().is_dark();
+                    if let Some(bg_color) = LanguageRegistry::global(cx)
+                        .theme(is_dark)
+                        .style
+                        .active_line
                     {
                         window.paint_quad(fill(
                             Bounds::new(p, size(bounds.size.width, line_height)),

@@ -3,7 +3,7 @@ use gpui_component::{
     checkbox::Checkbox,
     dropdown::{Dropdown, DropdownEvent, DropdownState},
     h_flex,
-    highlighter::{HighlightTheme, Highlighter},
+    highlighter::Language,
     input::{InputEvent, InputState, TabSize, TextInput},
     v_flex,
 };
@@ -12,31 +12,39 @@ use story::Assets;
 pub struct Example {
     input_state: Entity<InputState>,
     language_state: Entity<DropdownState<Vec<SharedString>>>,
-    language: SharedString,
+    language: Language,
     line_number: bool,
+    need_update: bool,
     _subscribes: Vec<Subscription>,
 }
 
-const EXAMPLE: &str = include_str!("./code-editor.rs");
-const LANGUAGES: [&str; 7] = ["rust", "javascript", "html", "css", "go", "python", "ruby"];
+const LANGUAGES: [(Language, &'static str); 7] = [
+    (Language::Rust, include_str!("./fixtures/test.rs")),
+    (Language::JavaScript, include_str!("./fixtures/test.js")),
+    (Language::Go, include_str!("./fixtures/test.go")),
+    (Language::Python, include_str!("./fixtures/test.py")),
+    (Language::Ruby, include_str!("./fixtures/test.rb")),
+    (Language::Zig, include_str!("./fixtures/test.zig")),
+    (Language::C, include_str!("./fixtures/test.c")),
+];
 
 impl Example {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let default_language: SharedString = LANGUAGES[0].into();
+        let default_language = LANGUAGES[0];
         let input_state = cx.new(|cx| {
             InputState::new(window, cx)
-                .code_editor(Some(&default_language))
+                .code_editor(default_language.0.name())
                 .line_number(true)
                 .tab_size(TabSize {
                     tab_size: 4,
                     hard_tabs: false,
                 })
-                .default_value(EXAMPLE)
+                .default_value(default_language.1)
                 .placeholder("Enter your code here...")
         });
         let language_state = cx.new(|cx| {
             DropdownState::new(
-                LANGUAGES.iter().map(|s| s.to_string().into()).collect(),
+                LANGUAGES.iter().map(|s| s.0.name().into()).collect(),
                 Some(0),
                 window,
                 cx,
@@ -51,7 +59,10 @@ impl Example {
                 &language_state,
                 |this, state, _: &DropdownEvent<Vec<SharedString>>, cx| {
                     if let Some(val) = state.read(cx).selected_value() {
-                        this.update_highlighter(Some(val.clone()), cx);
+                        if let Some(language) = Language::from_str(&val) {
+                            this.language = language;
+                            this.need_update = true;
+                        }
                         cx.notify();
                     }
                 },
@@ -61,8 +72,9 @@ impl Example {
         Self {
             input_state,
             language_state,
-            language: default_language,
+            language: default_language.0,
             line_number: true,
+            need_update: false,
             _subscribes,
         }
     }
@@ -71,30 +83,25 @@ impl Example {
         cx.new(|cx| Self::new(window, cx))
     }
 
-    fn update_highlighter(&mut self, new_language: Option<SharedString>, cx: &mut Context<Self>) {
-        let is_language_changed = new_language.is_some();
-        if new_language.is_some() {
-            self.language = new_language.unwrap();
+    fn update_highlighter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.need_update {
+            return;
         }
-        let language = self.language.as_ref();
-        if is_language_changed {
-            self.input_state.update(cx, |state, cx| {
-                state.set_highlighter(
-                    Highlighter::new(
-                        Some(language),
-                        &HighlightTheme::default_light(),
-                        &HighlightTheme::default_dark(),
-                    ),
-                    cx,
-                );
-            });
-        }
+
+        let language = self.language;
+        let code = LANGUAGES.iter().find(|s| s.0 == language).unwrap().1;
+        self.input_state.update(cx, |state, cx| {
+            state.set_value(code, window, cx);
+            state.set_highlighter(language, cx);
+        });
+
+        self.need_update = false;
     }
 }
 
 impl Render for Example {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.update_highlighter(None, cx);
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.update_highlighter(window, cx);
 
         v_flex()
             .size_full()

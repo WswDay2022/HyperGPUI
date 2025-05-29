@@ -94,6 +94,7 @@ pub fn init(cx: &mut App) {
     theme::init(cx);
     #[cfg(any(feature = "inspector", debug_assertions))]
     inspector::init(cx);
+    highlighter::init(cx);
     date_picker::init(cx);
     dock::init(cx);
     drawer::init(cx);

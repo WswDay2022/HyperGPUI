@@ -61,7 +61,7 @@ impl DivInspector {
     pub fn new(window: &mut Window, cx: &mut App) -> Self {
         let input_state = cx.new(|cx| {
             InputState::new(window, cx)
-                .code_editor(Some("json"))
+                .code_editor("json")
                 .line_number(false)
                 .disabled(true)
         });
