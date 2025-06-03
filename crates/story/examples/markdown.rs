@@ -22,7 +22,7 @@ impl Example {
         let input_state = cx.new(|cx| {
             InputState::new(window, cx)
                 .code_editor(Language::Markdown)
-                .line_number(false)
+                .line_number(true)
                 .tab_size(TabSize {
                     tab_size: 2,
                     ..Default::default()
@@ -63,6 +63,8 @@ impl Render for Example {
                     div()
                         .id("source")
                         .size_full()
+                        .font_family("Monaco")
+                        .text_size(px(12.))
                         .child(TextInput::new(&self.input_state).h_full().appearance(false)),
                 ),
             )

@@ -2,11 +2,10 @@
 //!
 //! Based on the `Input` example from the `gpui` crate.
 //! https://github.com/zed-industries/zed/blob/main/crates/gpui/examples/input.rs
-
 use serde::Deserialize;
 use smallvec::SmallVec;
 use std::cell::{Cell, RefCell};
-use std::ops::Range;
+use std::ops::{Deref, Range};
 use std::rc::Rc;
 use unicode_segmentation::*;
 
@@ -201,6 +200,19 @@ pub fn init(cx: &mut App) {
     number_input::init(cx);
 }
 
+#[derive(Clone)]
+pub(super) struct LastLayout {
+    pub(super) lines: Rc<SmallVec<[WrappedLine; 1]>>,
+}
+
+impl Deref for LastLayout {
+    type Target = Rc<SmallVec<[WrappedLine; 1]>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.lines
+    }
+}
+
 /// InputState to keep editing state of the [`super::TextInput`].
 pub struct InputState {
     pub(super) focus_handle: FocusHandle,
@@ -218,11 +230,10 @@ pub struct InputState {
     /// Range for save the selected word, use to keep word range when drag move.
     pub(super) selected_word_range: Option<Range<usize>>,
     pub(super) selection_reversed: bool,
-    /// The index of the current line, zero-based.
-    pub(super) current_line_index: Option<usize>,
     /// The marked range is the temporary insert text on IME typing.
     pub(super) marked_range: Option<Range<usize>>,
-    pub(super) last_layout: Option<SmallVec<[WrappedLine; 1]>>,
+    /// The last layout lines.
+    pub(super) last_layout: Option<LastLayout>,
     pub(super) last_cursor_offset: Option<usize>,
     /// The line_height of text layout, this will change will InputElement painted.
     pub(super) last_line_height: Pixels,
@@ -296,7 +307,6 @@ impl InputState {
             selected_range: 0..0,
             selected_word_range: None,
             selection_reversed: false,
-            current_line_index: None,
             marked_range: None,
             input_bounds: Bounds::default(),
             selecting: false,
@@ -1970,12 +1980,12 @@ impl EntityInputHandler for InputState {
         let new_pos = (range.start + new_text_len).min(mask_text.len());
 
         self.push_history(&range, &new_text, window, cx);
+        self.text = mask_text.clone();
         if let Some(highlighter) = self.mode.highlighter() {
             highlighter
                 .borrow_mut()
-                .update(&range, &mask_text, &new_text, cx);
+                .update(&range, self.text.clone(), &new_text, cx);
         }
-        self.text = mask_text;
         self.text_wrapper.update(self.text.clone(), false, cx);
         self.selected_range = new_pos..new_pos;
         self.marked_range.take();
@@ -2013,12 +2023,12 @@ impl EntityInputHandler for InputState {
         }
 
         self.push_history(&range, new_text, window, cx);
+        self.text = pending_text;
         if let Some(highlighter) = self.mode.highlighter() {
             highlighter
                 .borrow_mut()
-                .update(&range, &pending_text, &new_text, cx);
+                .update(&range, self.text.clone(), &new_text, cx);
         }
-        self.text = pending_text;
         self.text_wrapper.update(self.text.clone(), false, cx);
         if new_text.is_empty() {
             // Cancel selection, when cancel IME input.
@@ -2123,7 +2133,9 @@ impl Render for InputState {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.text_wrapper.update(self.text.clone(), false, cx);
         if let Some(highlighter) = self.mode.highlighter() {
-            highlighter.borrow_mut().update(&(0..0), &self.text, "", cx);
+            highlighter
+                .borrow_mut()
+                .update(&(0..0), self.text.clone(), "", cx);
         }
 
         div()

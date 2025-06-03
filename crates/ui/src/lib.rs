@@ -58,7 +58,7 @@ pub mod tooltip;
 #[cfg(feature = "webview")]
 pub mod webview;
 
-use gpui::App;
+use gpui::{App, SharedString};
 // re-export
 #[cfg(feature = "webview")]
 pub use wry;
@@ -119,5 +119,45 @@ pub fn set_locale(locale: &str) {
 
 #[inline]
 pub(crate) fn measure_enable() -> bool {
-    std::env::var("ZED_MEASUREMENTS").is_ok()
+    std::env::var("ZED_MEASUREMENTS").is_ok() || std::env::var("GPUI_MEASUREMENTS").is_ok()
+}
+
+/// Measures the execution time of a function and logs it if `if_` is true.
+///
+/// And need env `GPUI_MEASUREMENTS=1`
+#[inline]
+#[track_caller]
+pub fn measure_if(name: impl Into<SharedString>, if_: bool, f: impl FnOnce()) {
+    if if_ && measure_enable() {
+        let measure = Measure::new(name);
+        f();
+        measure.end();
+    } else {
+        f();
+    }
+}
+
+/// Measures the execution time.
+#[inline]
+pub fn measure(name: impl Into<SharedString>, f: impl FnOnce()) {
+    measure_if(name, true, f);
+}
+
+pub struct Measure {
+    name: SharedString,
+    start: std::time::Instant,
+}
+
+impl Measure {
+    pub fn new(name: impl Into<SharedString>) -> Self {
+        Self {
+            name: name.into(),
+            start: std::time::Instant::now(),
+        }
+    }
+
+    pub fn end(self) {
+        let duration = self.start.elapsed();
+        tracing::trace!("{} in {:?}", self.name, duration);
+    }
 }
