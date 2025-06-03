@@ -331,6 +331,10 @@ impl TextElement {
         line_height: Pixels,
         bounds: &Bounds<Pixels>,
     ) -> Range<usize> {
+        if state.is_single_line() {
+            return 0..1;
+        }
+
         let scroll_top = -state.scroll_handle.offset().y;
         let mut visible_range = 0..state.text_wrapper.lines.len();
         let mut line_top = px(0.);
@@ -540,8 +544,11 @@ impl Element for TextElement {
                 None,
             )
             .unwrap();
-        let line_number_width =
-            empty_line_number.last().unwrap().width() + LINE_NUMBER_MARGIN_RIGHT;
+        let line_number_width = if input.mode.line_number() {
+            empty_line_number.last().unwrap().width() + LINE_NUMBER_MARGIN_RIGHT
+        } else {
+            px(0.)
+        };
 
         let run = TextRun {
             len: display_text.len(),
