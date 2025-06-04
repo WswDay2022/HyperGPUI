@@ -11,11 +11,11 @@ use gpui_component::{
 
 use crate::fixtures::{CHART_DATA, CHART_DATA_2};
 
-pub struct PlotStory {
+pub struct ChartStory {
     focus_handle: FocusHandle,
 }
 
-impl PlotStory {
+impl ChartStory {
     fn new(_: &mut Window, cx: &mut Context<Self>) -> Self {
         Self {
             focus_handle: cx.focus_handle(),
@@ -27,7 +27,7 @@ impl PlotStory {
     }
 }
 
-impl super::Story for PlotStory {
+impl super::Story for ChartStory {
     fn title() -> &'static str {
         "Chart"
     }
@@ -45,7 +45,7 @@ impl super::Story for PlotStory {
     }
 }
 
-impl Focusable for PlotStory {
+impl Focusable for ChartStory {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus_handle.clone()
     }
@@ -55,7 +55,7 @@ fn chart_container(
     title: &str,
     chart: impl IntoElement,
     center: bool,
-    cx: &mut Context<PlotStory>,
+    cx: &mut Context<ChartStory>,
 ) -> impl IntoElement {
     v_flex()
         .flex_1()
@@ -94,7 +94,7 @@ fn chart_container(
         )
 }
 
-impl Render for PlotStory {
+impl Render for ChartStory {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .size_full()

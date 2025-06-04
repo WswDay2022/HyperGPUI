@@ -56,7 +56,7 @@ pub use alert_story::AlertStory;
 pub use badge_story::BadgeStory;
 pub use button_story::ButtonStory;
 pub use calendar_story::CalendarStory;
-pub use chart_story::PlotStory;
+pub use chart_story::ChartStory;
 pub use checkbox_story::CheckboxStory;
 pub use clipboard_story::ClipboardStory;
 pub use color_picker_story::ColorPickerStory;
