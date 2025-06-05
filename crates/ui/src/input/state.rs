@@ -31,6 +31,7 @@ use super::{
     text_wrapper::TextWrapper,
 };
 use crate::highlighter::SyntaxHighlighter;
+use crate::input::marker::Marker;
 use crate::{history::History, scroll::ScrollbarState, Root};
 
 #[derive(Clone, PartialEq, Eq, Deserialize)]
@@ -381,6 +382,7 @@ impl InputState {
             highlighter: Rc::new(RefCell::new(SyntaxHighlighter::new(&language))),
             line_number: true,
             height: Some(relative(1.)),
+            markers: vec![],
         };
         self
     }
@@ -449,6 +451,21 @@ impl InputState {
             _ => {}
         }
         cx.notify();
+    }
+
+    /// Set markers, only for [`InputMode::CodeEditor`] mode.
+    ///
+    /// For example to set the diagnostic markers in the code editor.
+    pub fn set_markers(
+        &mut self,
+        new_markers: Vec<Marker>,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let InputMode::CodeEditor { markers, .. } = &mut self.mode {
+            *markers = new_markers;
+            cx.notify();
+        }
     }
 
     /// Set placeholder
@@ -1986,6 +2003,7 @@ impl EntityInputHandler for InputState {
                 .borrow_mut()
                 .update(&range, self.text.clone(), &new_text, cx);
         }
+        self.mode.clear_markers();
         self.text_wrapper.update(self.text.clone(), false, cx);
         self.selected_range = new_pos..new_pos;
         self.marked_range.take();
@@ -2029,6 +2047,7 @@ impl EntityInputHandler for InputState {
                 .borrow_mut()
                 .update(&range, self.text.clone(), &new_text, cx);
         }
+        self.mode.clear_markers();
         self.text_wrapper.update(self.text.clone(), false, cx);
         if new_text.is_empty() {
             // Cancel selection, when cancel IME input.

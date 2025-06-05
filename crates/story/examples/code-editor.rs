@@ -4,7 +4,7 @@ use gpui_component::{
     dropdown::{Dropdown, DropdownEvent, DropdownState},
     h_flex,
     highlighter::Language,
-    input::{InputEvent, InputState, TabSize, TextInput},
+    input::{InputEvent, InputState, Marker, TabSize, TextInput},
     v_flex,
 };
 use story::Assets;
@@ -84,6 +84,25 @@ impl Example {
         cx.new(|cx| Self::new(window, cx))
     }
 
+    fn set_markers(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.language.name() != "rust" {
+            return;
+        }
+
+        self.input_state.update(cx, |state, cx| {
+            state.set_markers(
+                vec![
+                    Marker::new("warning", (2, 1), (2, 31), "Import but not used."),
+                    Marker::new("error", (16, 10), (16, 46), "Syntax error."),
+                    Marker::new("info", (25, 10), (25, 20), "This is a info message."),
+                    Marker::new("hint", (36, 9), (40, 10), "This is a hint message."),
+                ],
+                window,
+                cx,
+            );
+        });
+    }
+
     fn update_highlighter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.need_update {
             return;
@@ -103,6 +122,7 @@ impl Example {
 impl Render for Example {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.update_highlighter(window, cx);
+        self.set_markers(window, cx);
 
         v_flex()
             .size_full()

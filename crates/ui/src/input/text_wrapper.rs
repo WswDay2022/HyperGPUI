@@ -71,7 +71,7 @@ impl TextWrapper {
             .line_wrapper(self.font.clone(), self.font_size);
 
         let mut prev_line_ix = 0;
-        for line in text.lines() {
+        for line in text.split('\n') {
             let mut line_wraps = vec![];
             let mut prev_boundary_ix = 0;
 
@@ -83,7 +83,7 @@ impl TextWrapper {
 
             lines.push(LineWrap {
                 wrap_lines: line_wraps.len(),
-                range: prev_line_ix..line.len(),
+                range: prev_line_ix..prev_line_ix + line.len(),
             });
 
             wrapped_lines.extend(line_wraps);
@@ -92,7 +92,7 @@ impl TextWrapper {
                 wrapped_lines.push(prev_line_ix + prev_boundary_ix..prev_line_ix + line.len());
             }
 
-            prev_line_ix += line.len();
+            prev_line_ix += line.len() + 1;
         }
 
         // Add last empty line.

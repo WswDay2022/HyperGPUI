@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use gpui::{DefiniteLength, SharedString};
 
-use crate::highlighter::SyntaxHighlighter;
+use crate::{highlighter::SyntaxHighlighter, input::marker::Marker};
 
 use super::text_wrapper::TextWrapper;
 
@@ -50,6 +50,7 @@ pub enum InputMode {
         /// Show line number
         line_number: bool,
         highlighter: Rc<RefCell<SyntaxHighlighter>>,
+        markers: Vec<Marker>,
     },
     AutoGrow {
         rows: usize,
@@ -158,6 +159,21 @@ impl InputMode {
         match &self {
             InputMode::CodeEditor { highlighter, .. } => Some(highlighter),
             _ => None,
+        }
+    }
+
+    #[allow(unused)]
+    pub(super) fn markers(&self) -> Option<&Vec<Marker>> {
+        match &self {
+            InputMode::CodeEditor { markers, .. } => Some(markers),
+            _ => None,
+        }
+    }
+
+    pub(super) fn clear_markers(&mut self) {
+        match self {
+            InputMode::CodeEditor { markers, .. } => markers.clear(),
+            _ => {}
         }
     }
 }
