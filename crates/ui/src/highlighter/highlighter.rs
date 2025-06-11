@@ -1,17 +1,14 @@
+use super::HighlightTheme;
+use crate::highlighter::LanguageRegistry;
 use gpui::{App, HighlightStyle, SharedString};
+use indexset::BTreeMap;
 use std::{
-    collections::{BTreeMap, HashMap},
-    ops::Range,
-    sync::Arc,
+    collections::HashMap,
+    ops::{Bound, Range},
 };
 use tree_sitter::{
     InputEdit, Node, Parser, Point, Query, QueryCursor, QueryMatch, StreamingIterator, Tree,
 };
-use tree_sitter_highlight::{HighlightConfiguration, Highlighter};
-
-use crate::highlighter::LanguageRegistry;
-
-use super::{HighlightTheme, Language};
 
 /// A syntax highlighter that supports incremental parsing, multiline text,
 /// and caching of highlight results.
@@ -23,8 +20,6 @@ pub struct SyntaxHighlighter {
     parser: Parser,
     old_tree: Option<Tree>,
     text: SharedString,
-    highlighter: Highlighter,
-    config: Option<Arc<HighlightConfiguration>>,
 
     locals_pattern_index: usize,
     highlights_pattern_index: usize,
@@ -43,7 +38,7 @@ pub struct SyntaxHighlighter {
     ///
     /// - The `key` is the `start` of the range.
     /// -The `value` is a tuple of the range (in the entire text) and the highlight name.
-    cache: BTreeMap<usize, (Range<usize>, String)>,
+    cache: BTreeMap<usize, (Range<usize>, SharedString)>,
 }
 
 impl SyntaxHighlighter {
@@ -60,10 +55,7 @@ impl SyntaxHighlighter {
     /// https://github.com/tree-sitter/tree-sitter/blob/v0.25.5/highlight/src/lib.rs#L336
     fn build_combined_injections_query(lang: &str, cx: &App) -> Option<Self> {
         let registry = LanguageRegistry::global(cx);
-        let config = registry.language(&lang);
-        let Some(config) = config else {
-            return None;
-        };
+        let config = registry.language(&lang)?;
 
         let mut parser = Parser::new();
         _ = parser.set_language(&config.language);
@@ -78,9 +70,12 @@ impl SyntaxHighlighter {
 
         // Construct a single query by concatenating the three query strings, but record the
         // range of pattern indices that belong to each individual string.
-        let Some(query) = Query::new(&config.language, &query_source).ok() else {
-            return None;
-        };
+        let query = match Query::new(&config.language, &query_source) {
+            Ok(query) => Some(query),
+            Err(err) => {
+                panic!("failed create Query for language {}, err: {}", lang, err);
+            }
+        }?;
 
         let mut locals_pattern_index = 0;
         let mut highlights_pattern_index = 0;
@@ -176,8 +171,6 @@ impl SyntaxHighlighter {
             parser,
             old_tree: None,
             text: SharedString::new(""),
-            highlighter: Highlighter::new(),
-            config: None,
             cache: BTreeMap::new(),
             locals_pattern_index,
             highlights_pattern_index,
@@ -189,35 +182,6 @@ impl SyntaxHighlighter {
             local_def_value_capture_index,
             local_ref_capture_index,
         })
-    }
-
-    pub fn set_language(&mut self, language: impl Into<SharedString>, cx: &App) {
-        let language = language.into();
-
-        if self.language == language {
-            return;
-        }
-
-        // FIXME: use build_combined_injections_query to build the query.
-        self.query = None;
-        if let Some(language) = Language::from_str(&language) {
-            self.query = Some(language.query());
-            _ = self.parser.set_language(&language.config().language);
-        } else {
-            if let Some(config) = LanguageRegistry::global(cx).language(&language) {
-                _ = self.parser.set_language(&config.language);
-                if let Ok(query) = tree_sitter::Query::new(&config.language, &config.highlights) {
-                    self.query = Some(query);
-                }
-            }
-        }
-
-        self.language = language;
-        self.old_tree = None;
-        self.text = SharedString::new("");
-        self.highlighter = Highlighter::new();
-        self.config = None;
-        self.cache.clear();
     }
 
     pub fn is_empty(&self) -> bool {
@@ -283,7 +247,7 @@ impl SyntaxHighlighter {
         &mut self,
         changed_ranges: Option<impl ExactSizeIterator<Item = tree_sitter::Range>>,
         changed_len: isize,
-        _: &mut App,
+        cx: &mut App,
     ) {
         let Some(tree) = &self.old_tree else {
             return;
@@ -298,7 +262,6 @@ impl SyntaxHighlighter {
         let mut root_node = tree.root_node();
 
         // Incremental parsing to only update changed ranges.
-        let mut last_end = 0;
         if let Some(changed_ranges) = changed_ranges {
             let mut total_range = 0..0;
             for change_range in changed_ranges {
@@ -338,7 +301,7 @@ impl SyntaxHighlighter {
             });
 
             // Apply changed_len to reorder the cache to move the range offset
-            let mut old_cache: BTreeMap<usize, (Range<usize>, String)> = BTreeMap::new();
+            let mut old_cache: BTreeMap<usize, (Range<usize>, SharedString)> = BTreeMap::new();
             std::mem::swap(&mut self.cache, &mut old_cache);
 
             // NOTE: 10K lines, about 35ms
@@ -362,24 +325,19 @@ impl SyntaxHighlighter {
 
         let mut matches = query_cursor.matches(&query, root_node, source);
 
-        // TODO: Merge duplicate ranges.
-
         while let Some(m) = matches.next() {
             // Ref:
             // https://github.com/tree-sitter/tree-sitter/blob/460118b4c82318b083b4d527c9c750426730f9c0/highlight/src/lib.rs#L556
             let (language_name, content_node, _) = self.injection_for_match(None, query, m, source);
             if let Some(language_name) = language_name {
                 if let Some(content_node) = content_node {
-                    if content_node.start_byte() < last_end {
-                        continue;
-                    }
-
-                    let styles = self.handle_injection(&language_name, content_node, source);
+                    let styles = self.handle_injection(&language_name, content_node, source, cx);
                     for (node_range, highlight_name) in styles {
-                        self.cache
-                            .insert(node_range.start, (node_range, highlight_name.to_string()));
+                        self.cache.insert(
+                            node_range.start,
+                            (node_range, highlight_name.to_string().into()),
+                        );
                     }
-                    last_end = content_node.end_byte();
                 }
 
                 continue;
@@ -387,23 +345,36 @@ impl SyntaxHighlighter {
 
             for cap in m.captures {
                 let node = cap.node;
-                if node.start_byte() < last_end {
+
+                let Some(highlight_name) = query.capture_names().get(cap.index as usize) else {
                     continue;
-                }
+                };
 
-                let highlight_name = query.capture_names()[cap.index as usize];
                 let node_range: Range<usize> = node.start_byte()..node.end_byte();
+                let highlight_name = SharedString::from(highlight_name.to_string());
 
-                self.cache.insert(
-                    node_range.start,
-                    (node_range.clone(), highlight_name.to_string()),
-                );
-                last_end = node_range.end;
+                // Merge near range and same highlight name
+                let last_item = self.cache.last_key_value().map(|kv| kv.1);
+                let last_range = last_item.map(|(range, _)| range).unwrap_or(&(0..0));
+                let last_highlight_name = last_item.map(|(_, name)| name.clone());
+
+                if last_range.end <= node_range.start
+                    && last_highlight_name.as_ref() == Some(&highlight_name)
+                {
+                    self.cache.insert(
+                        last_range.start,
+                        (last_range.start..node_range.end, highlight_name.clone()),
+                    );
+                } else {
+                    self.cache
+                        .insert(node_range.start, (node_range, highlight_name.clone()));
+                }
             }
         }
 
+        // DO NOT REMOVE THIS PRINT, it's useful for debugging
         // for item in self.cache.iter() {
-        //     println!("---------- item: {:?}", item);
+        //     println!("item: {:?}", item);
         // }
     }
 
@@ -413,6 +384,7 @@ impl SyntaxHighlighter {
         injection_language: &str,
         node: Node,
         source: &[u8],
+        cx: &App,
     ) -> Vec<(Range<usize>, String)> {
         let start_offset = node.start_byte();
         let end_offset = node.end_byte();
@@ -426,12 +398,11 @@ impl SyntaxHighlighter {
         if content.is_empty() {
             return cache;
         };
-        let Some(lang) = super::Language::from_str(injection_language) else {
+        let Some(config) = LanguageRegistry::global(cx).language(injection_language) else {
             return cache;
         };
-        let lang_config = lang.config();
         let mut parser = Parser::new();
-        if parser.set_language(&lang_config.language).is_err() {
+        if parser.set_language(&config.language).is_err() {
             return cache;
         }
         let Some(tree) = parser.parse(content, None) else {
@@ -456,9 +427,10 @@ impl SyntaxHighlighter {
                     break;
                 }
 
-                let highlight_name = query.capture_names()[cap.index as usize];
-                last_end = node_range.end;
-                cache.push((node_range, highlight_name.to_string()));
+                if let Some(highlight_name) = query.capture_names().get(cap.index as usize) {
+                    last_end = node_range.end;
+                    cache.push((node_range, highlight_name.to_string()));
+                }
             }
         }
 
@@ -549,7 +521,7 @@ impl SyntaxHighlighter {
     /// The argument `range` is the range of the line in the text.
     ///
     /// Returns `range` is the range in the line.
-    pub fn styles(
+    pub(crate) fn styles(
         &self,
         range: &Range<usize>,
         theme: &HighlightTheme,
@@ -558,25 +530,42 @@ impl SyntaxHighlighter {
         let start_offset = range.start;
         let mut last_range = start_offset..start_offset;
 
-        // NOTE: the ranges in the cache may have duplicates, so we need to merge them.
-        for (_, (node_range, name)) in self.cache.range(range.start..) {
-            // TODO: If break, the `comment.doc` will not work.
-            // Ref: https://github.com/longbridge/gpui-component/pull/904/commits/d8f886939d3b472f228c1ce72154a951e98f32c5
-            if node_range.end > range.end {
+        // NOTE: Iterate over the cache and print the range and style for each item.
+        // for (_, (range, style)) in self.cache.iter() {
+        //     println!("-- range: {:?}, style: {:?}", range, style);
+        // }
+
+        let mut cursor = self.cache.lower_bound(Bound::Included(&range.start));
+        // Move to the previous item if the current item is not the start of the range.
+        // This is for case like JsDoc, where token may contains multiple lines.
+        if cursor.key() != Some(&range.start) {
+            cursor.move_prev();
+        }
+
+        while let Some((node_range, name)) = cursor.value() {
+            // Break loop if the node_range is out of the range
+            if node_range.start > range.end {
                 break;
             }
 
-            // let range_in_line = node_range.start..node_range.end;
+            let mut node_range = node_range.start.max(range.start)..node_range.end.min(range.end);
+            // Avoid start larger than end
+            if node_range.start > node_range.end {
+                node_range.end = node_range.start;
+            }
 
             // Ensure every range is connected.
             if last_range.end < node_range.start {
                 styles.push((last_range.end..node_range.start, HighlightStyle::default()));
             }
 
-            let style = theme.style(&name).unwrap_or_default();
-
-            styles.push((node_range.clone(), style));
             last_range = node_range.clone();
+            styles.push((
+                node_range.clone(),
+                theme.style(name.as_ref()).unwrap_or_default(),
+            ));
+
+            cursor.move_next();
         }
 
         // If the matched styles is empty, return a default range.
@@ -589,6 +578,179 @@ impl SyntaxHighlighter {
             styles.push((last_range.end..range.end, HighlightStyle::default()));
         }
 
+        let styles = unique_styles(styles);
+
+        // NOTE: DO NOT remove this comment, it is used for debugging.
+        // for style in &result {
+        //     println!("---- style: {:?} - {:?}", style.0, style.1.color);
+        // }
+        // println!("--------------------------------");
+
         styles
+    }
+}
+
+/// To merge intersection ranges
+///
+/// ```
+/// vec![
+///     (0..10, clean),
+///     (0..10, clean),
+///     (5..11, red),
+///     (10..15, green),
+///     (15..30, clean),
+///     (29..35, blue),
+///     (35..40, green),
+/// ];
+/// ```
+///
+/// to
+///
+/// ```
+/// vec![
+///   (0..5, clean),
+///   (5..10, red),
+///   (10..11, green),
+///   (11..15, green),
+///   (15..29, clean),
+///   (29..30, blue),
+///   (30..35, blue),
+///   (35..40, green),
+/// ];
+/// ```
+pub(crate) fn unique_styles(
+    styles: Vec<(Range<usize>, HighlightStyle)>,
+) -> Vec<(Range<usize>, HighlightStyle)> {
+    let mut result: Vec<(Range<usize>, HighlightStyle)> = vec![];
+    let mut current_range: Option<(Range<usize>, HighlightStyle)> = None;
+
+    for (range, style) in styles.into_iter() {
+        if range.is_empty() {
+            continue;
+        }
+
+        if let Some((last_range, last_style)) = current_range.as_mut() {
+            if last_style.color == style.color && range.start <= last_range.end {
+                // Merge overlapping or adjacent ranges with the same style
+                last_range.end = last_range.end.max(range.end);
+            } else if range.start < last_range.end {
+                // Split overlapping ranges with different styles
+                let overlap_start = range.start;
+                let overlap_end = last_range.end.min(range.end);
+
+                if overlap_start > last_range.start {
+                    result.push((last_range.start..overlap_start, *last_style));
+                }
+
+                result.push((overlap_start..overlap_end, style));
+
+                last_range.end = overlap_start;
+                if overlap_end < range.end {
+                    current_range = Some((overlap_end..range.end, style));
+                } else {
+                    current_range = None;
+                }
+            } else {
+                // Push the completed range and start a new one
+                result.push((last_range.clone(), *last_style));
+                current_range = Some((range, style));
+            }
+        } else {
+            current_range = Some((range, style));
+        }
+    }
+
+    if let Some((last_range, last_style)) = current_range {
+        result.push((last_range, last_style));
+    }
+
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui::Hsla;
+
+    use super::*;
+    use crate::Colorize as _;
+
+    fn color_style(color: Hsla) -> HighlightStyle {
+        let mut style = HighlightStyle::default();
+        style.color = Some(color);
+        style
+    }
+
+    #[track_caller]
+    fn assert_unique_styles(
+        left: Vec<(Range<usize>, HighlightStyle)>,
+        right: Vec<(Range<usize>, HighlightStyle)>,
+    ) {
+        fn color_name(c: Option<Hsla>) -> String {
+            match c {
+                Some(c) => {
+                    if c == gpui::red() {
+                        "red".to_string()
+                    } else if c == gpui::green() {
+                        "green".to_string()
+                    } else if c == gpui::blue() {
+                        "blue".to_string()
+                    } else {
+                        c.to_hex()
+                    }
+                }
+                None => "clean".to_string(),
+            }
+        }
+
+        let left = unique_styles(left);
+        if left.len() != right.len() {
+            println!("\n---------------------------------------------");
+            for (range, style) in left.iter() {
+                println!("({:?}, {})", range, color_name(style.color));
+            }
+            println!("---------------------------------------------");
+            panic!("left {} styles, right {} styles", left.len(), right.len());
+        }
+        for (left, right) in left.into_iter().zip(right) {
+            if left.1.color != right.1.color || left.0 != right.0 {
+                panic!(
+                    "\n left: ({:?}, {})\nright: ({:?}, {})\n",
+                    left.0,
+                    color_name(left.1.color),
+                    right.0,
+                    color_name(right.1.color)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_unique_styles() {
+        let red = color_style(gpui::red());
+        let green = color_style(gpui::green());
+        let blue = color_style(gpui::blue());
+        let clean = HighlightStyle::default();
+
+        assert_unique_styles(
+            vec![
+                (0..10, clean),
+                (0..10, clean),
+                (5..11, red),
+                (10..15, green),
+                (15..30, clean),
+                (29..35, blue),
+                (35..40, green),
+            ],
+            vec![
+                (0..5, clean),
+                (5..10, red),
+                (10..11, green),
+                (11..15, green),
+                (15..29, clean),
+                (29..30, blue),
+                (30..35, blue),
+                (35..40, green),
+            ],
+        );
     }
 }
