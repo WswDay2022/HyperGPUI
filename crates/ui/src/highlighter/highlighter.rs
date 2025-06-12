@@ -308,12 +308,14 @@ impl SyntaxHighlighter {
             for (start, (old_range, highlight_name)) in old_cache.into_iter() {
                 if old_range.end >= byte_range.start {
                     let new_range = Range {
-                        start: (old_range.start as isize + changed_len) as usize,
-                        end: (old_range.end as isize + changed_len) as usize,
+                        start: (old_range.start as isize + changed_len).max(0) as usize,
+                        end: (old_range.end as isize + changed_len).max(0) as usize,
                     };
 
-                    self.cache
-                        .insert(new_range.start, (new_range, highlight_name));
+                    if new_range.len() > 0 {
+                        self.cache
+                            .insert(new_range.start, (new_range, highlight_name));
+                    }
                 } else {
                     self.cache.insert(start, (old_range, highlight_name));
                 }
@@ -364,6 +366,14 @@ impl SyntaxHighlighter {
                     self.cache.insert(
                         last_range.start,
                         (last_range.start..node_range.end, highlight_name.clone()),
+                    );
+                } else if last_range == &node_range {
+                    // case:
+                    // last_range: 213..220, last_highlight_name: Some("property")
+                    // last_range: 213..220, last_highlight_name: Some("string")
+                    self.cache.insert(
+                        node_range.start,
+                        (node_range, last_highlight_name.unwrap_or(highlight_name)),
                     );
                 } else {
                     self.cache
@@ -581,7 +591,7 @@ impl SyntaxHighlighter {
         let styles = unique_styles(styles);
 
         // NOTE: DO NOT remove this comment, it is used for debugging.
-        // for style in &result {
+        // for style in &styles {
         //     println!("---- style: {:?} - {:?}", style.0, style.1.color);
         // }
         // println!("--------------------------------");
