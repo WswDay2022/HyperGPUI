@@ -55,17 +55,19 @@ actions!(
         Outdent,
         IndentInline,
         OutdentInline,
-        Up,
-        Down,
-        Left,
-        Right,
+        MoveUp,
+        MoveDown,
+        MoveLeft,
+        MoveRight,
+        MoveHome,
+        MoveEnd,
+        MovePageUp,
+        MovePageDown,
         SelectUp,
         SelectDown,
         SelectLeft,
         SelectRight,
         SelectAll,
-        Home,
-        End,
         SelectToStartOfLine,
         SelectToEndOfLine,
         SelectToStart,
@@ -84,7 +86,6 @@ actions!(
         MoveToEnd,
         MoveToPreviousWord,
         MoveToNextWord,
-        TextChanged,
         Escape
     ]
 );
@@ -118,10 +119,12 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("enter", Enter { secondary: false }, Some(CONTEXT)),
         KeyBinding::new("secondary-enter", Enter { secondary: true }, Some(CONTEXT)),
         KeyBinding::new("escape", Escape, Some(CONTEXT)),
-        KeyBinding::new("up", Up, Some(CONTEXT)),
-        KeyBinding::new("down", Down, Some(CONTEXT)),
-        KeyBinding::new("left", Left, Some(CONTEXT)),
-        KeyBinding::new("right", Right, Some(CONTEXT)),
+        KeyBinding::new("up", MoveUp, Some(CONTEXT)),
+        KeyBinding::new("down", MoveDown, Some(CONTEXT)),
+        KeyBinding::new("left", MoveLeft, Some(CONTEXT)),
+        KeyBinding::new("right", MoveRight, Some(CONTEXT)),
+        KeyBinding::new("pageup", MovePageUp, Some(CONTEXT)),
+        KeyBinding::new("pagedown", MovePageDown, Some(CONTEXT)),
         KeyBinding::new("tab", IndentInline, Some(CONTEXT)),
         KeyBinding::new("shift-tab", OutdentInline, Some(CONTEXT)),
         #[cfg(target_os = "macos")]
@@ -136,8 +139,8 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("shift-right", SelectRight, Some(CONTEXT)),
         KeyBinding::new("shift-up", SelectUp, Some(CONTEXT)),
         KeyBinding::new("shift-down", SelectDown, Some(CONTEXT)),
-        KeyBinding::new("home", Home, Some(CONTEXT)),
-        KeyBinding::new("end", End, Some(CONTEXT)),
+        KeyBinding::new("home", MoveHome, Some(CONTEXT)),
+        KeyBinding::new("end", MoveEnd, Some(CONTEXT)),
         KeyBinding::new("shift-home", SelectToStartOfLine, Some(CONTEXT)),
         KeyBinding::new("shift-end", SelectToEndOfLine, Some(CONTEXT)),
         #[cfg(target_os = "macos")]
@@ -175,13 +178,13 @@ pub fn init(cx: &mut App) {
         #[cfg(not(target_os = "macos"))]
         KeyBinding::new("ctrl-v", Paste, Some(CONTEXT)),
         #[cfg(target_os = "macos")]
-        KeyBinding::new("ctrl-a", Home, Some(CONTEXT)),
+        KeyBinding::new("ctrl-a", MoveHome, Some(CONTEXT)),
         #[cfg(target_os = "macos")]
-        KeyBinding::new("cmd-left", Home, Some(CONTEXT)),
+        KeyBinding::new("cmd-left", MoveHome, Some(CONTEXT)),
         #[cfg(target_os = "macos")]
-        KeyBinding::new("ctrl-e", End, Some(CONTEXT)),
+        KeyBinding::new("ctrl-e", MoveEnd, Some(CONTEXT)),
         #[cfg(target_os = "macos")]
-        KeyBinding::new("cmd-right", End, Some(CONTEXT)),
+        KeyBinding::new("cmd-right", MoveEnd, Some(CONTEXT)),
         #[cfg(target_os = "macos")]
         KeyBinding::new("cmd-z", Undo, Some(CONTEXT)),
         #[cfg(target_os = "macos")]
@@ -217,6 +220,8 @@ pub(super) struct LastLayout {
     pub(super) lines: Rc<SmallVec<[WrappedLine; 1]>>,
     /// The line_height of text layout, this will change will InputElement painted.
     pub(super) line_height: Pixels,
+    /// The visible range (no wrap) of lines in the viewport.
+    pub(super) visible_range: Range<usize>,
 }
 
 impl Deref for LastLayout {
@@ -555,8 +560,9 @@ impl InputState {
     }
 
     /// Move the cursor vertically by one line (up or down) while preserving the column if possible.
-    /// direction: -1 for up, +1 for down
-    fn move_vertical(&mut self, direction: i32, window: &mut Window, cx: &mut Context<Self>) {
+    ///
+    /// move_lines: Number of lines to move vertically (positive for down, negative for up).
+    fn move_vertical(&mut self, move_lines: isize, window: &mut Window, cx: &mut Context<Self>) {
         if self.is_single_line() {
             return;
         }
@@ -568,7 +574,7 @@ impl InputState {
         let offset = self.cursor_offset();
         let preferred_x_offset = self.preferred_x_offset;
         let line_height = last_layout.line_height;
-        let (current_line_index, current_sub_line, current_pos) =
+        let (current_line, current_sub_line, current_pos) =
             self.line_and_position_for_offset(offset);
 
         let Some(current_pos) = current_pos else {
@@ -579,30 +585,32 @@ impl InputState {
             .preferred_x_offset
             .unwrap_or_else(|| current_pos.x + bounds.origin.x);
 
-        let mut new_line_index = current_line_index;
+        let mut new_line = current_line;
         let mut new_sub_line = current_sub_line as i32;
-
-        new_sub_line += direction;
+        new_sub_line += if move_lines > 0 { 1 } else { -1 };
 
         // Handle moving above the first line
-        if direction == -1 && new_line_index == 0 && new_sub_line < 0 {
+        if move_lines < 0 && current_line == 0 && new_sub_line < 0 {
             // Move cursor to the beginning of the text
             self.move_to(0, window, cx);
+            self.preferred_x_offset = preferred_x_offset;
             return;
         }
 
         if new_sub_line < 0 {
-            if new_line_index > 0 {
-                new_line_index -= 1;
-                new_sub_line = last_layout.lines[new_line_index].wrap_boundaries.len() as i32;
-            } else {
-                new_sub_line = 0;
-            }
+            new_line = new_line
+                .saturating_add_signed(move_lines)
+                .max(0)
+                .min(last_layout.lines.len().saturating_sub(1));
+            new_sub_line = last_layout.lines[new_line].wrap_boundaries.len() as i32;
         } else {
-            let max_sub_line = last_layout.lines[new_line_index].wrap_boundaries.len() as i32;
+            let max_sub_line = last_layout.lines[current_line].wrap_boundaries.len() as i32;
             if new_sub_line > max_sub_line {
-                if new_line_index < last_layout.lines.len() - 1 {
-                    new_line_index += 1;
+                if new_line < last_layout.lines.len() - 1 {
+                    new_line = new_line
+                        .saturating_add_signed(move_lines)
+                        .max(0)
+                        .min(last_layout.lines.len().saturating_sub(1));
                     new_sub_line = 0;
                 } else {
                     new_sub_line = max_sub_line;
@@ -611,11 +619,11 @@ impl InputState {
         }
 
         // If after adjustment, still at the same position, do not proceed
-        if new_line_index == current_line_index && new_sub_line == current_sub_line as i32 {
+        if new_line == current_line && new_sub_line == current_sub_line as i32 {
             return;
         }
 
-        let target_line = &last_layout.lines[new_line_index];
+        let target_line = &last_layout.lines[new_line];
         let line_x = current_x - bounds.origin.x;
         let target_sub_line = new_sub_line as usize;
 
@@ -628,11 +636,13 @@ impl InputState {
         };
 
         let mut prev_lines_offset = 0;
-        for (i, l) in last_layout.lines.iter().enumerate() {
-            if i == new_line_index {
-                break;
-            }
-            prev_lines_offset += l.len() + 1;
+        for (_, line) in last_layout
+            .lines
+            .iter()
+            .enumerate()
+            .take_while(|(i, _)| *i < new_line)
+        {
+            prev_lines_offset += line.len() + 1;
         }
 
         let new_offset = (prev_lines_offset + new_local_index).min(self.text.len());
@@ -815,7 +825,7 @@ impl InputState {
         self.focus_handle.focus(window);
     }
 
-    pub(super) fn left(&mut self, _: &Left, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn left(&mut self, _: &MoveLeft, window: &mut Window, cx: &mut Context<Self>) {
         self.pause_blink_cursor(cx);
         if self.selected_range.is_empty() {
             self.move_to(self.previous_boundary(self.cursor_offset()), window, cx);
@@ -824,7 +834,7 @@ impl InputState {
         }
     }
 
-    pub(super) fn right(&mut self, _: &Right, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn right(&mut self, _: &MoveRight, window: &mut Window, cx: &mut Context<Self>) {
         self.pause_blink_cursor(cx);
         if self.selected_range.is_empty() {
             self.move_to(self.next_boundary(self.selected_range.end), window, cx);
@@ -833,7 +843,7 @@ impl InputState {
         }
     }
 
-    pub(super) fn up(&mut self, _: &Up, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn up(&mut self, _: &MoveUp, window: &mut Window, cx: &mut Context<Self>) {
         if self.is_single_line() {
             return;
         }
@@ -849,7 +859,7 @@ impl InputState {
         self.move_vertical(-1, window, cx);
     }
 
-    pub(super) fn down(&mut self, _: &Down, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn down(&mut self, _: &MoveDown, window: &mut Window, cx: &mut Context<Self>) {
         if self.is_single_line() {
             return;
         }
@@ -864,6 +874,37 @@ impl InputState {
 
         self.pause_blink_cursor(cx);
         self.move_vertical(1, window, cx);
+    }
+
+    pub(super) fn page_up(&mut self, _: &MovePageUp, window: &mut Window, cx: &mut Context<Self>) {
+        if self.is_single_line() {
+            return;
+        }
+
+        let Some(last_layout) = &self.last_layout else {
+            return;
+        };
+
+        let display_lines = (self.input_bounds.size.height / last_layout.line_height) as isize;
+        self.move_vertical(-display_lines, window, cx);
+    }
+
+    pub(super) fn page_down(
+        &mut self,
+        _: &MovePageDown,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.is_single_line() {
+            return;
+        }
+
+        let Some(last_layout) = &self.last_layout else {
+            return;
+        };
+
+        let display_lines = (self.input_bounds.size.height / last_layout.line_height) as isize;
+        self.move_vertical(display_lines, window, cx);
     }
 
     pub(super) fn select_left(
@@ -915,13 +956,13 @@ impl InputState {
         self.select_to(self.text.len(), window, cx)
     }
 
-    pub(super) fn home(&mut self, _: &Home, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn home(&mut self, _: &MoveHome, window: &mut Window, cx: &mut Context<Self>) {
         self.pause_blink_cursor(cx);
         let offset = self.start_of_line(window, cx);
         self.move_to(offset, window, cx);
     }
 
-    pub(super) fn end(&mut self, _: &End, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn end(&mut self, _: &MoveEnd, window: &mut Window, cx: &mut Context<Self>) {
         self.pause_blink_cursor(cx);
         let offset = self.end_of_line(window, cx);
         self.move_to(offset, window, cx);
