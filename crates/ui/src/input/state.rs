@@ -213,7 +213,10 @@ pub fn init(cx: &mut App) {
 
 #[derive(Clone)]
 pub(super) struct LastLayout {
+    /// The last layout lines.
     pub(super) lines: Rc<SmallVec<[WrappedLine; 1]>>,
+    /// The line_height of text layout, this will change will InputElement painted.
+    pub(super) line_height: Pixels,
 }
 
 impl Deref for LastLayout {
@@ -243,11 +246,8 @@ pub struct InputState {
     pub(super) selection_reversed: bool,
     /// The marked range is the temporary insert text on IME typing.
     pub(super) marked_range: Option<Range<usize>>,
-    /// The last layout lines.
     pub(super) last_layout: Option<LastLayout>,
     pub(super) last_cursor_offset: Option<usize>,
-    /// The line_height of text layout, this will change will InputElement painted.
-    pub(super) last_line_height: Pixels,
     /// The input container bounds
     pub(super) input_bounds: Bounds<Pixels>,
     /// The text bounds
@@ -272,7 +272,7 @@ pub struct InputState {
     /// Popover
     diagnostic_popover: Option<Entity<DiagnosticPopover>>,
 
-    /// To remember the horizontal column (x-coordinate) of the cursor position.
+    /// To remember the horizontal column (x-coordinate) of the cursor position for keep column for move up/down.
     preferred_x_offset: Option<Pixels>,
     _subscriptions: Vec<Subscription>,
 }
@@ -334,7 +334,6 @@ impl InputState {
             last_layout: None,
             last_bounds: None,
             last_selected_range: None,
-            last_line_height: px(20.),
             last_cursor_offset: None,
             scroll_handle: ScrollHandle::new(),
             scroll_state: ScrollbarState::default(),
@@ -511,18 +510,15 @@ impl InputState {
 
     /// Called after moving the cursor. Updates preferred_x_offset if we know where the cursor now is.
     fn update_preferred_x_offset(&mut self, _cx: &mut Context<Self>) {
-        if let (Some(_), Some(bounds)) = (&self.last_layout, &self.last_bounds) {
-            let offset = self.cursor_offset();
+        let (Some(_), Some(bounds)) = (&self.last_layout, &self.last_bounds) else {
+            return;
+        };
 
-            // Find which line and sub-line the cursor is on and its position
-            let (_line_index, _sub_line_index, cursor_pos) =
-                self.line_and_position_for_offset(offset);
+        // Find which line and sub-line the cursor is on and its position
+        let (_, _, cursor_pos) = self.line_and_position_for_offset(self.cursor_offset());
 
-            if let Some(pos) = cursor_pos {
-                // Adjust by scroll offset
-                let scroll_offset = bounds.origin;
-                self.preferred_x_offset = Some(pos.x + scroll_offset.x);
-            }
+        if let Some(pos) = cursor_pos {
+            self.preferred_x_offset = Some(pos.x + bounds.origin.x);
         }
     }
 
@@ -537,19 +533,18 @@ impl InputState {
         &self,
         offset: usize,
     ) -> (usize, usize, Option<Point<Pixels>>) {
-        let Some(lines) = &self.last_layout else {
+        let Some(last_layout) = &self.last_layout else {
             return (0, 0, None);
         };
-        let line_height = self.last_line_height;
-        let line_number_width = self.line_number_width;
+        let line_height = last_layout.line_height;
 
         let mut prev_lines_offset = 0;
         let mut y_offset = px(0.);
-        for (line_index, line) in lines.iter().enumerate() {
+        for (line_index, line) in last_layout.lines.iter().enumerate() {
             let local_offset = offset.saturating_sub(prev_lines_offset);
             if let Some(pos) = line.position_for_index(local_offset, line_height) {
                 let sub_line_index = (pos.y.0 / line_height.0) as usize;
-                let adjusted_pos = point(pos.x + line_number_width, pos.y + y_offset);
+                let adjusted_pos = point(pos.x, pos.y + y_offset);
                 return (line_index, sub_line_index, Some(adjusted_pos));
             }
 
@@ -566,12 +561,13 @@ impl InputState {
             return;
         }
 
-        let (Some(lines), Some(bounds)) = (&self.last_layout, &self.last_bounds) else {
+        let (Some(last_layout), Some(bounds)) = (&self.last_layout, &self.last_bounds) else {
             return;
         };
 
         let offset = self.cursor_offset();
-        let line_height = self.last_line_height;
+        let preferred_x_offset = self.preferred_x_offset;
+        let line_height = last_layout.line_height;
         let (current_line_index, current_sub_line, current_pos) =
             self.line_and_position_for_offset(offset);
 
@@ -598,14 +594,14 @@ impl InputState {
         if new_sub_line < 0 {
             if new_line_index > 0 {
                 new_line_index -= 1;
-                new_sub_line = lines[new_line_index].wrap_boundaries.len() as i32;
+                new_sub_line = last_layout.lines[new_line_index].wrap_boundaries.len() as i32;
             } else {
                 new_sub_line = 0;
             }
         } else {
-            let max_sub_line = lines[new_line_index].wrap_boundaries.len() as i32;
+            let max_sub_line = last_layout.lines[new_line_index].wrap_boundaries.len() as i32;
             if new_sub_line > max_sub_line {
-                if new_line_index < lines.len() - 1 {
+                if new_line_index < last_layout.lines.len() - 1 {
                     new_line_index += 1;
                     new_sub_line = 0;
                 } else {
@@ -619,7 +615,7 @@ impl InputState {
             return;
         }
 
-        let target_line = &lines[new_line_index];
+        let target_line = &last_layout.lines[new_line_index];
         let line_x = current_x - bounds.origin.x;
         let target_sub_line = new_sub_line as usize;
 
@@ -627,12 +623,12 @@ impl InputState {
         let index_res = target_line.index_for_position(approx_pos, line_height);
 
         let new_local_index = match index_res {
-            Ok(i) => i + 1,
+            Ok(i) => i,
             Err(i) => i,
         };
 
         let mut prev_lines_offset = 0;
-        for (i, l) in lines.iter().enumerate() {
+        for (i, l) in last_layout.lines.iter().enumerate() {
             if i == new_line_index {
                 break;
             }
@@ -642,6 +638,8 @@ impl InputState {
         let new_offset = (prev_lines_offset + new_local_index).min(self.text.len());
         self.selected_range = new_offset..new_offset;
         self.pause_blink_cursor(cx);
+        // Set back the preferred_x_offset
+        self.preferred_x_offset = preferred_x_offset;
         cx.notify();
     }
 
@@ -1515,10 +1513,15 @@ impl InputState {
     pub(super) fn on_scroll_wheel(
         &mut self,
         event: &ScrollWheelEvent,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let delta = event.delta.pixel_delta(self.last_line_height);
+        let line_height = self
+            .last_layout
+            .as_ref()
+            .map(|layout| layout.line_height)
+            .unwrap_or(window.line_height());
+        let delta = event.delta.pixel_delta(line_height);
         self.update_scroll_offset(Some(self.scroll_handle.offset() + delta), cx);
         self.diagnostic_popover = None;
     }
@@ -1663,12 +1666,13 @@ impl InputState {
             return 0;
         }
 
-        let (Some(bounds), Some(lines)) = (self.last_bounds.as_ref(), self.last_layout.as_ref())
+        let (Some(bounds), Some(last_layout)) =
+            (self.last_bounds.as_ref(), self.last_layout.as_ref())
         else {
             return 0;
         };
 
-        let line_height = self.last_line_height;
+        let line_height = last_layout.line_height;
 
         // TIP: About the IBeam cursor
         //
@@ -1685,7 +1689,7 @@ impl InputState {
         let mut index = 0;
         let mut y_offset = px(0.);
 
-        for (_, line) in lines.iter().enumerate() {
+        for (_, line) in last_layout.lines.iter().enumerate() {
             let line_origin = self.line_origin_with_y_offset(&mut y_offset, &line, line_height);
             let pos = inner_position - line_origin;
 
@@ -2172,8 +2176,8 @@ impl EntityInputHandler for InputState {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
-        let line_height = self.last_line_height;
-        let lines = self.last_layout.as_ref()?;
+        let last_layout = self.last_layout.as_ref()?;
+        let line_height = last_layout.line_height;
         let range = self.range_from_utf16(&range_utf16);
 
         let mut start_origin = None;
@@ -2182,7 +2186,7 @@ impl EntityInputHandler for InputState {
         let mut y_offset = px(0.);
         let mut index_offset = 0;
 
-        for line in lines.iter() {
+        for line in last_layout.lines.iter() {
             if start_origin.is_some() && end_origin.is_some() {
                 break;
             }
@@ -2225,11 +2229,11 @@ impl EntityInputHandler for InputState {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<usize> {
-        let line_height = self.last_line_height;
+        let last_layout = self.last_layout.as_ref()?;
+        let line_height = last_layout.line_height;
         let line_point = self.last_bounds?.localize(&point)?;
-        let lines = self.last_layout.as_ref()?;
 
-        for line in lines.iter() {
+        for line in last_layout.lines.iter() {
             if let Ok(utf8_index) = line.index_for_position(line_point, line_height) {
                 return Some(self.offset_to_utf16(utf8_index));
             }
