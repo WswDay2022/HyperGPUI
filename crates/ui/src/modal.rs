@@ -12,9 +12,7 @@ use crate::{
     actions::{Cancel, Confirm},
     animation::cubic_bezier,
     button::{Button, ButtonVariant, ButtonVariants as _},
-    h_flex,
-    scroll::ScrollbarAxis,
-    v_flex, ActiveTheme as _, ContextModal, IconName, Root, Sizable as _, StyledExt,
+    h_flex, v_flex, ActiveTheme as _, ContextModal, IconName, Root, Sizable as _, StyledExt,
 };
 
 const CONTEXT: &str = "Modal";
@@ -393,7 +391,7 @@ impl RenderOnce for Modal {
                             .rounded(border_radius)
                             .shadow_xl()
                             .min_h_24()
-                            .py_4()
+                            .p_4()
                             .gap_4()
                             .refine_style(&self.style)
                             .key_context(CONTEXT)
@@ -437,11 +435,7 @@ impl RenderOnce for Modal {
                             .when_some(self.max_width, |this, w| this.max_w(w))
                             .when_some(self.title, |this, title| {
                                 this.child(
-                                    div()
-                                        .font_semibold()
-                                        .px_4()
-                                        .line_height(relative(1.))
-                                        .child(title),
+                                    div().font_semibold().line_height(relative(1.)).child(title),
                                 )
                             })
                             .when(self.show_close, |this| {
@@ -461,17 +455,16 @@ impl RenderOnce for Modal {
                                 )
                             })
                             .child(
-                                div().w_full().flex_1().overflow_hidden().child(
-                                    v_flex()
-                                        .scrollable(window.current_view(), ScrollbarAxis::Vertical)
-                                        .px_4()
-                                        .child(self.content),
-                                ),
+                                div()
+                                    .w_full()
+                                    .flex_1()
+                                    .overflow_hidden()
+                                    .child(self.content),
                             )
                             .when(self.footer.is_some(), |this| {
                                 let footer = self.footer.unwrap();
 
-                                this.child(h_flex().px_4().gap_2().justify_end().children(footer(
+                                this.child(h_flex().gap_2().justify_end().children(footer(
                                     render_ok,
                                     render_cancel,
                                     window,
