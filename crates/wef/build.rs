@@ -26,17 +26,11 @@ fn main() {
         cef_link_search_path.display()
     );
 
-    #[cfg(target_os = "windows")]
-    {
+    if cfg!(target_os = "windows") {
         println!("cargo:rustc-link-lib=libcef");
-    }
-    #[cfg(target_os = "linux")]
-    {
-        println!("cargo:rustc-link-arg=-Wl,-rpath,.");
+    } else if cfg!(target_os = "linux") {
         println!("cargo:rustc-link-lib=cef");
-    }
-    #[cfg(target_os = "macos")]
-    {
+    } else if cfg!(target_os = "macos") {
         println!("cargo:rustc-link-lib=framework=AppKit");
         println!("cargo:rustc-link-lib=sandbox");
 
@@ -240,8 +234,7 @@ fn build_dll_wrapper(cef_root: &Path) {
         "wrapper/libcef_dll_wrapper2.cc",
     ];
 
-    #[cfg(target_os = "macos")]
-    {
+    if cfg!(target_os = "macos") {
         sources.extend([
             "wrapper/cef_library_loader_mac.mm",
             "wrapper/libcef_dll_dylib.cc",
@@ -279,36 +272,26 @@ fn build_wef_sys(cef_root: &Path) {
         "cpp/external_pump.cpp",
     ];
 
-    #[cfg(target_os = "macos")]
-    {
+    if cfg!(target_os = "windows") {
+        sources.extend(["cpp/external_pump_win.cpp"]);
+    } else if cfg!(target_os = "macos") {
         sources.extend([
             "cpp/load_library.cpp",
             "cpp/sandbox_context.cpp",
             "cpp/external_pump_mac.mm",
-            "cpp/shutdown_helper_mac.mm",
         ]);
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        sources.extend(["cpp/external_pump_win.cpp", "cpp/shutdown_helper_win.cpp"]);
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        sources.extend([
-            "cpp/external_pump_linux.cpp",
-            "cpp/shutdown_helper_linux.cpp",
-        ]);
+    } else if cfg!(target_os = "linux") {
+        sources.extend(["cpp/external_pump_linux.cpp"]);
     }
 
     let mut build = Build::new();
 
-    #[cfg(target_os = "linux")]
-    {
-        let glib = pkg_config::probe_library("glib-2.0")
-            .unwrap_or_else(|err| panic!("failed to find glib-2.0: {}", err));
-        build.includes(glib.include_paths);
+    if cfg!(target_os = "linux") {
+        build.includes(
+            pkg_config::probe_library("glib-2.0")
+                .unwrap_or_else(|err| panic!("failed to find glib-2.0: {}", err))
+                .include_paths,
+        );
     }
 
     build

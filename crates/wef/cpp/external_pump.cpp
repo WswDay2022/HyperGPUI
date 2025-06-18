@@ -10,7 +10,7 @@ const int32_t TIMER_DELAY_PLACE_HOLDER = INT_MAX;
 
 // The maximum number of milliseconds we're willing to wait between calls to
 // DoWork().
-const int64_t MAX_TIMER_DELAY = 1000 / 30;  // 30fps
+const int64_t MAX_TIMER_DELAY = 1000 / 60;  // 60fps
 
 void ExternalPump::OnScheduleWork(int64_t delay_ms) {
   if (delay_ms == TIMER_DELAY_PLACE_HOLDER && IsTimerPending()) {

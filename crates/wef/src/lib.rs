@@ -1,5 +1,6 @@
 #![doc = include_str!("../README.md")]
 
+mod app_handler;
 mod browser;
 mod browser_handler;
 mod builder;
@@ -23,6 +24,7 @@ mod sandbox_context;
 mod settings;
 mod wef;
 
+pub use app_handler::ApplicationHandler;
 pub use browser::Browser;
 pub use browser_handler::{BrowserHandler, ImageBuffer, LogSeverity, PaintElementType};
 pub use builder::BrowserBuilder;

@@ -24,6 +24,7 @@ struct _ContextMenuParams {
 
 struct BrowserCallbacks {
   void (*on_created)(void* userdata);
+  void (*on_closed)(void* userdata);
   void (*on_popup_show)(void* userdata, bool show);
   void (*on_popup_position)(void* userdata, const CefRect* rect);
   void (*on_paint)(void* userdata, int type, const void* dirty_rects,

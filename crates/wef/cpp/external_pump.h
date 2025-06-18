@@ -8,7 +8,8 @@ class ExternalPump {
  public:
   ExternalPump() {}
   virtual ~ExternalPump() {}
-
+  ExternalPump(const ExternalPump&) = delete;
+  ExternalPump& operator=(const ExternalPump&) = delete;
   static std::unique_ptr<ExternalPump> Create();
   virtual void OnScheduleMessagePumpWork(int64_t delay_ms) = 0;
 

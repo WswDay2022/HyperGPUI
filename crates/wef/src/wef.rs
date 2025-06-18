@@ -1,18 +1,36 @@
-use std::ffi::{CString, c_char};
+use std::ffi::{CString, c_char, c_void};
 
-use crate::{Error, ffi::*, settings::Settings};
+use crate::{ApplicationHandler, Error, app_handler::ApplicationState, ffi::*, settings::Settings};
 
 /// Initialize the CEF browser process.
 ///
 /// This function should be called on the main application thread to
 /// initialize the CEF browser process.
-pub fn init(settings: Settings) -> Result<(), Error> {
+pub fn init<T>(settings: Settings<T>) -> Result<(), Error>
+where
+    T: ApplicationHandler,
+{
     unsafe {
+        let callbacks = CAppCallbacks {
+            on_schedule_message_pump_work: crate::app_handler::on_schedule_message_pump_work::<T>,
+        };
+
+        let handler = Box::into_raw(Box::new(ApplicationState {
+            handler: settings.handler,
+        }));
+
+        extern "C" fn destroy_handler<T>(user_data: *mut c_void) {
+            unsafe { _ = Box::from_raw(user_data as *mut T) }
+        }
+
         let c_settings = CSettings {
             locale: to_cstr_ptr_opt(settings.locale.as_deref()),
             cache_path: to_cstr_ptr_opt(settings.cache_path.as_deref()),
             root_cache_path: to_cstr_ptr_opt(settings.root_cache_path.as_deref()),
             browser_subprocess_path: to_cstr_ptr_opt(settings.browser_subprocess_path.as_deref()),
+            callbacks,
+            userdata: handler as *mut c_void,
+            destroy_userdata: destroy_handler::<T>,
         };
 
         if !wef_init(&c_settings) {
@@ -59,6 +77,14 @@ pub fn exec_process() -> Result<bool, Error> {
     Ok(unsafe { wef_exec_process(c_args.as_ptr(), args.len() as i32) })
 }
 
+/// Perform a single iteration of CEF message loop processing.
+///
+/// This function is  provided for cases where the CEF message loop must be
+/// integrated into an existing application message loop.
+pub fn do_message_work() {
+    unsafe { wef_do_message_work() };
+}
+
 /// Shuts down the CEF library.
 ///
 /// # Panics
@@ -91,20 +117,22 @@ pub fn shutdown() {
 /// use wef::Settings;
 ///
 /// fn main() {
-///     let settings = Settings::default();
+///     let settings = Settings::new();
 ///     wef::launch(settings, || {
 ///         // do something in the main process
 ///     });
 /// }
 /// ```
-pub fn launch<F, R>(settings: Settings, f: F) -> R
+pub fn launch<T, F, R>(settings: Settings<T>, f: F) -> R
 where
+    T: ApplicationHandler,
     F: FnOnce() -> R,
 {
-    #[cfg(not(target_os = "macos"))]
-    if exec_process().expect("failed to execute process") {
-        // Is helper process, exit immediately
-        std::process::exit(0);
+    if cfg!(not(target_os = "macos")) {
+        if exec_process().expect("failed to execute process") {
+            // Is helper process, exit immediately
+            std::process::exit(0);
+        }
     }
 
     #[cfg(target_os = "macos")]

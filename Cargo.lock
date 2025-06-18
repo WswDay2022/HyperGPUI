@@ -1129,7 +1129,7 @@ dependencies = [
 
 [[package]]
 name = "cargo-wef"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "askama",
@@ -9379,7 +9379,7 @@ checksum = "53a85b86a771b1c87058196170769dd264f66c0782acf1ae6cc51bfd64b39082"
 
 [[package]]
 name = "wef"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "bitflags 2.9.1",
  "cc",
@@ -9401,6 +9401,8 @@ name = "wef-example"
 version = "0.1.0"
 dependencies = [
  "embed-manifest",
+ "flume",
+ "futures-util",
  "gpui",
  "gpui-component",
  "gpui-webview",

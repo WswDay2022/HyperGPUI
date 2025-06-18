@@ -2,19 +2,36 @@
 
 #include <iostream>
 
+#include "app_callbacks.h"
 #include "external_pump.h"
 #include "include/cef_app.h"
 #include "include/wrapper/cef_message_router.h"
 #include "utils.h"
 
+const int64_t MAX_TIMER_DELAY = 1000 / 60;
+
 class WefApp : public CefApp, public CefBrowserProcessHandler {
   IMPLEMENT_REFCOUNTING(WefApp);
 
  private:
-  std::unique_ptr<ExternalPump> external_pump_;
+  std::optional<std::unique_ptr<ExternalPump>> external_pump_;
+  AppCallbacks callbacks_;
+  void* userdata_;
+  DestroyFn destroy_userdata_;
 
  public:
-  WefApp() : external_pump_(ExternalPump::Create()) {}
+  WefApp(AppCallbacks callbacks, void* userdata, DestroyFn destroy_userdata)
+      : callbacks_(callbacks),
+        userdata_(userdata),
+        destroy_userdata_(destroy_userdata),
+        external_pump_(std::make_optional(ExternalPump::Create())) {}
+
+  virtual ~WefApp() {
+    if (destroy_userdata_) {
+      destroy_userdata_(userdata_);
+      userdata_ = nullptr;
+    }
+  }
 
   /////////////////////////////////////////////////////////////////
   // CefApp methods
@@ -53,6 +70,11 @@ class WefApp : public CefApp, public CefBrowserProcessHandler {
   }
 
   void OnScheduleMessagePumpWork(int64_t delay_ms) override {
-    external_pump_->OnScheduleMessagePumpWork(delay_ms);
+    if (external_pump_) {
+      (*external_pump_)->OnScheduleMessagePumpWork(delay_ms);
+    }
+
+    callbacks_.on_schedule_message_pump_work(
+        userdata_, static_cast<int>(std::min(delay_ms, MAX_TIMER_DELAY)));
   }
 };

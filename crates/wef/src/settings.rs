@@ -1,21 +1,34 @@
 use std::ffi::CString;
 
-/// Browser process settings.
-#[derive(Debug, Default)]
-pub struct Settings {
+use crate::ApplicationHandler;
+
+/// Application settings.
+#[derive(Debug)]
+pub struct Settings<T> {
     pub(crate) locale: Option<CString>,
     pub(crate) cache_path: Option<CString>,
     pub(crate) root_cache_path: Option<CString>,
     pub(crate) browser_subprocess_path: Option<CString>,
+    pub(crate) external_message_pump: bool,
+    pub(crate) handler: T,
 }
 
-impl Settings {
+impl Settings<()> {
     /// Creates a new [`Settings`] instance with default values.
     #[inline]
     pub fn new() -> Self {
-        Default::default()
+        Self {
+            locale: None,
+            cache_path: None,
+            root_cache_path: None,
+            browser_subprocess_path: None,
+            external_message_pump: false,
+            handler: (),
+        }
     }
+}
 
+impl<T> Settings<T> {
     /// The locale string that will be passed to CEF.
     ///
     /// If `None` the default locale of "en-US" will be used.
@@ -71,5 +84,34 @@ impl Settings {
         self.browser_subprocess_path =
             Some(CString::new(path).expect("invalid browser subprocess path"));
         self
+    }
+
+    /// Enable to control browser process main (UI) thread message pump
+    /// scheduling via the
+    /// [`crate::ApplicationHandler::on_schedule_message_pump_work`]
+    /// callback.
+    ///
+    /// This option is recommended for use in combination with the
+    /// [`crate::do_message_work`] function in cases where the CEF message loop
+    /// must be integrated into an existing application message.
+    pub fn external_message_pump(mut self, enable: bool) -> Self {
+        self.external_message_pump = enable;
+        self
+    }
+
+    /// Sets the event handler.
+    #[inline]
+    pub fn handler<Q>(self, handler: Q) -> Settings<Q>
+    where
+        Q: ApplicationHandler,
+    {
+        Settings {
+            locale: self.locale,
+            cache_path: self.cache_path,
+            root_cache_path: self.root_cache_path,
+            browser_subprocess_path: self.browser_subprocess_path,
+            external_message_pump: self.external_message_pump,
+            handler,
+        }
     }
 }

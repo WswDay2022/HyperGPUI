@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use futures_util::StreamExt;
 use gpui::{
     App, AppContext, Application, Bounds, Context, Entity, IntoElement, ParentElement, Render,
     Styled, Timer, Window, WindowBounds, WindowOptions, div, px, size,
@@ -96,6 +97,25 @@ impl Render for Main {
 
 fn run() {
     Application::new().run(|cx: &mut App| {
+        if cfg!(target_os = "linux") {
+            cx.spawn(async move |cx| {
+                let (tx, rx) = flume::unbounded();
+
+                cx.background_spawn(async move {
+                    let mut timer = Timer::interval(Duration::from_millis(1000 / 60));
+                    while timer.next().await.is_some() {
+                        _ = tx.send_async(()).await;
+                    }
+                })
+                .detach();
+
+                while rx.recv_async().await.is_ok() {
+                    wef::do_message_work();
+                }
+            })
+            .detach();
+        }
+
         gpui_component::init(cx);
 
         let bounds = Bounds::centered(None, size(px(500.), px(500.0)), cx);

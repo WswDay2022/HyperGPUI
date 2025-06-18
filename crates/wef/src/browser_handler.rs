@@ -56,6 +56,9 @@ pub trait BrowserHandler {
     /// Called when the browser is created.
     fn on_created(&mut self) {}
 
+    /// Called when the browser is closed.
+    fn on_closed(&mut self) {}
+
     /// Called when the browser wants to show or hide the popup widget.
     fn on_popup_show(&mut self, show: bool) {}
 
@@ -222,6 +225,13 @@ pub(crate) extern "C" fn on_created<T: BrowserHandler>(userdata: *mut c_void) {
     unsafe {
         let state = &mut *(userdata as *mut BrowserState<T>);
         state.handler.on_created();
+    }
+}
+
+pub(crate) extern "C" fn on_closed<T: BrowserHandler>(userdata: *mut c_void) {
+    unsafe {
+        let state = &mut *(userdata as *mut BrowserState<T>);
+        state.handler.on_closed();
     }
 }
 

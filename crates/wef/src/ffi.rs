@@ -14,11 +14,19 @@ pub(crate) type wef_query_callback_t = c_void;
 type DestroyFn = extern "C" fn(*mut c_void);
 
 #[repr(C)]
+pub(crate) struct CAppCallbacks {
+    pub(crate) on_schedule_message_pump_work: extern "C" fn(*mut c_void, i32),
+}
+
+#[repr(C)]
 pub(crate) struct CSettings {
     pub(crate) locale: *const c_char,
     pub(crate) cache_path: *const c_char,
     pub(crate) root_cache_path: *const c_char,
     pub(crate) browser_subprocess_path: *const c_char,
+    pub(crate) callbacks: CAppCallbacks,
+    pub(crate) userdata: *mut c_void,
+    pub(crate) destroy_userdata: DestroyFn,
 }
 
 #[repr(C)]
@@ -56,7 +64,8 @@ pub(crate) struct CContextMenuParams {
 
 #[repr(C)]
 pub(crate) struct CBrowserCallbacks {
-    pub(crate) on_created: DestroyFn,
+    pub(crate) on_created: extern "C" fn(*mut c_void),
+    pub(crate) on_closed: extern "C" fn(*mut c_void),
     pub(crate) on_popup_show: extern "C" fn(*mut c_void, bool),
     pub(crate) on_popup_position: extern "C" fn(*mut c_void, *const Rect<i32>),
     pub(crate) on_paint: extern "C" fn(*mut c_void, i32, *const c_void, *const c_void, u32, u32),
@@ -131,9 +140,13 @@ unsafe extern "C" {
 
     pub(crate) unsafe fn wef_shutdown();
 
+    pub(crate) unsafe fn wef_do_message_work();
+
     pub(crate) unsafe fn wef_browser_create(
         settings: *const CBrowserSettings,
     ) -> *mut wef_browser_t;
+
+    pub(crate) unsafe fn wef_browser_close(browser: *mut wef_browser_t);
 
     pub(crate) unsafe fn wef_browser_destroy(browser: *mut wef_browser_t);
 

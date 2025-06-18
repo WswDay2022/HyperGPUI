@@ -1,6 +1,6 @@
 [package]
 name = "wef"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 authors = ["sunli <scott_s829@163.com>"]
 license = "Apache-2.0"

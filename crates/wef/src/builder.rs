@@ -122,6 +122,7 @@ where
     pub fn build(self) -> Browser {
         let callbacks = CBrowserCallbacks {
             on_created: crate::browser_handler::on_created::<T>,
+            on_closed: crate::browser_handler::on_closed::<T>,
             on_popup_show: crate::browser_handler::on_popup_show::<T>,
             on_popup_position: crate::browser_handler::on_popup_position::<T>,
             on_paint: crate::browser_handler::on_paint::<T>,

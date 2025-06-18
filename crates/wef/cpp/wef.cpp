@@ -1,7 +1,10 @@
-#include "wef.h"
+#if defined(_WIN32) || defined(_WIN64)
+#define NOMINMAX
+#endif
 
 #include <algorithm>
 #include <iostream>
+#include <optional>
 #include <vector>
 
 #include "app.h"
@@ -16,7 +19,6 @@
 #include "include/cef_render_handler.h"
 #include "include/cef_task.h"
 #include "include/wrapper/cef_closure_task.h"
-#include "shutdown_helper.h"
 
 const uint32_t ALL_MOUSE_BUTTONS = EVENTFLAG_LEFT_MOUSE_BUTTON;
 
@@ -25,6 +27,9 @@ struct WefSettings {
   const char* cache_path;
   const char* root_cache_path;
   const char* browser_subprocess_path;
+  AppCallbacks callbacks;
+  void* userdata;
+  DestroyFn destroy_userdata;
 };
 
 struct WefBrowserSettings {
@@ -38,6 +43,10 @@ struct WefBrowserSettings {
   BrowserCallbacks callbacks;
   void* userdata;
   DestroyFn destroy_userdata;
+};
+
+struct WefBrowser {
+  std::shared_ptr<BrowserSharedState> state;
 };
 
 inline void apply_key_modifiers(uint32_t& m, int modifiers) {
@@ -59,14 +68,13 @@ extern "C" {
 bool wef_init(const WefSettings* wef_settings) {
   CefSettings settings;
   settings.windowless_rendering_enabled = true;
+  settings.external_message_pump = true;
 
 #ifdef __APPLE__
   settings.no_sandbox = false;
 #else
   settings.no_sandbox = true;
 #endif
-
-  settings.external_message_pump = true;
 
   if (wef_settings->locale) {
     CefString(&settings.locale) = wef_settings->locale;
@@ -85,7 +93,9 @@ bool wef_init(const WefSettings* wef_settings) {
         wef_settings->browser_subprocess_path;
   }
 
-  CefRefPtr<WefApp> app(new WefApp());
+  CefRefPtr<WefApp> app(new WefApp(wef_settings->callbacks,
+                                   wef_settings->userdata,
+                                   wef_settings->destroy_userdata));
   return CefInitialize(CefMainArgs(), settings, app, nullptr);
 }
 
@@ -100,10 +110,9 @@ bool wef_exec_process(char* argv[], int argc) {
   return CefExecuteProcess(args, app, nullptr) >= 0;
 }
 
-void wef_shutdown() {
-  ShutdownHelper::getSingleton()->shutdown();
-  CefShutdown();
-}
+void wef_shutdown() { CefShutdown(); }
+
+void wef_do_message_work() { CefDoMessageLoopWork(); }
 
 WefBrowser* wef_browser_create(const WefBrowserSettings* settings) {
   CefWindowInfo window_info;
@@ -119,110 +128,117 @@ WefBrowser* wef_browser_create(const WefBrowserSettings* settings) {
   CefRefPtr<CefDictionaryValue> extra_info = CefDictionaryValue::Create();
   extra_info->SetString("__wef_inject_javascript", settings->inject_javascript);
 
-  CefRefPtr<WefClient> client(
-      new WefClient(wef_browser, settings->device_scale_factor, settings->width,
-                    settings->height, settings->callbacks, settings->userdata,
-                    settings->destroy_userdata));
-  CefBrowserHost::CreateBrowser(window_info, client, "about:blank",
+  wef_browser->state =
+      std::make_shared<BrowserSharedState>(BrowserCallbacksTarget{
+          settings->callbacks, settings->userdata, settings->destroy_userdata});
+  wef_browser->state->width = settings->width;
+  wef_browser->state->height = settings->height;
+  wef_browser->state->device_scale_factor = settings->device_scale_factor;
+
+  CefRefPtr<WefClient> client(new WefClient(wef_browser->state));
+  CefBrowserHost::CreateBrowser(window_info, client, settings->url,
                                 browser_settings, extra_info, nullptr);
-
-  wef_browser->url = settings->url;
-  wef_browser->focus = false;
-  wef_browser->client = client;
-  wef_browser->browser = std::nullopt;
-  wef_browser->cursorX = 0;
-  wef_browser->cursorY = 0;
-
-  ShutdownHelper::getSingleton()->browserCreated();
   return wef_browser;
 }
 
-void wef_browser_destroy(WefBrowser* browser) {
-  if (browser->browser) {
-    (*browser->browser)->GetHost()->CloseBrowser(false);
-  } else {
-    browser->deleteBrowser = true;
+void wef_browser_close(WefBrowser* browser) {
+  if (browser->state->browser_state == BrowserState::Creating) {
+    browser->state->browser_state = BrowserState::Closed;
+  } else if (browser->state->browser_state == BrowserState::Created) {
+    browser->state->browser_state = BrowserState::Closing;
+    (*browser->state->browser)->GetHost()->CloseBrowser(false);
   }
 }
 
+void wef_browser_destroy(WefBrowser* browser) {
+  if (browser->state->browser_state == BrowserState::Creating) {
+    browser->state->browser_state = BrowserState::Closed;
+  } else if (browser->state->browser_state == BrowserState::Created) {
+    browser->state->browser_state = BrowserState::Closed;
+    (*browser->state->browser)->GetHost()->CloseBrowser(true);
+  }
+  browser->state->callbacks_target.disable();
+  delete browser;
+}
+
 bool wef_browser_is_created(WefBrowser* browser) {
-  return browser->browser.has_value();
+  return browser->state->browser_state == BrowserState::Created;
 }
 
 void wef_browser_set_size(WefBrowser* browser, int width, int height) {
-  if (browser->client->setSize(width, height)) {
-    if (browser->browser) {
-      (*browser->browser)->GetHost()->WasResized();
-    }
+  browser->state->width = width;
+  browser->state->height = height;
+  if (browser->state->browser) {
+    (*browser->state->browser)->GetHost()->WasResized();
   }
 }
 
 void wef_browser_load_url(WefBrowser* browser, const char* url) {
-  if (strlen(url) > 0) {
-    if (!browser->browser) {
-      browser->url = url;
-      return;
-    }
-
-    CefString url_str = url;
-    CefPostTask(TID_UI,
-                base::BindOnce(&CefFrame::LoadURL,
-                               (*browser->browser)->GetMainFrame(), url_str));
+  if (strlen(url) == 0) {
+    return;
   }
+
+  if (!browser->state->browser) {
+    return;
+  }
+
+  CefPostTask(TID_UI, base::BindOnce(&CefFrame::LoadURL,
+                                     (*browser->state->browser)->GetMainFrame(),
+                                     CefString(url)));
 }
 
 bool wef_browser_can_go_forward(WefBrowser* browser) {
-  if (!browser->browser) {
+  if (!browser->state->browser) {
     return false;
   }
-  return (*browser->browser)->CanGoForward();
+  return (*browser->state->browser)->CanGoForward();
 }
 
 bool wef_browser_can_go_back(WefBrowser* browser) {
-  if (!browser->browser) {
+  if (!browser->state->browser) {
     return false;
   }
-  return (*browser->browser)->CanGoBack();
+  return (*browser->state->browser)->CanGoBack();
 }
 
 void wef_browser_go_forward(WefBrowser* browser) {
-  if (!browser->browser) {
+  if (!browser->state->browser) {
     return;
   }
-  (*browser->browser)->GoForward();
+  (*browser->state->browser)->GoForward();
 }
 
 void wef_browser_go_back(WefBrowser* browser) {
-  if (!browser->browser) {
+  if (!browser->state->browser) {
     return;
   }
-  (*browser->browser)->GoBack();
+  (*browser->state->browser)->GoBack();
 }
 
 void wef_browser_reload(WefBrowser* browser) {
-  if (!browser->browser) {
+  if (!browser->state->browser) {
     return;
   }
-  (*browser->browser)->Reload();
+  (*browser->state->browser)->Reload();
 }
 
 void wef_browser_reload_ignore_cache(WefBrowser* browser) {
-  if (!browser->browser) {
+  if (!browser->state->browser) {
     return;
   }
-  (*browser->browser)->ReloadIgnoreCache();
+  (*browser->state->browser)->ReloadIgnoreCache();
 }
 
 void wef_browser_send_mouse_click_event(WefBrowser* browser,
                                         int mouse_button_type, bool mouse_up,
                                         int click_count, int modifiers) {
-  if (!browser->browser) {
+  if (!browser->state->browser) {
     return;
   }
 
   CefMouseEvent mouse_event;
-  mouse_event.x = browser->cursorX;
-  mouse_event.y = browser->cursorY;
+  mouse_event.x = browser->state->cursorX;
+  mouse_event.y = browser->state->cursorY;
   mouse_event.modifiers = EVENTFLAG_NONE;
 
   CefBrowserHost::MouseButtonType btn_type;
@@ -241,15 +257,16 @@ void wef_browser_send_mouse_click_event(WefBrowser* browser,
   }
 
   apply_key_modifiers(mouse_event.modifiers, modifiers);
-  (*browser->browser)
+
+  (*browser->state->browser)
       ->GetHost()
       ->SendMouseClickEvent(mouse_event, btn_type, mouse_up,
-                            std::min(click_count, 3));
+                            std::max(click_count, 3));
 }
 
 void wef_browser_send_mouse_move_event(WefBrowser* browser, int x, int y,
                                        int modifiers) {
-  if (!browser->browser) {
+  if (!browser->state->browser) {
     return;
   }
 
@@ -258,30 +275,30 @@ void wef_browser_send_mouse_move_event(WefBrowser* browser, int x, int y,
   mouse_event.y = y;
   mouse_event.modifiers = ALL_MOUSE_BUTTONS;
   apply_key_modifiers(mouse_event.modifiers, modifiers);
-  (*browser->browser)->GetHost()->SendMouseMoveEvent(mouse_event, false);
+  (*browser->state->browser)->GetHost()->SendMouseMoveEvent(mouse_event, false);
 
-  browser->cursorX = mouse_event.x;
-  browser->cursorY = mouse_event.y;
+  browser->state->cursorX = mouse_event.x;
+  browser->state->cursorY = mouse_event.y;
 }
 
 void wef_browser_send_mouse_wheel_event(WefBrowser* browser, int delta_x,
                                         int delta_y) {
-  if (!browser->browser) {
+  if (!browser->state->browser) {
     return;
   }
 
   CefMouseEvent mouse_event;
-  mouse_event.x = browser->cursorX;
-  mouse_event.y = browser->cursorY;
+  mouse_event.x = browser->state->cursorX;
+  mouse_event.y = browser->state->cursorY;
   mouse_event.modifiers = ALL_MOUSE_BUTTONS;
-  (*browser->browser)
+  (*browser->state->browser)
       ->GetHost()
       ->SendMouseWheelEvent(mouse_event, delta_x, delta_y);
 }
 
 void wef_browser_send_key_event(WefBrowser* browser, bool is_down, int key_code,
                                 int modifiers) {
-  if (!browser->browser) {
+  if (!browser->state->browser) {
     return;
   }
 
@@ -294,11 +311,11 @@ void wef_browser_send_key_event(WefBrowser* browser, bool is_down, int key_code,
   key_event.native_key_code = key_code;
   key_event.modifiers = 0;
   apply_key_modifiers(key_event.modifiers, modifiers);
-  (*browser->browser)->GetHost()->SendKeyEvent(key_event);
+  (*browser->state->browser)->GetHost()->SendKeyEvent(key_event);
 }
 
 void wef_browser_send_char_event(WefBrowser* browser, char16_t ch) {
-  if (!browser->browser) {
+  if (!browser->state->browser) {
     return;
   }
 
@@ -308,93 +325,93 @@ void wef_browser_send_char_event(WefBrowser* browser, char16_t ch) {
   key_event.windows_key_code = static_cast<int>(ch);
   key_event.native_key_code = static_cast<int>(ch);
   key_event.character = static_cast<char16_t>(ch);
-  (*browser->browser)->GetHost()->SendKeyEvent(key_event);
+  (*browser->state->browser)->GetHost()->SendKeyEvent(key_event);
 }
 
 void wef_browser_ime_set_composition(WefBrowser* browser, const char* text,
                                      uint32_t cursor_begin,
                                      uint32_t cursor_end) {
-  if (!browser->browser) {
+  if (!browser->state->browser) {
     return;
   }
-  (*browser->browser)
+  (*browser->state->browser)
       ->GetHost()
       ->ImeSetComposition(text, {}, CefRange::InvalidRange(),
                           CefRange(cursor_begin, cursor_end));
 }
 
 void wef_browser_ime_commit(WefBrowser* browser, const char* text) {
-  if (!browser->browser) {
+  if (!browser->state->browser) {
     return;
   }
-  (*browser->browser)
+  (*browser->state->browser)
       ->GetHost()
       ->ImeCommitText(text, CefRange::InvalidRange(), 0);
 }
 
 WefFrame* wef_browser_get_main_frame(WefBrowser* browser) {
-  if (!browser->browser) {
+  if (!browser->state->browser) {
     return nullptr;
   }
-  auto main_frame = (*browser->browser)->GetMainFrame();
+  auto main_frame = (*browser->state->browser)->GetMainFrame();
   return main_frame ? new WefFrame{main_frame} : nullptr;
 }
 
 WefFrame* wef_browser_get_focused_frame(WefBrowser* browser) {
-  if (!browser->browser) {
+  if (!browser->state->browser) {
     return nullptr;
   }
-  auto frame = (*browser->browser)->GetFocusedFrame();
+  auto frame = (*browser->state->browser)->GetFocusedFrame();
   return frame ? new WefFrame{frame} : nullptr;
 }
 
 WefFrame* wef_browser_get_frame_by_name(WefBrowser* browser, const char* name) {
-  if (!browser->browser) {
+  if (!browser->state->browser) {
     return nullptr;
   }
-  auto frame = (*browser->browser)->GetFrameByName(name);
+  auto frame = (*browser->state->browser)->GetFrameByName(name);
   return frame ? new WefFrame{frame} : nullptr;
 }
 
 WefFrame* wef_browser_get_frame_by_identifier(WefBrowser* browser,
                                               const char* id) {
-  if (!browser->browser) {
+  if (!browser->state->browser) {
     return nullptr;
   }
-  auto frame = (*browser->browser)->GetFrameByIdentifier(id);
+  auto frame = (*browser->state->browser)->GetFrameByIdentifier(id);
   return frame ? new WefFrame{frame} : nullptr;
 }
 
 bool wef_browser_is_audio_muted(WefBrowser* browser, bool mute) {
-  if (browser->browser) {
+  if (browser->state->browser) {
     return false;
   }
-  return (*browser->browser)->GetHost()->IsAudioMuted();
+  return (*browser->state->browser)->GetHost()->IsAudioMuted();
 }
 
 void wef_browser_set_audio_mute(WefBrowser* browser, bool mute) {
-  if (browser->browser) {
+  if (browser->state->browser) {
     return;
   }
-  (*browser->browser)->GetHost()->SetAudioMuted(mute);
+  (*browser->state->browser)->GetHost()->SetAudioMuted(mute);
 }
 
 void wef_browser_find(WefBrowser* browser, const char* search_text,
                       bool forward, bool match_case, bool find_next) {
-  if (!browser->browser) {
+  if (!browser->state->browser) {
     return;
   }
-  (*browser->browser)
+  (*browser->state->browser)
       ->GetHost()
       ->Find(search_text, forward, match_case, find_next);
 }
 
 void wef_browser_set_focus(WefBrowser* browser, bool focus) {
-  if (!browser->browser) {
-    browser->focus = true;
+  if (!browser->state->browser) {
+    browser->state->focus = true;
     return;
   }
-  (*browser->browser)->GetHost()->SetFocus(focus);
+  (*browser->state->browser)->GetHost()->SetFocus(focus);
 }
 
 }  // extern "C"

@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::{rc::Rc, time::Duration};
 
 use image::{GenericImage, RgbaImage, buffer::ConvertBuffer};
 use softbuffer::Surface;
@@ -10,12 +10,17 @@ use winit::{
     application::ApplicationHandler,
     dpi::LogicalSize,
     event::{Ime, Modifiers, MouseScrollDelta, WindowEvent},
-    event_loop::{ActiveEventLoop, EventLoop},
+    event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy},
     keyboard::{ModifiersState, NamedKey},
     window::{Window, WindowId},
 };
 
 type BoxError = Box<dyn std::error::Error>;
+
+enum UserEvent {
+    WefMessagePump,
+    Exit,
+}
 
 struct State {
     scale_factor: f32,
@@ -23,7 +28,7 @@ struct State {
 }
 
 impl State {
-    fn new(window: Window) -> Result<Self, BoxError> {
+    fn new(event_loop_proxy: EventLoopProxy<UserEvent>, window: Window) -> Result<Self, BoxError> {
         let window = Rc::new(window);
         let inner_size = window.inner_size();
         let context = softbuffer::Context::new(window.clone())?;
@@ -48,6 +53,7 @@ impl State {
                 view_image: None,
                 popup_rect: Rect::default(),
                 popup_image: None,
+                event_loop_proxy,
             })
             .build();
         browser.set_focus(true);
@@ -59,20 +65,28 @@ impl State {
     }
 }
 
-#[derive(Default)]
 struct App {
+    event_loop_proxy: EventLoopProxy<UserEvent>,
     state: Option<State>,
     key_modifiers: KeyModifier,
 }
 
 impl App {
+    fn new(event_loop_proxy: EventLoopProxy<UserEvent>) -> Self {
+        Self {
+            event_loop_proxy,
+            state: None,
+            key_modifiers: KeyModifier::empty(),
+        }
+    }
+
     #[inline]
     fn browser(&self) -> Option<&Browser> {
         self.state.as_ref().map(|state| &state.browser)
     }
 }
 
-impl ApplicationHandler for App {
+impl ApplicationHandler<UserEvent> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let window = event_loop
             .create_window(
@@ -81,17 +95,29 @@ impl ApplicationHandler for App {
             .unwrap();
         window.set_ime_allowed(true);
 
-        self.state = Some(State::new(window).expect("create window"));
+        self.state =
+            Some(State::new(self.event_loop_proxy.clone(), window).expect("create window"));
+    }
+
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
+        match event {
+            UserEvent::WefMessagePump => wef::do_message_work(),
+            UserEvent::Exit => event_loop.exit(),
+        }
     }
 
     fn window_event(
         &mut self,
-        event_loop: &ActiveEventLoop,
+        _event_loop: &ActiveEventLoop,
         _window_id: WindowId,
         event: winit::event::WindowEvent,
     ) {
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested => {
+                if let Some(browser) = self.browser() {
+                    browser.close();
+                }
+            }
             WindowEvent::Resized(size) => {
                 if let Some(state) = &mut self.state {
                     state.browser.resize(wef::Size::new(
@@ -192,9 +218,14 @@ struct MyHandler {
     view_image: Option<RgbaImage>,
     popup_rect: Rect<LogicalUnit<i32>>,
     popup_image: Option<RgbaImage>,
+    event_loop_proxy: EventLoopProxy<UserEvent>,
 }
 
 impl BrowserHandler for MyHandler {
+    fn on_closed(&mut self) {
+        _ = self.event_loop_proxy.send_event(UserEvent::Exit);
+    }
+
     fn on_paint(
         &mut self,
         type_: PaintElementType,
@@ -302,8 +333,27 @@ fn convert_key_modifiers(modifiers: Modifiers) -> KeyModifier {
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let event_loop = EventLoop::new()?;
-    let mut app = App::default();
+    let event_loop = EventLoop::<UserEvent>::with_user_event().build()?;
+    let event_loop_proxy = event_loop.create_proxy();
+
+    if cfg!(target_os = "linux") {
+        std::thread::spawn({
+            let event_loop_proxy = event_loop_proxy.clone();
+            move || {
+                loop {
+                    std::thread::sleep(Duration::from_millis(1000 / 60));
+                    if event_loop_proxy
+                        .send_event(UserEvent::WefMessagePump)
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            }
+        });
+    }
+
+    let mut app = App::new(event_loop_proxy);
     event_loop.run_app(&mut app)?;
     Ok(())
 }

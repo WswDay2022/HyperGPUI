@@ -28,6 +28,17 @@ impl Browser {
         BrowserBuilder::new()
     }
 
+    /// Closes the browser.
+    ///
+    /// When the browser has been closed, the callback
+    /// [`crate::BrowserHandler::on_closed`] will be called.
+    ///
+    /// If the browser is not created or in creating state, this method does
+    /// nothing.
+    pub fn close(&self) {
+        unsafe { wef_browser_close(self.wef_browser) }
+    }
+
     /// Returns `true` if the browser is created.
     pub fn is_created(&self) -> bool {
         unsafe { wef_browser_is_created(self.wef_browser) }
