@@ -198,8 +198,6 @@ impl Render for ScrollableStory {
         _: &mut gpui::Window,
         cx: &mut gpui::Context<Self>,
     ) -> impl gpui::IntoElement {
-        let view = cx.entity().clone();
-
         v_flex()
             .size_full()
             .gap_4()
@@ -273,13 +271,8 @@ impl Render for ScrollableStory {
                                     .right_0()
                                     .bottom_0()
                                     .child(
-                                        Scrollbar::both(
-                                            view.entity_id(),
-                                            self.scroll_state.clone(),
-                                            self.scroll_handle.clone(),
-                                            self.scroll_size,
-                                        )
-                                        .axis(self.axis),
+                                        Scrollbar::both(&self.scroll_state, &self.scroll_handle)
+                                            .axis(self.axis),
                                     )
                             }),
                     ),
@@ -298,7 +291,7 @@ impl Render for ScrollableStory {
                             .p_3()
                             .w(self.test_width)
                             .id("test-1")
-                            .scrollable(cx.entity().entity_id(), Axis::Vertical)
+                            .scrollable(Axis::Vertical)
                             .gap_1()
                             .child("Scrollable Example")
                             .children(self.items.iter().take(500).map(|item| {
