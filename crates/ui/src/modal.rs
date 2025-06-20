@@ -355,8 +355,8 @@ impl RenderOnce for Modal {
         let x = bounds.center().x - self.width / 2.;
         let border_radius = (cx.theme().radius * 2.).min(px(20.));
 
-        let mut padding_right = px(16.);
-        let mut padding_left = px(16.);
+        let mut padding_right = px(24.);
+        let mut padding_left = px(24.);
         if let Some(pl) = self.style.padding.left {
             padding_left = pl.to_pixels(self.width.into(), window.rem_size());
         }
@@ -400,7 +400,7 @@ impl RenderOnce for Modal {
                             .rounded(border_radius)
                             .shadow_xl()
                             .min_h_24()
-                            .py_4()
+                            .py_6()
                             .gap_4()
                             .refine_style(&self.style)
                             .px_0()
@@ -458,8 +458,8 @@ impl RenderOnce for Modal {
                                 this.child(
                                     Button::new("close")
                                         .absolute()
-                                        .top_2()
-                                        .right_2()
+                                        .top_4()
+                                        .right_4()
                                         .small()
                                         .ghost()
                                         .icon(IconName::Close)
