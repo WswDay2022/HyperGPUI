@@ -709,7 +709,7 @@ where
             .relative()
             .child(
                 div()
-                    .id(ElementId::Name(format!("{}-input", self.id).into()))
+                    .id("input")
                     .relative()
                     .flex()
                     .items_center()
@@ -722,8 +722,6 @@ where
                     .map(|this| if self.disabled { this } else { this })
                     .overflow_hidden()
                     .input_text_size(self.size)
-                    .flex_none()
-                    .w_full()
                     .when(outline_visible, |this| this.focused_border(cx))
                     .input_size(self.size)
                     .refine_style(&self.style)
