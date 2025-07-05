@@ -43,6 +43,11 @@ pub enum InputMode {
         rows: usize,
         height: Option<DefiniteLength>,
     },
+    AutoGrow {
+        rows: usize,
+        min_rows: usize,
+        max_rows: usize,
+    },
     CodeEditor {
         tab: TabSize,
         rows: usize,
@@ -53,16 +58,31 @@ pub enum InputMode {
         highlighter: Rc<RefCell<Option<SyntaxHighlighter>>>,
         markers: Rc<Vec<Marker>>,
     },
-    AutoGrow {
-        rows: usize,
-        min_rows: usize,
-        max_rows: usize,
-    },
 }
 
+#[allow(unused)]
 impl InputMode {
+    #[inline]
+    pub(super) fn is_single_line(&self) -> bool {
+        matches!(self, InputMode::SingleLine)
+    }
+
+    #[inline]
     pub(super) fn is_code_editor(&self) -> bool {
         matches!(self, InputMode::CodeEditor { .. })
+    }
+
+    #[inline]
+    pub(super) fn is_auto_grow(&self) -> bool {
+        matches!(self, InputMode::AutoGrow { .. })
+    }
+
+    #[inline]
+    pub(super) fn is_multi_line(&self) -> bool {
+        matches!(
+            self,
+            InputMode::MultiLine { .. } | InputMode::AutoGrow { .. } | InputMode::CodeEditor { .. }
+        )
     }
 
     pub(super) fn set_rows(&mut self, new_rows: usize) {
@@ -162,7 +182,7 @@ impl InputMode {
     pub(super) fn update_highlighter(
         &mut self,
         selected_range: &Range<usize>,
-        full_text: SharedString,
+        full_text: &SharedString,
         new_text: &str,
         cx: &mut App,
     ) {

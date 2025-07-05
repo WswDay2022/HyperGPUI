@@ -244,7 +244,7 @@ impl RenderOnce for OtpInput {
 
             groups[group_ix].push(
                 h_flex()
-                    .id(("input-otp", ix))
+                    .id(ix)
                     .border_1()
                     .border_color(cx.theme().input)
                     .bg(cx.theme().background)
@@ -292,6 +292,7 @@ impl RenderOnce for OtpInput {
         }
 
         v_flex()
+            .id(("otp-input", self.state.entity_id()))
             .track_focus(&self.state.read(cx).focus_handle)
             .on_key_down(window.listener_for(&self.state, OtpState::on_key_down))
             .items_center()
