@@ -13,7 +13,7 @@ pub struct Example {
     _subscribe: Subscription,
 }
 
-const EXAMPLE: &str = include_str!("./html.html");
+const EXAMPLE: &str = include_str!("./fixtures/test.html");
 
 impl Example {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -87,6 +87,6 @@ fn main() {
         story::init(cx);
         cx.activate(true);
 
-        story::create_new_window("HTML Example", Example::view, cx);
+        story::create_new_window("HTML Render (native)", Example::view, cx);
     });
 }
