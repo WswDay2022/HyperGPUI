@@ -138,11 +138,13 @@ actions!(story, [TestAction, Tab, TabPrev]);
 
 pub struct AppState {
     pub invisible_panels: Entity<Vec<SharedString>>,
+    pub theme_name: Option<SharedString>,
 }
 impl AppState {
     fn init(cx: &mut App) {
         let state = Self {
             invisible_panels: cx.new(|_| Vec::new()),
+            theme_name: None,
         };
         cx.set_global::<AppState>(state);
     }
@@ -260,6 +262,7 @@ pub fn init(cx: &mut App) {
 
     gpui_component::init(cx);
     AppState::init(cx);
+    themes::init(cx);
     input_story::init(cx);
     number_input_story::init(cx);
     textarea_story::init(cx);

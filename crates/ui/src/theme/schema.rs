@@ -1,10 +1,15 @@
+use std::sync::Arc;
+
 use anyhow::Result;
 use gpui::{Hsla, SharedString};
 use palette::FromColor as _;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{Colorize, Theme, ThemeColor, ThemeMode};
+use crate::{
+    highlighter::{HighlightTheme, HighlightThemeStyle},
+    Colorize, Theme, ThemeColor, ThemeMode,
+};
 
 /// Represents a theme configuration.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
@@ -23,6 +28,10 @@ pub struct ThemeConfig {
     pub font_size: Option<f32>,
     /// The colors of the theme.
     pub colors: ThemeConfigColors,
+    /// The highlight theme, this part is combilbility with `style` section in Zed theme.
+    ///
+    /// https://github.com/zed-industries/zed/blob/f50041779dcfd7a76c8aec293361c60c53f02d51/assets/themes/ayu/ayu.json#L9
+    pub highlight: Option<HighlightThemeStyle>,
 }
 
 #[derive(Debug, Default, Clone, JsonSchema, Serialize, Deserialize)]
@@ -401,6 +410,8 @@ impl Theme {
             };
         }
 
+        self.mode = config.mode;
+
         // Base colors for fallback
         apply_color!(red);
         apply_color!(red_light, fallback = self.red.opacity(0.8));
@@ -524,6 +535,21 @@ impl Theme {
             self.dark_theme = self.colors;
         } else {
             self.light_theme = self.colors;
+        }
+
+        if let Some(style) = &config.highlight {
+            let highlight_theme = Arc::new(HighlightTheme {
+                name: config.name.to_string(),
+                author: config.author.clone().unwrap_or_default().to_string(),
+                appearance: self.mode,
+                style: style.clone(),
+            });
+            self.highlight_theme = highlight_theme.clone();
+            if config.mode.is_dark() {
+                self.dark_highlight_theme = highlight_theme;
+            } else {
+                self.light_highlight_theme = highlight_theme;
+            }
         }
     }
 }
