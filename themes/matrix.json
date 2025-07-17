@@ -53,13 +53,13 @@
         "tab_bar.background": "#0D0208",
         "title_bar.background": "#020d02",
         "title_bar.border": "#12410E",
-        "color.red": "#23755a",
-        "color.green": "#82d967",
-        "color.yellow": "#ffd700",
-        "color.blue": "#3f5242",
-        "color.magenta": "#FF00FF",
-        "color.magenta.light": "#FF00FF22",
-        "color.cyan": "#50b45a"
+        "base.red": "#23755a",
+        "base.green": "#82d967",
+        "base.yellow": "#ffd700",
+        "base.blue": "#3f5242",
+        "base.magenta": "#FF00FF",
+        "base.magenta.light": "#FF00FF22",
+        "base.cyan": "#50b45a"
       },
       "highlight": {
         "editor.foreground": "#88FF88",

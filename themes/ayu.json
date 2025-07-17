@@ -14,6 +14,7 @@
         "accordion.background": "#FAFAFA",
         "accordion.hover.background": "#D9DCE3",
         "background": "#fafafa",
+        "foreground": "#5C6773",
         "border": "#E6E8EA",
         "ring": "#FF9940",
         "card.background": "#F3F4F5",
