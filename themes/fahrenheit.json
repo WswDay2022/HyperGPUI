@@ -11,7 +11,6 @@
         "accent.background": "#171717",
         "accent.foreground": "#FFFFCE",
         "accordion.active.background": "#1e1e1e",
-        "accordion.background": "#2e2e2e",
         "accordion.hover.background": "#3e3e3e",
         "background": "#000000",
         "border": "#252525",
@@ -51,8 +50,8 @@
         "base.yellow.light": "#c9b536",
         "base.blue": "#022d72",
         "base.blue.light": "#0551cb",
-        "base.magenta": "#3a1d75",
-        "base.magenta.light": "#6c36c9",
+        "base.magenta": "#3a286c",
+        "base.magenta.light": "#58197a",
         "base.cyan": "#027272",
         "base.cyan.light": "#36c9c9"
       },
