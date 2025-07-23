@@ -804,9 +804,34 @@ impl InputState {
         self.mask_pattern.unmask(&self.text).into()
     }
 
-    /// Return the line and column (1-based) of the cursor.
+    /// Return the (1-based) line and column of the cursor.
     pub fn line_column(&self) -> LineColumn {
         self.text_wrapper.line_column(self.cursor().offset)
+    }
+
+    /// Set (1-based) line and column of the cursor.
+    ///
+    /// This will move the cursor to the specified line and column, and update the selection range.
+    ///
+    /// - The `column` is optional, if it is `None`, it will return the start of the line.
+    /// - If the `line` is 0, it will return 0.
+    /// - If the `line` is greater than the number of lines, it will return
+    ///   the length of the text.
+    ///
+    /// Ignore, if the line, column is invalid.
+    pub fn go_to_line(
+        &mut self,
+        line: usize,
+        column: Option<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(offset) = self
+            .text_wrapper
+            .offset_for_line_column(line, column.unwrap_or(1))
+        {
+            self.move_to(Cursor::new(offset), window, cx);
+        }
     }
 
     /// Focus the input field.
@@ -1319,6 +1344,9 @@ impl InputState {
             // Add newline and indent
             let new_line_text = format!("\n{}", indent);
             self.replace_text_in_range(None, &new_line_text, window, cx);
+        } else {
+            // Single line input, just emit the event (e.g.: In a modal dialog to confirm).
+            cx.propagate();
         }
 
         cx.emit(InputEvent::PressEnter {
