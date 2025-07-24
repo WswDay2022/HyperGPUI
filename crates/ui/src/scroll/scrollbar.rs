@@ -69,7 +69,7 @@ impl ScrollHandleOffsetable for ScrollHandle {
     }
 
     fn content_size(&self) -> Size<Pixels> {
-        self.max_offset()
+        self.max_offset() + self.bounds().size
     }
 }
 
@@ -87,7 +87,8 @@ impl ScrollHandleOffsetable for UniformListScrollHandle {
     }
 
     fn content_size(&self) -> Size<Pixels> {
-        self.0.borrow().base_handle.max_offset()
+        let base_handle = &self.0.borrow().base_handle;
+        base_handle.max_offset() + base_handle.bounds().size
     }
 }
 
