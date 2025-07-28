@@ -2,9 +2,9 @@ use std::time::Duration;
 
 use fake::Fake;
 use gpui::{
-    actions, div, px, App, AppContext, Context, ElementId, Entity, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, ParentElement, Render, RenderOnce, SharedString, Styled,
-    Subscription, Task, Timer, Window,
+    actions, div, prelude::FluentBuilder as _, px, App, AppContext, Context, Edges, ElementId,
+    Entity, FocusHandle, Focusable, InteractiveElement, IntoElement, ParentElement, Render,
+    RenderOnce, SharedString, Styled, Subscription, Task, Timer, Window,
 };
 
 use gpui_component::{
@@ -13,7 +13,7 @@ use gpui_component::{
     h_flex,
     label::Label,
     list::{List, ListDelegate, ListEvent, ListItem},
-    v_flex, ActiveTheme, Sizable,
+    v_flex, ActiveTheme, Selectable, Sizable,
 };
 
 actions!(list_story, [SelectedCompany]);
@@ -65,6 +65,17 @@ impl CompanyListItem {
     }
 }
 
+impl Selectable for CompanyListItem {
+    fn selected(mut self, selected: bool) -> Self {
+        self.selected = selected;
+        self
+    }
+
+    fn is_selected(&self) -> bool {
+        self.selected
+    }
+}
+
 impl RenderOnce for CompanyListItem {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let text_color = if self.selected {
@@ -88,10 +99,16 @@ impl RenderOnce for CompanyListItem {
         };
 
         self.base
-            .px_3()
+            .px_2()
             .py_1()
             .overflow_x_hidden()
             .bg(bg_color)
+            .border_1()
+            .border_color(bg_color)
+            .when(self.selected, |this| {
+                this.border_color(cx.theme().list_active_border)
+            })
+            .rounded(cx.theme().radius)
             .child(
                 h_flex()
                     .items_center()
@@ -283,10 +300,9 @@ impl ListStory {
             eof: false,
         };
 
-        let company_list = cx.new(|cx| List::new(delegate, window, cx));
-        // company_list.update(cx, |list, cx| {
-        //     list.set_selected_index(Some(3), cx);
-        // });
+        let company_list =
+            cx.new(|cx| List::new(delegate, window, cx).paddings(Edges::all(px(8.))));
+
         let _subscriptions =
             vec![
                 cx.subscribe(&company_list, |_, _, ev: &ListEvent, _| match ev {

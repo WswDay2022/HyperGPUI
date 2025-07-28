@@ -5,8 +5,8 @@ use crate::{
     ActiveTheme,
 };
 use gpui::{
-    div, point, px, App, Axis, BoxShadow, DefiniteLength, Div, Edges, Element, ElementId,
-    FocusHandle, Hsla, Pixels, Refineable, StyleRefinement, Styled, Window,
+    div, point, px, App, Axis, BoxShadow, DefiniteLength, Div, Edges, Element, FocusHandle, Hsla,
+    Pixels, Refineable, StyleRefinement, Styled, Window,
 };
 use serde::{Deserialize, Serialize};
 
@@ -338,14 +338,16 @@ impl From<Pixels> for Size {
 
 /// A trait for defining element that can be selected.
 pub trait Selectable: Sized {
-    /// Returns the element id of the element.
-    fn element_id(&self) -> &ElementId;
-
     /// Set the selected state of the element.
     fn selected(self, selected: bool) -> Self;
 
     /// Returns true if the element is selected.
     fn is_selected(&self) -> bool;
+
+    /// Set is the element mouse right clicked, default do nothing.
+    fn secondary_selected(self, _: bool) -> Self {
+        self
+    }
 }
 
 /// A trait for defining element that can be disabled.

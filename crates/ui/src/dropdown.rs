@@ -1,9 +1,9 @@
 use gpui::{
     anchored, canvas, deferred, div, prelude::FluentBuilder, px, rems, AnyElement, App, AppContext,
-    Bounds, ClickEvent, Context, DismissEvent, ElementId, Empty, Entity, EventEmitter, FocusHandle,
-    Focusable, InteractiveElement, IntoElement, KeyBinding, Length, ParentElement, Pixels, Render,
-    RenderOnce, SharedString, StatefulInteractiveElement, StyleRefinement, Styled, Subscription,
-    Task, WeakEntity, Window,
+    Bounds, ClickEvent, Context, DismissEvent, Edges, ElementId, Empty, Entity, EventEmitter,
+    FocusHandle, Focusable, InteractiveElement, IntoElement, KeyBinding, Length, ParentElement,
+    Pixels, Render, RenderOnce, SharedString, StatefulInteractiveElement, StyleRefinement, Styled,
+    Subscription, Task, WeakEntity, Window,
 };
 use rust_i18n::t;
 
@@ -11,8 +11,9 @@ use crate::{
     actions::{Cancel, Confirm, SelectNext, SelectPrev},
     h_flex,
     input::clear_button,
-    list::{List, ListDelegate, ListItem},
-    v_flex, ActiveTheme, Disableable as _, Icon, IconName, Sizable, Size, StyleSized, StyledExt,
+    list::{List, ListDelegate},
+    v_flex, ActiveTheme, Disableable, Icon, IconName, Selectable, Sizable, Size, StyleSized,
+    StyledExt,
 };
 
 #[derive(Clone)]
@@ -135,7 +136,7 @@ impl<D> ListDelegate for DropdownListDelegate<D>
 where
     D: DropdownDelegate + 'static,
 {
-    type Item = ListItem;
+    type Item = DropdownListItem;
 
     fn items_count(&self, _: &App) -> usize {
         self.delegate.len()
@@ -156,11 +157,9 @@ where
             .map_or(Size::Medium, |dropdown| dropdown.read(cx).size);
 
         if let Some(item) = self.delegate.get(ix) {
-            let list_item = ListItem::new(("list-item", ix))
-                .check_icon(IconName::Check)
+            let list_item = DropdownListItem::new(ix)
                 .selected(selected)
-                .input_text_size(size)
-                .list_size(size)
+                .with_size(size)
                 .child(div().whitespace_nowrap().child(item.title().to_string()));
             Some(list_item)
         } else {
@@ -354,6 +353,7 @@ where
         let list = cx.new(|cx| {
             let mut list = List::new(delegate, window, cx)
                 .max_h(rems(20.))
+                .paddings(Edges::all(px(4.)))
                 .reset_on_cancel(false);
             if !searchable {
                 list = list.no_query();
@@ -833,5 +833,102 @@ where
                     .with_priority(1),
                 )
             })
+    }
+}
+
+#[derive(IntoElement)]
+struct DropdownListItem {
+    id: ElementId,
+    size: Size,
+    style: StyleRefinement,
+    selected: bool,
+    disabled: bool,
+    children: Vec<AnyElement>,
+}
+
+impl DropdownListItem {
+    pub fn new(ix: usize) -> Self {
+        Self {
+            id: ("dropdown-item", ix).into(),
+            size: Size::default(),
+            style: StyleRefinement::default(),
+            selected: false,
+            disabled: false,
+            children: Vec::new(),
+        }
+    }
+}
+
+impl ParentElement for DropdownListItem {
+    fn extend(&mut self, elements: impl IntoIterator<Item = AnyElement>) {
+        self.children.extend(elements);
+    }
+}
+
+impl Disableable for DropdownListItem {
+    fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
+        self
+    }
+}
+
+impl Selectable for DropdownListItem {
+    fn selected(mut self, selected: bool) -> Self {
+        self.selected = selected;
+        self
+    }
+
+    fn is_selected(&self) -> bool {
+        self.selected
+    }
+}
+
+impl Sizable for DropdownListItem {
+    fn with_size(mut self, size: impl Into<Size>) -> Self {
+        self.size = size.into();
+        self
+    }
+}
+
+impl Styled for DropdownListItem {
+    fn style(&mut self) -> &mut StyleRefinement {
+        &mut self.style
+    }
+}
+
+impl RenderOnce for DropdownListItem {
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        h_flex()
+            .id(self.id)
+            .relative()
+            .gap_x_1()
+            .py_1()
+            .px_2()
+            .rounded(cx.theme().radius)
+            .text_base()
+            .text_color(cx.theme().foreground)
+            .relative()
+            .items_center()
+            .justify_between()
+            .input_text_size(self.size)
+            .list_size(self.size)
+            .refine_style(&self.style)
+            .when(!self.disabled, |this| {
+                this.when(!self.selected, |this| {
+                    this.hover(|this| this.bg(cx.theme().accent.alpha(0.7)))
+                })
+            })
+            .when(self.selected, |this| this.bg(cx.theme().accent))
+            .when(self.disabled, |this| {
+                this.text_color(cx.theme().muted_foreground)
+            })
+            .child(
+                h_flex()
+                    .w_full()
+                    .items_center()
+                    .justify_between()
+                    .gap_x_1()
+                    .child(div().w_full().children(self.children)),
+            )
     }
 }

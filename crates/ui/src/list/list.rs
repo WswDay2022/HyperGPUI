@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use crate::actions::{Cancel, Confirm, SelectNext, SelectPrev};
 use crate::input::InputState;
-use crate::{h_flex, Icon, Sizable as _};
+use crate::{h_flex, Icon, Selectable, Sizable as _, StyledExt};
 use crate::{
     input::{InputEvent, TextInput},
     scroll::{Scrollbar, ScrollbarState},
@@ -14,7 +14,9 @@ use gpui::{
     Focusable, InteractiveElement, IntoElement, KeyBinding, Length, ListSizingBehavior,
     MouseButton, ParentElement, Render, Styled, Task, UniformListScrollHandle, Window,
 };
-use gpui::{px, App, Context, EventEmitter, MouseDownEvent, ScrollStrategy, Subscription};
+use gpui::{
+    App, Context, Edges, EventEmitter, MouseDownEvent, Pixels, ScrollStrategy, Subscription,
+};
 use rust_i18n::t;
 use smol::Timer;
 
@@ -44,7 +46,7 @@ pub enum ListEvent {
 /// A delegate for the List.
 #[allow(unused)]
 pub trait ListDelegate: Sized + 'static {
-    type Item: IntoElement;
+    type Item: Selectable + IntoElement;
 
     /// When Query Input change, this method will be called.
     /// You can perform search here.
@@ -82,7 +84,8 @@ pub trait ListDelegate: Sized + 'static {
 
     /// Returns Some(AnyElement) to render the initial state of the list.
     ///
-    /// This can be used to show a view for the list before the user has interacted with it.
+    /// This can be used to show a view for the list before the user has
+    /// interacted with it.
     ///
     /// For example: The last search results, or the last selected item.
     ///
@@ -100,7 +103,8 @@ pub trait ListDelegate: Sized + 'static {
         false
     }
 
-    /// Returns a Element to show when loading, default is built-in Skeleton loading view.
+    /// Returns a Element to show when loading, default is built-in Skeleton
+    /// loading view.
     fn render_loading(
         &self,
         window: &mut Window,
@@ -117,7 +121,8 @@ pub trait ListDelegate: Sized + 'static {
         cx: &mut Context<List<Self>>,
     );
 
-    /// Set the confirm and give the selected index, this is means user have clicked the item or pressed Enter.
+    /// Set the confirm and give the selected index,
+    /// this is means user have clicked the item or pressed Enter.
     ///
     /// This will always to `set_selected_index` before confirm.
     fn confirm(&mut self, secondary: bool, window: &mut Window, cx: &mut Context<List<Self>>) {}
@@ -132,8 +137,10 @@ pub trait ListDelegate: Sized + 'static {
         true
     }
 
-    /// Returns a threshold value (n rows), of course, when scrolling to the bottom,
-    /// the remaining number of rows triggers `load_more`.
+    /// Returns a threshold value (n rows), of course,
+    /// when scrolling to the bottom, the remaining number of rows
+    /// triggers `load_more`.
+    ///
     /// This should smaller than the total number of first load rows.
     ///
     /// Default: 20 rows
@@ -146,7 +153,8 @@ pub trait ListDelegate: Sized + 'static {
     /// This will performed in a background task.
     ///
     /// This is always called when the table is near the bottom,
-    /// so you must check if there is more data to load or lock the loading state.
+    /// so you must check if there is more data to load or lock
+    /// the loading state.
     fn load_more(&mut self, window: &mut Window, cx: &mut Context<List<Self>>) {}
 }
 
@@ -154,6 +162,7 @@ pub struct List<D: ListDelegate> {
     focus_handle: FocusHandle,
     delegate: D,
     max_height: Option<Length>,
+    paddings: Edges<Pixels>,
     query_input: Option<Entity<InputState>>,
     last_query: Option<String>,
     selectable: bool,
@@ -163,7 +172,7 @@ pub struct List<D: ListDelegate> {
     scroll_state: ScrollbarState,
     pub(crate) size: Size,
     selected_index: Option<usize>,
-    right_clicked_index: Option<usize>,
+    mouse_right_clicked_index: Option<usize>,
     reset_on_cancel: bool,
     _search_task: Task<()>,
     _load_more_task: Task<()>,
@@ -175,11 +184,8 @@ where
     D: ListDelegate,
 {
     pub fn new(delegate: D, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let query_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                // .prefix(|_, cx| Icon::new(IconName::Search).text_color(cx.theme().muted_foreground))
-                .placeholder(t!("List.search_placeholder"))
-        });
+        let query_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder(t!("List.search_placeholder")));
 
         let _query_input_subscription =
             cx.subscribe_in(&query_input, window, Self::on_query_input_event);
@@ -190,7 +196,7 @@ where
             query_input: Some(query_input),
             last_query: None,
             selected_index: None,
-            right_clicked_index: None,
+            mouse_right_clicked_index: None,
             vertical_scroll_handle: UniformListScrollHandle::new(),
             scroll_state: ScrollbarState::default(),
             max_height: None,
@@ -199,6 +205,7 @@ where
             querying: false,
             size: Size::default(),
             reset_on_cancel: true,
+            paddings: Edges::default(),
             _search_task: Task::ready(()),
             _load_more_task: Task::ready(()),
             _query_input_subscription,
@@ -260,7 +267,8 @@ where
         self.focus_handle(cx).focus(window);
     }
 
-    /// Set the selected index of the list, this will also scroll to the selected item.
+    /// Set the selected index of the list,
+    /// this will also scroll to the selected item.
     fn _set_selected_index(
         &mut self,
         ix: Option<usize>,
@@ -272,7 +280,8 @@ where
         self.scroll_to_selected_item(window, cx);
     }
 
-    /// Set the selected index of the list, this method will not scroll to the selected item.
+    /// Set the selected index of the list,
+    /// this method will not scroll to the selected item.
     pub fn set_selected_index(
         &mut self,
         ix: Option<usize>,
@@ -315,6 +324,12 @@ where
             self.vertical_scroll_handle
                 .scroll_to_item(ix, ScrollStrategy::Top);
         }
+    }
+
+    /// Set paddings for the list.
+    pub fn paddings(mut self, paddings: Edges<Pixels>) -> Self {
+        self.paddings = paddings;
+        self
     }
 
     fn on_query_input_event(
@@ -375,7 +390,8 @@ where
         cx.notify();
     }
 
-    /// Dispatch delegate's `load_more` method when the visible range is near the end.
+    /// Dispatch delegate's `load_more` method when the
+    /// visible range is near the end.
     fn load_more_if_need(
         &mut self,
         items_count: usize,
@@ -384,7 +400,8 @@ where
         cx: &mut Context<Self>,
     ) {
         let threshold = self.delegate.load_more_threshold();
-        // Securely handle subtract logic to prevent attempt to subtract with overflow
+        // Securely handle subtract logic to prevent attempt
+        // to subtract with overflow
         if visible_end >= items_count.saturating_sub(threshold) {
             if !self.delegate.can_load_more(cx) {
                 return;
@@ -500,31 +517,21 @@ where
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let selected = self.selected_index == Some(ix);
-        let right_clicked = self.right_clicked_index == Some(ix);
+        let mouse_right_clicked = self.mouse_right_clicked_index == Some(ix);
 
         div()
             .id("list-item")
             .w_full()
             .relative()
-            .children(self.delegate.render_item(ix, window, cx))
+            .children(self.delegate.render_item(ix, window, cx).map(|item| {
+                item.selected(selected)
+                    .secondary_selected(mouse_right_clicked)
+            }))
             .when(self.selectable, |this| {
-                this.when(selected || right_clicked, |this| {
-                    this.child(
-                        div()
-                            .absolute()
-                            .top(px(0.))
-                            .left(px(0.))
-                            .right(px(0.))
-                            .bottom(px(0.))
-                            .when(selected, |this| this.bg(cx.theme().list_active))
-                            .border_1()
-                            .border_color(cx.theme().list_active_border),
-                    )
-                })
-                .on_mouse_down(
+                this.on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, ev: &MouseDownEvent, window, cx| {
-                        this.right_clicked_index = None;
+                        this.mouse_right_clicked_index = None;
                         this.selected_index = Some(ix);
                         this.on_action_confirm(
                             &Confirm {
@@ -538,11 +545,54 @@ where
                 .on_mouse_down(
                     MouseButton::Right,
                     cx.listener(move |this, _, _, cx| {
-                        this.right_clicked_index = Some(ix);
+                        this.mouse_right_clicked_index = Some(ix);
                         cx.notify();
                     }),
                 )
             })
+    }
+
+    fn render_items(
+        &mut self,
+        items_count: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let sizing_behavior = if self.max_height.is_some() {
+            ListSizingBehavior::Infer
+        } else {
+            ListSizingBehavior::Auto
+        };
+
+        v_flex()
+            .flex_grow()
+            .relative()
+            .when_some(self.max_height, |this, h| this.max_h(h))
+            .overflow_hidden()
+            .when(items_count == 0, |this| {
+                this.child(self.delegate().render_empty(window, cx))
+            })
+            .when(items_count > 0, |this| {
+                this.child(
+                    uniform_list(
+                        "uniform-list",
+                        items_count,
+                        cx.processor(move |list, visible_range: Range<usize>, window, cx| {
+                            list.load_more_if_need(items_count, visible_range.end, window, cx);
+
+                            visible_range
+                                .map(|ix| list.render_list_item(ix, window, cx))
+                                .collect::<Vec<_>>()
+                        }),
+                    )
+                    .flex_grow()
+                    .paddings(self.paddings)
+                    .with_sizing_behavior(sizing_behavior)
+                    .track_scroll(self.vertical_scroll_handle.clone())
+                    .into_any_element(),
+                )
+            })
+            .children(self.render_scrollbar(window, cx))
     }
 }
 
@@ -564,14 +614,8 @@ where
     D: ListDelegate,
 {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let vertical_scroll_handle = self.vertical_scroll_handle.clone();
         let items_count = self.delegate.items_count(cx);
         let loading = self.delegate.loading(cx);
-        let sizing_behavior = if self.max_height.is_some() {
-            ListSizingBehavior::Infer
-        } else {
-            ListSizingBehavior::Auto
-        };
 
         let initial_view = if let Some(input) = &self.query_input {
             if input.read(cx).value().is_empty() {
@@ -624,53 +668,13 @@ where
                         if let Some(view) = initial_view {
                             this.child(view)
                         } else {
-                            this.child(
-                                v_flex()
-                                    .flex_grow()
-                                    .relative()
-                                    .when_some(self.max_height, |this, h| this.max_h(h))
-                                    .overflow_hidden()
-                                    .when(items_count == 0, |this| {
-                                        this.child(self.delegate().render_empty(window, cx))
-                                    })
-                                    .when(items_count > 0, |this| {
-                                        this.child(
-                                            uniform_list(
-                                                "uniform-list",
-                                                items_count,
-                                                cx.processor(
-                                                    move |list, visible_range: Range<usize>, window, cx| {
-                                                        list.load_more_if_need(
-                                                            items_count,
-                                                            visible_range.end,
-                                                            window,
-                                                            cx,
-                                                        );
-
-                                                        visible_range
-                                                            .map(|ix| {
-                                                                list.render_list_item(
-                                                                    ix, window, cx,
-                                                                )
-                                                            })
-                                                            .collect::<Vec<_>>()
-                                                    },
-                                                ),
-                                            )
-                                            .flex_grow()
-                                            .with_sizing_behavior(sizing_behavior)
-                                            .track_scroll(vertical_scroll_handle)
-                                            .into_any_element(),
-                                        )
-                                    })
-                                    .children(self.render_scrollbar(window, cx)),
-                            )
+                            this.child(self.render_items(items_count, window, cx))
                         }
                     })
                     // Click out to cancel right clicked row
-                    .when(self.right_clicked_index.is_some(), |this| {
+                    .when(self.mouse_right_clicked_index.is_some(), |this| {
                         this.on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                            this.right_clicked_index = None;
+                            this.mouse_right_clicked_index = None;
                             cx.notify();
                         }))
                     })
