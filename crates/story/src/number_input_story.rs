@@ -8,7 +8,7 @@ use crate::{section, Tab, TabPrev};
 use gpui_component::{
     button::{Button, ButtonVariants},
     input::{InputEvent, InputState, MaskPattern, NumberInput, NumberInputEvent, StepAction},
-    v_flex, ActiveTheme, FocusableCycle, IconName, Sizable,
+    v_flex, ActiveTheme, Disableable, FocusableCycle, IconName, Sizable,
 };
 
 const CONTEXT: &str = "NumberInputStory";
@@ -29,6 +29,7 @@ pub struct NumberInputStory {
     number_input3_value: f64,
     number_input4: Entity<InputState>,
     number_input4_value: f64,
+    disabled_input: Entity<InputState>,
 
     _subscriptions: Vec<Subscription>,
 }
@@ -88,6 +89,12 @@ impl NumberInputStory {
                 })
         });
 
+        let disabled_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value("100")
+                .placeholder("Disabled input")
+        });
+
         let _subscriptions = vec![
             cx.subscribe_in(&number_input1, window, Self::on_input_event),
             cx.subscribe_in(&number_input1, window, Self::on_number_input_event),
@@ -97,6 +104,8 @@ impl NumberInputStory {
             cx.subscribe_in(&number_input3, window, Self::on_number_input_event),
             cx.subscribe_in(&number_input4, window, Self::on_input_event),
             cx.subscribe_in(&number_input4, window, Self::on_number_input_event),
+            cx.subscribe_in(&disabled_input, window, Self::on_input_event),
+            cx.subscribe_in(&disabled_input, window, Self::on_number_input_event),
         ];
 
         Self {
@@ -108,6 +117,7 @@ impl NumberInputStory {
             number_input3_value: 0.0,
             number_input4,
             number_input4_value: 0.0,
+            disabled_input,
             _subscriptions,
         }
     }
@@ -237,6 +247,11 @@ impl Render for NumberInputStory {
                 section("Normal Size")
                     .max_w_md()
                     .child(NumberInput::new(&self.number_input1)),
+            )
+            .child(
+                section("Disabled")
+                    .max_w_md()
+                    .child(NumberInput::new(&self.disabled_input).disabled(true)),
             )
             .child(
                 section("Small Size with suffix").max_w_md().child(
