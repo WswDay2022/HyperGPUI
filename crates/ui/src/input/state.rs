@@ -725,6 +725,7 @@ impl InputState {
     /// Set with disabled mode.
     ///
     /// See also: [`Self::set_disabled`], [`Self::is_disabled`].
+    #[allow(unused)]
     pub(crate) fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
         self
