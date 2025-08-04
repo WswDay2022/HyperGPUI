@@ -385,6 +385,17 @@ impl Scrollbar {
         )
     }
 
+    fn style_for_normal(cx: &App) -> (Hsla, Hsla, Hsla, Pixels, Pixels, Pixels) {
+        (
+            cx.theme().scrollbar_thumb,
+            cx.theme().scrollbar,
+            gpui::transparent_black(),
+            THUMB_WIDTH,
+            THUMB_INSET,
+            THUMB_RADIUS,
+        )
+    }
+
     fn style_for_idle(cx: &App) -> (Hsla, Hsla, Hsla, Pixels, Pixels, Pixels) {
         let (width, inset, radius) = match cx.theme().scrollbar_show {
             ScrollbarShow::Scrolling => (THUMB_WIDTH, THUMB_INSET, THUMB_RADIUS),
@@ -544,6 +555,7 @@ impl Element for Scrollbar {
             let is_hover_to_show = cx.theme().scrollbar_show.is_hover();
             let is_hovered_on_bar = state.get().hovered_axis == Some(axis);
             let is_hovered_on_thumb = state.get().hovered_on_thumb == Some(axis);
+            let is_offset_changed = state.get().last_scroll_offset != self.scroll_handle.offset();
 
             let (thumb_bg, bar_bg, bar_border, thumb_width, inset, radius) =
                 if state.get().dragged_axis == Some(axis) {
@@ -554,6 +566,8 @@ impl Element for Scrollbar {
                     } else {
                         Self::style_for_hovered_bar(cx)
                     }
+                } else if is_offset_changed {
+                    Self::style_for_normal(cx)
                 } else if is_always_to_show {
                     if is_hovered_on_thumb {
                         Self::style_for_hovered_thumb(cx)
@@ -677,6 +691,7 @@ impl Element for Scrollbar {
                     .get()
                     .with_last_scroll(self.scroll_handle.offset(), Some(Instant::now())),
             );
+            cx.notify(view_id);
         }
 
         window.with_content_mask(
