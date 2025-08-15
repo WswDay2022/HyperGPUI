@@ -13,6 +13,7 @@ use gpui::{
 use html5ever::tendril::TendrilSink;
 use html5ever::{local_name, parse_document, LocalName, ParseOpts};
 use markup5ever_rcdom::{Node, NodeData, RcDom};
+use regex::bytes::Regex;
 
 use crate::v_flex;
 
@@ -82,12 +83,21 @@ pub(super) fn parse_html(source: &str) -> Result<element::Node, SharedString> {
     Ok(node)
 }
 
+// TODO: Find a better and light-weight HTML minifier
 fn cleanup_html(source: &str) -> Vec<u8> {
-    let cfg = simple_minify_html::Cfg {
-        keep_closing_tags: true,
-        ..Default::default()
-    };
-    simple_minify_html::minify(&source.as_bytes(), Some(cfg)).to_vec()
+    // Replace all \n to space
+    let re = Regex::new(r"\s*(<.+?>)\s*").unwrap();
+    let source: Vec<u8> = re.replace_all(source.as_bytes(), b" $1 ").into();
+
+    let mut w = std::io::Cursor::new(vec![]);
+    let mut r = std::io::Cursor::new(source.clone());
+    let mut minify = html5minify::Minifier::new(&mut w);
+    minify.omit_doctype(true);
+    if let Ok(()) = minify.minify(&mut r) {
+        w.into_inner()
+    } else {
+        source
+    }
 }
 
 #[derive(Clone)]
@@ -783,7 +793,7 @@ mod tests {
         let cleaned = super::cleanup_html(html);
         assert_eq!(
             String::from_utf8(cleaned).unwrap(),
-            "<p>and <code>code</code> text</p>"
+            "<p>and <code>code</code> text"
         );
 
         let html = r#"<p>
@@ -794,7 +804,7 @@ mod tests {
         let cleaned = super::cleanup_html(html);
         assert_eq!(
             String::from_utf8(cleaned).unwrap(),
-            "<p>and <em> <code>code</code> <i>italic</i> </em> text</p>"
+            "<p>and <em><code>code</code> <i>italic</i></em> text"
         );
     }
 
@@ -830,7 +840,7 @@ mod tests {
         assert_eq!(
             node.to_markdown(),
             indoc::indoc! {r#"
-            and * code italic * text
+            and *code italic* text
 
             ![Example](https://example.com/image.png "Example Image")
 
