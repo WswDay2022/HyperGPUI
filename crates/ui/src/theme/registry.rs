@@ -45,9 +45,10 @@ pub(super) fn init(cx: &mut App) {
 
     // Observe changes to the theme registry to apply changes to the active theme
     cx.observe_global::<ThemeRegistry>(|cx| {
-        tracing::info!("Reload active theme...");
+        let mode = Theme::global(cx).mode;
         let light_theme = Theme::global(cx).light_theme.name.clone();
         let dark_theme = Theme::global(cx).dark_theme.name.clone();
+
         if let Some(theme) = ThemeRegistry::global(cx)
             .themes()
             .get(&light_theme)
@@ -58,8 +59,14 @@ pub(super) fn init(cx: &mut App) {
         if let Some(theme) = ThemeRegistry::global(cx).themes().get(&dark_theme).cloned() {
             Theme::global_mut(cx).dark_theme = theme;
         }
-        let mode = Theme::global(cx).mode;
 
+        let theme_name = if mode.is_dark() {
+            dark_theme
+        } else {
+            light_theme
+        };
+
+        tracing::info!("Reload active theme: {:?}...", theme_name);
         Theme::change(mode, None, cx);
         cx.refresh_windows();
     })
