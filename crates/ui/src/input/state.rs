@@ -266,6 +266,7 @@ pub struct InputState {
     pub(super) disabled: bool,
     pub(super) masked: bool,
     pub(super) clean_on_escape: bool,
+    pub(super) soft_wrap: bool,
     pub(super) pattern: Option<regex::Regex>,
     pub(super) validate: Option<Box<dyn Fn(&str, &mut Context<Self>) -> bool + 'static>>,
     pub(crate) scroll_handle: ScrollHandle,
@@ -335,6 +336,7 @@ impl InputState {
             disabled: false,
             masked: false,
             clean_on_escape: false,
+            soft_wrap: true,
             loading: false,
             pattern: None,
             validate: None,
@@ -749,6 +751,18 @@ impl InputState {
     pub fn clean_on_escape(mut self) -> Self {
         self.clean_on_escape = true;
         self
+    }
+
+    /// Set the soft wrap mode for multi-line input, default is true.
+    pub fn soft_wrap(mut self, wrap: bool) -> Self {
+        self.soft_wrap = wrap;
+        self
+    }
+
+    /// Update the soft wrap mode for multi-line input, default is true.
+    pub fn set_soft_wrap(&mut self, wrap: bool, _: &mut Window, cx: &mut Context<Self>) {
+        self.soft_wrap = wrap;
+        cx.notify();
     }
 
     /// Set the regular expression pattern of the input field.
@@ -2100,7 +2114,14 @@ impl InputState {
         // Update text_wrapper wrap_width if changed.
         if let Some(last_layout) = self.last_layout.as_ref() {
             if wrap_width_changed {
-                self.text_wrapper.set_wrap_width(last_layout.wrap_width, cx);
+                let wrap_width = if !self.soft_wrap {
+                    // None to disable wrapping (will use Pixels::MAX)
+                    None
+                } else {
+                    last_layout.wrap_width
+                };
+
+                self.text_wrapper.set_wrap_width(wrap_width, cx);
                 self.mode.update_auto_grow(&self.text_wrapper);
                 cx.notify();
             }

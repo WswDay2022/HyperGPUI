@@ -301,6 +301,12 @@ impl RenderOnce for TextInput {
             .refine_style(&self.style)
             .when(state.mode.is_multi_line(), |this| {
                 if state.last_layout.is_some() {
+                    let scrollbar = if !state.soft_wrap {
+                        Scrollbar::both(&state.scroll_state, &state.scroll_handle)
+                    } else {
+                        Scrollbar::vertical(&state.scroll_state, &state.scroll_handle)
+                    };
+
                     this.relative().child(
                         div()
                             .absolute()
@@ -308,10 +314,7 @@ impl RenderOnce for TextInput {
                             .left_0()
                             .right(px(1.))
                             .bottom_0()
-                            .child(
-                                Scrollbar::vertical(&state.scroll_state, &state.scroll_handle)
-                                    .scroll_size(state.scroll_size),
-                            ),
+                            .child(scrollbar.scroll_size(state.scroll_size)),
                     )
                 } else {
                     this
