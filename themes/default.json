@@ -317,8 +317,8 @@
       },
       "highlight": {
         "editor.foreground": "#CACCCA",
-        "editor.background": "#131313",
-        "editor.active_line.background": "#353436",
+        "editor.background": "#0a0a0a",
+        "editor.active_line.background": "#171717",
         "editor.line_number": "#8F8F8F",
         "editor.active_line_number": "#DDDDDD",
         "conflict": "#D2602D",
