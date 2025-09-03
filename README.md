@@ -65,6 +65,46 @@ More examples can be found in the `examples` directory. You can run them with `c
 
 Check out [DEVELOPMENT.md](DEVELOPMENT.md) for more details.
 
+## Compare to others
+
+| Features              | GPUI Component                 | [Iced]    | [egui]                | [QT 6]                         |
+| --------------------- | ------------------------------ | --------- | --------------------- | ------------------------------ |
+| Language              | Rust                           | Rust      | Rust                  | C++/QML                        |
+| Core Render           | GPUI                           | wgpu      | wgpu                  | QT                             |
+| License               | Apache 2.0                     | MIT       | MIT/Apache 2.0        | Commercial                     |
+| Min Binary Size [^1]  | 12MB                           | 11MB      | 5M                    | 20MB [^2]                      |
+| Cross-Platform        | Yes                            | Yes       | Yes                   | Yes                            |
+| Documentation         | No                             | Simple    | Simple                | Good                           |
+| Web                   | No                             | Yes       | Yes                   | Yes                            |
+| UI Style              | Modern                         | Basic     | Basic                 | Basic                          |
+| CJK Support           | Good                           | Yes       | Bad                   | Yes                            |
+| Virtual List          | Rows, Columns                  | Unknown   | Rows                  | No                             |
+| Chart                 | Yes                            | No        | No                    | Yes                            |
+| Table (Large dataset) | Yes<br>(Virtual Rows, Columns) | No        | Yes<br>(Virtual Rows) | Yes<br>(Virtual Rows, Columns) |
+| Table Column Resize   | Yes                            | No        | Yes                   | Yes                            |
+| CodeEditor            | Simple                         | Simple    | Simple                | Basic API                      |
+| Dock Layout           | Yes                            | Yes       | Yes                   | Yes                            |
+| Syntax Highlight      | [Tree Sitter]                  | [Syntect] | [Syntect]             | [QSyntaxHighlighter]           |
+| Markdown Rendering    | Yes                            | Yes       | Basic                 | No                             |
+| Markdown mix HTML     | Yes                            | No        | No                    | No                             |
+| HTML Rendering        | Basic                          | No        | No                    | Yes                            |
+| Text Selection        | TextView                       | No        | Any Label             | No                             |
+| Themes                | Yes                            | No        | No                    | No                             |
+| I18n                  | Yes                            | Yes       | Yes                   | Yes                            |
+
+> Please submit an issue or PR if any mistakes or outdated are found.
+
+[Iced]: https://github.com/iced-rs/iced
+[egui]: https://github.com/emilk/egui
+[QT 6]: https://www.qt.io/product/qt6
+[Tree Sitter]: https://tree-sitter.github.io/tree-sitter/
+[Syntect]: https://github.com/trishume/syntect
+[QSyntaxHighlighter]: https://doc.qt.io/qt-6/qsyntaxhighlighter.html
+
+[^1]: Release builds by use simple hello world example.
+
+[^2]: [Reducing Binary Size of Qt Applications](https://www.qt.io/blog/reducing-binary-size-of-qt-applications-part-3-more-platforms)
+
 ## License
 
 Apache-2.0
