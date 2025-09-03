@@ -77,8 +77,7 @@ Check out [DEVELOPMENT.md](DEVELOPMENT.md) for more details.
 | Documentation         | No                             | Simple    | Simple                | Good                           |
 | Web                   | No                             | Yes       | Yes                   | Yes                            |
 | UI Style              | Modern                         | Basic     | Basic                 | Basic                          |
-| CJK Support           | Good                           | Yes       | Bad                   | Yes                            |
-| Virtual List          | Rows, Columns                  | Unknown   | Rows                  | No                             |
+| CJK Support           | Yes                            | Yes       | Bad                   | Yes                            |
 | Chart                 | Yes                            | No        | No                    | Yes                            |
 | Table (Large dataset) | Yes<br>(Virtual Rows, Columns) | No        | Yes<br>(Virtual Rows) | Yes<br>(Virtual Rows, Columns) |
 | Table Column Resize   | Yes                            | No        | Yes                   | Yes                            |
