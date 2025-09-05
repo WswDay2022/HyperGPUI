@@ -391,9 +391,9 @@ impl TextElement {
                 let mut skipped_offset = 0;
                 let mut styles = vec![];
 
-                for (ix, line) in state.text.split('\n').enumerate() {
-                    // +1 for last `\n`.
-                    let line_len = line.len() + 1;
+                // The Rope line has includes `\n` and `\r`.
+                for (ix, line) in state.text.lines().enumerate() {
+                    let line_len = line.len_bytes();
                     if ix < visible_range.start {
                         offset += line_len;
                         skipped_offset = offset;
@@ -547,7 +547,7 @@ impl Element for TextElement {
         let state = self.state.read(cx);
         let multi_line = state.mode.is_multi_line();
         let text = state.text.clone();
-        let is_empty = text.is_empty();
+        let is_empty = text.len_bytes() == 0;
         let placeholder = self.placeholder.clone();
         let style = window.text_style();
         let font_size = style.font_size.to_pixels(window.rem_size());
@@ -556,12 +556,9 @@ impl Element for TextElement {
         let (display_text, text_color) = if is_empty {
             (placeholder, cx.theme().muted_foreground)
         } else if state.masked {
-            (
-                "*".repeat(text.chars().count()).into(),
-                cx.theme().foreground,
-            )
+            ("*".repeat(text.len_chars()).into(), cx.theme().foreground)
         } else {
-            (text.clone(), cx.theme().foreground)
+            (text.to_string().into(), cx.theme().foreground)
         };
 
         let text_style = window.text_style();

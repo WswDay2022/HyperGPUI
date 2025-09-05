@@ -1,7 +1,7 @@
 use std::ops::Range;
 
-use crate::input::LineColumn;
-use gpui::{App, Font, LineFragment, Pixels, SharedString};
+use gpui::{App, Font, LineFragment, Pixels};
+use ropey::Rope;
 
 #[allow(unused)]
 pub(super) struct LineWrap {
@@ -15,11 +15,11 @@ pub(super) struct LineWrap {
     pub(super) range: Range<usize>,
 }
 
-/// Used to prepare the text with soft_wrap to be get lines to displayed in the TextArea
+/// Used to prepare the text with soft wrap to be get lines to displayed in the TextArea
 ///
 /// After use lines to calculate the scroll size of the TextArea
 pub(super) struct TextWrapper {
-    pub(super) text: SharedString,
+    pub(super) text: Rope,
     /// The wrapped lines, value is start and end index of the line.
     pub(super) wrapped_lines: Vec<Range<usize>>,
     /// The lines by split \n
@@ -34,7 +34,7 @@ pub(super) struct TextWrapper {
 impl TextWrapper {
     pub(super) fn new(font: Font, font_size: Pixels, wrap_width: Option<Pixels>) -> Self {
         Self {
-            text: SharedString::default(),
+            text: Rope::new(),
             font,
             font_size,
             wrap_width,
@@ -57,7 +57,7 @@ impl TextWrapper {
     /// Update the text wrapper and recalculate the wrapped lines.
     ///
     /// If the `text` is the same as the current text, do nothing.
-    pub(super) fn update(&mut self, text: &SharedString, force: bool, cx: &mut App) {
+    pub(super) fn update(&mut self, text: &Rope, force: bool, cx: &mut App) {
         if &self.text == text && !force {
             return;
         }
@@ -69,7 +69,9 @@ impl TextWrapper {
             .text_system()
             .line_wrapper(self.font.clone(), self.font_size);
         let mut prev_line_ix = 0;
-        for line in text.split('\n') {
+
+        // FIXME: here may need use from Rope
+        for line in text.to_string().split('\n') {
             let mut line_wraps = vec![];
             let mut prev_boundary_ix = 0;
 
@@ -99,48 +101,5 @@ impl TextWrapper {
         self.text = text.clone();
         self.wrapped_lines = wrapped_lines;
         self.lines = lines;
-    }
-
-    /// Returns the line and column (1-based) of the given offset (Entire text).
-    pub(super) fn line_column(&self, offset: usize) -> LineColumn {
-        if self.lines.is_empty() {
-            return LineColumn::default();
-        }
-
-        let line = self
-            .lines
-            .binary_search_by_key(&offset, |line| line.range.end)
-            .unwrap_or_else(|i| i);
-        let column = offset.saturating_sub(self.lines[line].range.start);
-
-        (line + 1, column + 1).into()
-    }
-
-    /// Returns the offset of the given line and column (1-based).
-    ///
-    /// - If the `line` is 0, it will return 0.
-    /// - If the `line` is greater than the number of lines, it will return
-    ///   the length of the text.
-    pub(super) fn offset_for_line_column(&self, line: usize, column: usize) -> Option<usize> {
-        if line == 0 || self.lines.is_empty() {
-            return None;
-        }
-
-        let line = line.saturating_sub(1);
-        if line >= self.lines.len() {
-            return Some(self.text.len());
-        }
-
-        let Some(line_wrap) = &self.lines.get(line) else {
-            return None;
-        };
-
-        let offset = line_wrap.range.start;
-        if column == 0 {
-            return Some(offset);
-        }
-        let offset = offset + column.saturating_sub(1).min(line_wrap.range.len());
-
-        Some(offset)
     }
 }
