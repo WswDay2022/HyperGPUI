@@ -1,7 +1,9 @@
 use std::ops::Range;
 
 use gpui::{App, Font, LineFragment, Pixels};
-use ropey::Rope;
+use rope::Rope;
+
+use crate::input::RopeExt as _;
 
 #[allow(unused)]
 pub(super) struct LineWrap {
@@ -44,11 +46,19 @@ impl TextWrapper {
     }
 
     pub(super) fn set_wrap_width(&mut self, wrap_width: Option<Pixels>, cx: &mut App) {
+        if wrap_width == self.wrap_width {
+            return;
+        }
+
         self.wrap_width = wrap_width;
         self.update(&self.text.clone(), true, cx);
     }
 
     pub(super) fn set_font(&mut self, font: Font, font_size: Pixels, cx: &mut App) {
+        if self.font.eq(&font) && self.font_size == font_size {
+            return;
+        }
+
         self.font = font;
         self.font_size = font_size;
         self.update(&self.text.clone(), true, cx);
@@ -58,7 +68,7 @@ impl TextWrapper {
     ///
     /// If the `text` is the same as the current text, do nothing.
     pub(super) fn update(&mut self, text: &Rope, force: bool, cx: &mut App) {
-        if &self.text == text && !force {
+        if self.text.eq(text) && !force {
             return;
         }
 
@@ -70,15 +80,15 @@ impl TextWrapper {
             .line_wrapper(self.font.clone(), self.font_size);
         let mut prev_line_ix = 0;
 
-        // FIXME: here may need use from Rope
-        for line in text.to_string().split('\n') {
+        for line in text.lines() {
+            let line = line.to_string();
             let mut line_wraps = vec![];
             let mut prev_boundary_ix = 0;
 
             // If wrap_width is Pixels::MAX, skip wrapping to disable word wrap
             if let Some(wrap_width) = wrap_width {
                 // Here only have wrapped line, if there is no wrap meet, the `line_wraps` result will empty.
-                for boundary in line_wrapper.wrap_line(&[LineFragment::text(line)], wrap_width) {
+                for boundary in line_wrapper.wrap_line(&[LineFragment::text(&line)], wrap_width) {
                     line_wraps.push(prev_boundary_ix..boundary.ix);
                     prev_boundary_ix = boundary.ix;
                 }
@@ -95,6 +105,7 @@ impl TextWrapper {
                 wrapped_lines.push(prev_line_ix + prev_boundary_ix..prev_line_ix + line.len());
             }
 
+            // +1 for \n
             prev_line_ix += line.len() + 1;
         }
 
