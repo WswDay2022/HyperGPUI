@@ -31,7 +31,7 @@ use super::{
 };
 use crate::input::hover_popover::DiagnosticPopover;
 use crate::input::marker::Marker;
-use crate::input::text_wrapper::LineWrap;
+use crate::input::text_wrapper::LineItem;
 use crate::input::{LineColumn, RopeExt as _, Selection};
 use crate::{history::History, scroll::ScrollbarState, Root};
 
@@ -687,6 +687,11 @@ impl InputState {
                 .unwrap_or(self.input_bounds.size.width);
 
             self.text_wrapper.set_wrap_width(Some(wrap_width), cx);
+
+            // Reset scroll to left 0
+            let mut offset = self.scroll_handle.offset();
+            offset.x = px(0.);
+            self.scroll_handle.set_offset(offset);
         } else {
             self.text_wrapper.set_wrap_width(None, cx);
         }
@@ -725,7 +730,7 @@ impl InputState {
     pub fn default_value(mut self, value: impl Into<SharedString>) -> Self {
         let text: SharedString = value.into();
         self.text = Rope::from(text.as_str());
-        self.text_wrapper.text = self.text.clone();
+        self.text_wrapper.set_default_text(&self.text);
         self
     }
 
@@ -1722,7 +1727,7 @@ impl InputState {
     fn line_origin_with_y_offset(
         &self,
         y_offset: &mut Pixels,
-        line: &LineWrap,
+        line: &LineItem,
         line_height: Pixels,
     ) -> Point<Pixels> {
         // NOTE: About line.wrap_boundaries.len()
@@ -1731,8 +1736,7 @@ impl InputState {
         // If have 2 line, the value is 1
         if self.mode.is_multi_line() {
             let p = point(px(0.), *y_offset);
-            let height = line_height + line.wrap_lines as f32 * line_height;
-            *y_offset = *y_offset + height;
+            *y_offset += line.height(line_height);
             p
         } else {
             point(px(0.), px(0.))
