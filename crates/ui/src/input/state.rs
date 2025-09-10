@@ -493,7 +493,7 @@ impl InputState {
     /// Set markers, only for [`InputMode::CodeEditor`] mode.
     ///
     /// For example to set the diagnostic markers in the code editor.
-    pub fn set_markers(&mut self, markers: Vec<Marker>, _: &mut Window, _: &mut Context<Self>) {
+    pub fn set_markers(&mut self, markers: Vec<Marker>, _: &mut Context<Self>) {
         let mut markers = markers;
         for marker in &mut markers {
             marker.prepare(self);
@@ -747,12 +747,7 @@ impl InputState {
     /// Return the (1-based) line and column of the cursor.
     pub fn line_column(&self) -> LineColumn {
         let offset = self.cursor();
-        let point = self.text.offset_to_point(offset);
-
-        LineColumn {
-            line: point.row as usize + 1,
-            column: point.column as usize + 1,
-        }
+        self.text.offset_to_line_column(offset)
     }
 
     /// Set (1-based) line and column of the cursor.

@@ -1,6 +1,6 @@
 use crate::{
     highlighter::HighlightTheme,
-    input::{InputState, LineColumn},
+    input::{InputState, LineColumn, RopeExt},
 };
 use gpui::{px, App, HighlightStyle, Hsla, SharedString, UnderlineStyle};
 use std::ops::Range;
@@ -35,17 +35,8 @@ impl Marker {
 
     /// Prepare the marker to convert line, column to byte offsets.
     pub(super) fn prepare(&mut self, state: &InputState) {
-        let mut start_point: rope::Point = self.start.into();
-        let mut end_point: rope::Point = self.end.into();
-
-        // limit column avoid overflow
-        let start_line_len = state.text.line_len(start_point.row);
-        start_point.column = start_point.column.min(start_line_len);
-        let end_line_len = state.text.line_len(end_point.row);
-        end_point.column = end_point.column.min(end_line_len);
-
-        let start = state.text.point_to_offset(start_point);
-        let end = state.text.point_to_offset(end_point);
+        let start = state.text.line_column_to_offset(&self.start);
+        let end = state.text.line_column_to_offset(&self.end);
 
         self.range = Some(start..end);
     }
