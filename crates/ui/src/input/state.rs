@@ -2,7 +2,15 @@
 //!
 //! Based on the `Input` example from the `gpui` crate.
 //! https://github.com/zed-industries/zed/blob/main/crates/gpui/examples/input.rs
-use gpui::Action;
+use anyhow::Result;
+use gpui::{
+    actions, div, point, prelude::FluentBuilder as _, px, Action, App, AppContext, Bounds,
+    ClipboardItem, Context, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable,
+    InteractiveElement as _, IntoElement, KeyBinding, KeyDownEvent, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, Point, Render, ScrollHandle,
+    ScrollWheelEvent, SharedString, Styled as _, Subscription, Task, UTF16Selection, Window,
+    WrappedLine,
+};
 use rope::Rope;
 use serde::Deserialize;
 use smallvec::SmallVec;
@@ -11,14 +19,6 @@ use std::ops::Range;
 use std::rc::Rc;
 use sum_tree::Bias;
 use unicode_segmentation::*;
-
-use gpui::{
-    actions, div, point, prelude::FluentBuilder as _, px, App, AppContext, Bounds, ClipboardItem,
-    Context, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement as _, IntoElement, KeyBinding, KeyDownEvent, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, Point, Render, ScrollHandle,
-    ScrollWheelEvent, SharedString, Styled as _, Subscription, UTF16Selection, Window, WrappedLine,
-};
 
 use super::{
     blink_cursor::BlinkCursor,
@@ -29,7 +29,10 @@ use super::{
     number_input,
     text_wrapper::TextWrapper,
 };
-use crate::input::{hover_popover::DiagnosticPopover, Position};
+use crate::input::{
+    popovers::{ContextMenu, DiagnosticPopover},
+    Position,
+};
 use crate::input::{RopeExt as _, Selection};
 use crate::{highlighter::DiagnosticSet, input::text_wrapper::LineItem};
 use crate::{history::History, scroll::ScrollbarState, Root};
@@ -85,7 +88,8 @@ actions!(
         MoveToEnd,
         MoveToPreviousWord,
         MoveToNextWord,
-        Escape
+        Escape,
+        ToggleCodeActions,
     ]
 );
 
@@ -208,6 +212,10 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("ctrl-z", Undo, Some(CONTEXT)),
         #[cfg(not(target_os = "macos"))]
         KeyBinding::new("ctrl-y", Redo, Some(CONTEXT)),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-.", ToggleCodeActions, Some(CONTEXT)),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-.", ToggleCodeActions, Some(CONTEXT)),
     ]);
 
     number_input::init(cx);
@@ -229,6 +237,8 @@ pub(super) struct LastLayout {
     pub(super) wrap_width: Option<Pixels>,
     /// The line number area width of text layout, if not line number, this will be 0px.
     pub(super) line_number_width: Pixels,
+    /// The cursor position (top, left) in pixels.
+    pub(super) cursor_bounds: Option<Bounds<Pixels>>,
 }
 
 /// InputState to keep editing state of the [`super::TextInput`].
@@ -275,10 +285,16 @@ pub struct InputState {
 
     /// Popover
     diagnostic_popover: Option<Entity<DiagnosticPopover>>,
+    /// Completion/CodeAction context menu
+    pub(super) context_menu: Option<ContextMenu>,
+    /// A flag to indicate if we are currently inserting a completion item.
+    pub(super) completion_inserting: bool,
 
     /// To remember the horizontal column (x-coordinate) of the cursor position for keep column for move up/down.
     preferred_column: Option<usize>,
     _subscriptions: Vec<Subscription>,
+
+    pub(super) _context_menu_task: Task<Result<()>>,
 }
 
 impl EventEmitter<InputEvent> for InputState {}
@@ -347,7 +363,10 @@ impl InputState {
             placeholder: SharedString::default(),
             mask_pattern: MaskPattern::default(),
             diagnostic_popover: None,
+            context_menu: None,
+            completion_inserting: false,
             _subscriptions,
+            _context_menu_task: Task::ready(Ok(())),
         }
     }
 
@@ -400,8 +419,70 @@ impl InputState {
             highlighter: Rc::new(RefCell::new(None)),
             line_number: true,
             diagnostics: DiagnosticSet::default(),
+            code_action_providers: vec![],
+            completion_provider: None,
         };
         self
+    }
+
+    /// Add a code action provider for the code editor mode.
+    ///
+    /// Only for `InputMode::CodeEditor`.
+    pub fn add_code_action_provider(
+        &mut self,
+        provider: Rc<dyn super::CodeActionProvider>,
+        cx: &mut Context<Self>,
+    ) {
+        if let InputMode::CodeEditor {
+            code_action_providers,
+            ..
+        } = &mut self.mode
+        {
+            code_action_providers.push(provider);
+            cx.notify();
+        }
+    }
+
+    /// Remove a code action provider for the code editor mode.
+    pub fn remove_code_action_provider(&mut self, id: &str, cx: &mut Context<Self>) {
+        if let InputMode::CodeEditor {
+            code_action_providers,
+            ..
+        } = &mut self.mode
+        {
+            code_action_providers.retain(|p| p.id().as_str() != id);
+            cx.notify();
+        }
+    }
+
+    /// Clear all code action providers for the code editor mode.
+    pub fn clear_code_action_providers(&mut self, cx: &mut Context<Self>) {
+        if let InputMode::CodeEditor {
+            code_action_providers,
+            ..
+        } = &mut self.mode
+        {
+            code_action_providers.clear();
+            cx.notify();
+        }
+    }
+
+    /// Set the completion provider for the code editor mode.
+    ///
+    /// Only for `InputMode::CodeEditor`.
+    pub fn set_completion_provider(
+        &mut self,
+        provider: Option<Rc<dyn super::CompletionProvider>>,
+        cx: &mut Context<Self>,
+    ) {
+        if let InputMode::CodeEditor {
+            completion_provider,
+            ..
+        } = &mut self.mode
+        {
+            *completion_provider = provider;
+            cx.notify();
+        }
     }
 
     /// Set placeholder
@@ -523,6 +604,7 @@ impl InputState {
     /// - The index of the line (zero-based) containing the offset.
     /// - The index of the sub-line (zero-based) within the line containing the offset.
     /// - The position of the offset.
+    #[allow(unused)]
     pub(super) fn line_and_position_for_offset(
         &self,
         offset: usize,
@@ -745,6 +827,11 @@ impl InputState {
         self.mask_pattern.unmask(&self.text.to_string()).into()
     }
 
+    /// Return the text [`Rope`] of the input field.
+    pub fn text(&self) -> &Rope {
+        &self.text
+    }
+
     /// Return the (0-based) [`Position`] of the cursor.
     pub fn cursor_position(&self) -> Position {
         let offset = self.cursor();
@@ -762,10 +849,8 @@ impl InputState {
     ) {
         let position: Position = position.into();
         let max_point = self.text.max_point();
-        let row = position.line.min(max_point.row as usize);
-        let col = position
-            .character
-            .min(self.text.line_len(row as u32) as usize);
+        let row = position.line.min(max_point.row);
+        let col = position.character.min(self.text.line_len(row));
 
         let offset = self
             .text
@@ -779,8 +864,11 @@ impl InputState {
     }
 
     /// Focus the input field.
-    pub fn focus(&self, window: &mut Window, _: &mut Context<Self>) {
+    pub fn focus(&self, window: &mut Window, cx: &mut Context<Self>) {
         self.focus_handle.focus(window);
+        self.blink_cursor.update(cx, |cursor, cx| {
+            cursor.start(cx);
+        });
     }
 
     pub(super) fn left(&mut self, _: &MoveLeft, window: &mut Window, cx: &mut Context<Self>) {
@@ -801,7 +889,11 @@ impl InputState {
         }
     }
 
-    pub(super) fn up(&mut self, _: &MoveUp, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn up(&mut self, action: &MoveUp, window: &mut Window, cx: &mut Context<Self>) {
+        if self.handle_action_for_context_menu(Box::new(action.clone()), window, cx) {
+            return;
+        }
+
         if self.mode.is_single_line() {
             return;
         }
@@ -817,7 +909,11 @@ impl InputState {
         self.move_vertical(-1, window, cx);
     }
 
-    pub(super) fn down(&mut self, _: &MoveDown, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn down(&mut self, action: &MoveDown, window: &mut Window, cx: &mut Context<Self>) {
+        if self.handle_action_for_context_menu(Box::new(action.clone()), window, cx) {
+            return;
+        }
+
         if self.mode.is_single_line() {
             return;
         }
@@ -1217,6 +1313,10 @@ impl InputState {
     }
 
     pub(super) fn enter(&mut self, action: &Enter, window: &mut Window, cx: &mut Context<Self>) {
+        if self.handle_action_for_context_menu(Box::new(action.clone()), window, cx) {
+            return;
+        }
+
         if self.mode.is_multi_line() {
             // Get current line indent
             let indent = if self.mode.is_code_editor() {
@@ -1402,7 +1502,11 @@ impl InputState {
         self.replace_text("", window, cx);
     }
 
-    pub(super) fn escape(&mut self, _: &Escape, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn escape(&mut self, action: &Escape, window: &mut Window, cx: &mut Context<Self>) {
+        if self.handle_action_for_context_menu(Box::new(action.clone()), window, cx) {
+            return;
+        }
+
         if self.marked_range.is_some() {
             self.unmark_text(window, cx);
         }
@@ -1412,6 +1516,15 @@ impl InputState {
         }
 
         cx.propagate();
+    }
+
+    pub(super) fn toggle_code_actions(
+        &mut self,
+        _: &ToggleCodeActions,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.handle_code_action_trigger(window, cx)
     }
 
     pub(super) fn on_mouse_down(
@@ -1603,6 +1716,7 @@ impl InputState {
         self.selected_range = (offset..offset).into();
         self.pause_blink_cursor(cx);
         self.update_preferred_column();
+        self.hide_context_menu(cx);
         cx.notify()
     }
 
@@ -1893,7 +2007,7 @@ impl InputState {
 
     /// Returns the true to let InputElement to render cursor, when Input is focused and current BlinkCursor is visible.
     pub(crate) fn show_cursor(&self, window: &Window, cx: &App) -> bool {
-        self.focus_handle.is_focused(window)
+        (self.focus_handle.is_focused(window) || self.is_context_menu_open(cx))
             && self.blink_cursor.read(cx).visible()
             && window.is_window_active()
     }
@@ -1906,6 +2020,10 @@ impl InputState {
     }
 
     fn on_blur(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.is_context_menu_open(cx) {
+            return;
+        }
+
         self.blink_cursor.update(cx, |cursor, cx| {
             cursor.stop(cx);
         });
@@ -2071,7 +2189,7 @@ impl EntityInputHandler for InputState {
         &mut self,
         range_utf16: Option<Range<usize>>,
         new_text: &str,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if self.disabled {
@@ -2117,6 +2235,7 @@ impl EntityInputHandler for InputState {
         self.update_preferred_column();
         self.update_scroll_offset(None, cx);
         self.mode.update_auto_grow(&self.text_wrapper);
+        self.handle_completion_trigger(&range, &new_text, window, cx);
         cx.emit(InputEvent::Change(self.unmask_value()));
         cx.notify();
     }
@@ -2271,5 +2390,6 @@ impl Render for InputState {
             .overflow_x_hidden()
             .child(TextElement::new(cx.entity().clone()).placeholder(self.placeholder.clone()))
             .children(self.diagnostic_popover.clone())
+            .children(self.context_menu.as_ref().map(|menu| menu.render()))
     }
 }
