@@ -11,7 +11,7 @@ use smallvec::SmallVec;
 
 use crate::{
     input::{blink_cursor::CURSOR_WIDTH, RopeExt as _},
-    ActiveTheme as _, Root,
+    ActiveTheme as _, Colorize, Root,
 };
 
 use super::{mode::InputMode, InputState, LastLayout};
@@ -76,8 +76,8 @@ impl TextElement {
         let line_number_width = last_layout.line_number_width;
 
         let mut selected_range = state.selected_range;
-        if let Some(marked_range) = &state.marked_range {
-            selected_range = (marked_range.end..marked_range.end).into();
+        if let Some(ime_marked_range) = &state.ime_marked_range {
+            selected_range = (ime_marked_range.end..ime_marked_range.end).into();
         }
 
         let cursor = state.cursor();
@@ -230,35 +230,29 @@ impl TextElement {
         (cursor_bounds, scroll_offset, current_row)
     }
 
-    fn layout_selections(
-        &self,
+    fn layout_match_range(
+        range: Range<usize>,
         last_layout: &LastLayout,
         bounds: &mut Bounds<Pixels>,
-        _: &mut Window,
-        cx: &mut App,
     ) -> Option<Path<Pixels>> {
-        let line_height = last_layout.line_height;
-        let visible_top = last_layout.visible_top;
-        let visible_start_offset = last_layout.visible_start_offset;
-        let lines = &last_layout.lines;
-        let line_number_width = last_layout.line_number_width;
-
-        let state = self.state.read(cx);
-        let mut selected_range = state.selected_range;
-        if let Some(marked_range) = &state.marked_range {
-            if !marked_range.is_empty() {
-                selected_range = (marked_range.end..marked_range.end).into();
-            }
-        }
-        if selected_range.is_empty() {
+        if range.is_empty() {
             return None;
         }
 
-        let (start_ix, end_ix) = if selected_range.start < selected_range.end {
-            (selected_range.start, selected_range.end)
-        } else {
-            (selected_range.end, selected_range.start)
-        };
+        if range.start < last_layout.visible_range_offset.start
+            || range.end > last_layout.visible_range_offset.end
+        {
+            return None;
+        }
+
+        let line_height = last_layout.line_height;
+        let visible_top = last_layout.visible_top;
+        let visible_start_offset = last_layout.visible_range_offset.start;
+        let lines = &last_layout.lines;
+        let line_number_width = last_layout.line_number_width;
+
+        let start_ix = range.start;
+        let end_ix = range.end;
 
         let mut prev_lines_offset = visible_start_offset;
         let mut offset_y = visible_top;
@@ -369,6 +363,62 @@ impl TextElement {
         builder.build().ok()
     }
 
+    fn layout_search_matches(
+        &self,
+        last_layout: &LastLayout,
+        bounds: &mut Bounds<Pixels>,
+        cx: &mut App,
+    ) -> Vec<(Path<Pixels>, bool)> {
+        let search_panel = self.state.read(cx).search_panel.clone();
+        let Some((ranges, current_match_ix)) = search_panel.and_then(|panel| {
+            if let Some(matcher) = panel.read(cx).matcher() {
+                Some((matcher.matched_ranges.clone(), matcher.current_match_ix))
+            } else {
+                None
+            }
+        }) else {
+            return vec![];
+        };
+
+        let mut paths = Vec::new();
+        for (index, range) in ranges.as_ref().iter().enumerate() {
+            if let Some(path) = Self::layout_match_range(range.clone(), last_layout, bounds) {
+                paths.push((path, current_match_ix == index));
+            }
+        }
+
+        paths
+    }
+
+    fn layout_selections(
+        &self,
+        last_layout: &LastLayout,
+        bounds: &mut Bounds<Pixels>,
+        cx: &mut App,
+    ) -> Option<Path<Pixels>> {
+        let state = self.state.read(cx);
+        let mut selected_range = state.selected_range;
+        if let Some(ime_marked_range) = &state.ime_marked_range {
+            if !ime_marked_range.is_empty() {
+                selected_range = (ime_marked_range.end..ime_marked_range.end).into();
+            }
+        }
+        if selected_range.is_empty() {
+            return None;
+        }
+
+        let (start_ix, end_ix) = if selected_range.start < selected_range.end {
+            (selected_range.start, selected_range.end)
+        } else {
+            (selected_range.end, selected_range.start)
+        };
+
+        let range = start_ix.max(last_layout.visible_range_offset.start)
+            ..end_ix.min(last_layout.visible_range_offset.end);
+
+        Self::layout_match_range(range, &last_layout, bounds)
+    }
+
     /// Calculate the visible range of lines in the viewport.
     ///
     /// Returns
@@ -470,6 +520,7 @@ pub(super) struct PrepaintState {
     /// row index (zero based), no wrap, same line as the cursor.
     current_row: Option<usize>,
     selection_path: Option<Path<Pixels>>,
+    search_match_paths: Vec<(Path<Pixels>, bool)>,
     bounds: Bounds<Pixels>,
 }
 
@@ -604,10 +655,10 @@ impl Element for TextElement {
 
         // Calculate the width of the line numbers
         let empty_line_number = window.text_system().shape_line(
-            "+++++".into(),
+            "++++++".into(),
             font_size,
             &[TextRun {
-                len: 5,
+                len: 6,
                 font: style.font(),
                 color: gpui::black(),
                 background_color: None,
@@ -649,8 +700,10 @@ impl Element for TextElement {
 
                 runs.extend(highlight_styles.iter().map(|(range, style)| {
                     let mut run = text_style.clone().highlight(*style).to_run(range.len());
-                    if let Some(marked_range) = &state.marked_range {
-                        if range.start >= marked_range.start && range.end <= marked_range.end {
+                    if let Some(ime_marked_range) = &state.ime_marked_range {
+                        if range.start >= ime_marked_range.start
+                            && range.end <= ime_marked_range.end
+                        {
                             run.color = marked_run.color;
                             run.strikethrough = marked_run.strikethrough;
                             run.underline = marked_run.underline;
@@ -664,20 +717,20 @@ impl Element for TextElement {
             } else {
                 vec![run]
             }
-        } else if let Some(marked_range) = &state.marked_range {
+        } else if let Some(ime_marked_range) = &state.ime_marked_range {
             // IME marked text
             vec![
                 TextRun {
-                    len: marked_range.start,
+                    len: ime_marked_range.start,
                     ..run.clone()
                 },
                 TextRun {
-                    len: marked_range.end - marked_range.start,
+                    len: ime_marked_range.end - ime_marked_range.start,
                     underline: marked_run.underline,
                     ..run.clone()
                 },
                 TextRun {
-                    len: display_text.len() - marked_range.end,
+                    len: display_text.len() - ime_marked_range.end,
                     ..run.clone()
                 },
             ]
@@ -689,7 +742,7 @@ impl Element for TextElement {
         };
 
         let wrap_width = if multi_line && state.soft_wrap {
-            Some(bounds.size.width - line_number_width)
+            Some(bounds.size.width - line_number_width - RIGHT_MARGIN)
         } else {
             None
         };
@@ -706,8 +759,8 @@ impl Element for TextElement {
             .expect("failed to shape text");
         // measure.end();
 
-        let mut longest_line_width = px(0.);
-        if state.mode.is_multi_line() && lines.len() > 1 {
+        let mut longest_line_width = wrap_width.unwrap_or(px(0.));
+        if state.mode.is_multi_line() && !state.soft_wrap && lines.len() > 1 {
             let longtest_line: SharedString = state
                 .text
                 .line(state.text.summary().longest_row as usize)
@@ -750,7 +803,7 @@ impl Element for TextElement {
         let mut last_layout = LastLayout {
             visible_range,
             visible_top,
-            visible_start_offset,
+            visible_range_offset: visible_start_offset..visible_end_offset,
             line_height,
             wrap_width,
             line_number_width,
@@ -793,7 +846,8 @@ impl Element for TextElement {
             self.layout_cursor(&last_layout, &mut bounds, window, cx);
         last_layout.cursor_bounds = cursor_bounds;
 
-        let selection_path = self.layout_selections(&last_layout, &mut bounds, window, cx);
+        let search_match_paths = self.layout_search_matches(&last_layout, &mut bounds, cx);
+        let selection_path = self.layout_selections(&last_layout, &mut bounds, cx);
 
         let state = self.state.read(cx);
         let line_numbers = if state.mode.line_number() {
@@ -821,7 +875,7 @@ impl Element for TextElement {
                 let ix = last_layout.visible_range.start + ix;
                 let line_no = ix + 1;
 
-                let mut line_no_text = format!("{:>5}", line_no);
+                let mut line_no_text = format!("{:>6}", line_no);
                 if !line.wrap_boundaries.is_empty() {
                     line_no_text.push_str(&"\n    ".repeat(line.wrap_boundaries.len()));
                 }
@@ -852,6 +906,7 @@ impl Element for TextElement {
             cursor_scroll_offset,
             current_row,
             selection_path,
+            search_match_paths,
         }
     }
 
@@ -948,6 +1003,14 @@ impl Element for TextElement {
 
         // Paint selections
         if window.is_window_active() {
+            for (path, is_active) in prepaint.search_match_paths.iter() {
+                window.paint_path(path.clone(), cx.theme().selection.saturation(0.1));
+
+                if *is_active {
+                    window.paint_path(path.clone(), cx.theme().selection);
+                }
+            }
+
             if let Some(path) = prepaint.selection_path.take() {
                 window.paint_path(path, cx.theme().selection);
             }
@@ -986,11 +1049,7 @@ impl Element for TextElement {
                         input_bounds.size.height,
                     ),
                 },
-                cx.theme()
-                    .highlight_theme
-                    .style
-                    .background
-                    .unwrap_or(cx.theme().input),
+                cx.theme().background,
             ));
 
             // Each item is the normal lines.
