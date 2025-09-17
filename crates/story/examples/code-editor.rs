@@ -8,8 +8,8 @@ use gpui_component::{
     h_flex,
     highlighter::{Diagnostic, DiagnosticSeverity, Language, LanguageConfig, LanguageRegistry},
     input::{
-        self, CodeActionProvider, CompletionProvider, InputEvent, InputState, Position, RopeExt,
-        TabSize, TextInput,
+        self, CodeActionProvider, CompletionProvider, InputEvent, InputState, Position, Rope,
+        RopeExt, TabSize, TextInput,
     },
     v_flex, ActiveTheme, ContextModal, IconName, IndexPath, Selectable, Sizable,
 };
@@ -131,7 +131,7 @@ impl ExampleLspStore {
 impl CompletionProvider for ExampleLspStore {
     fn completions(
         &self,
-        _state: Entity<InputState>,
+        rope: &Rope,
         _offset: usize,
         trigger: CompletionContext,
         _: &mut Window,
@@ -145,6 +145,8 @@ impl CompletionProvider for ExampleLspStore {
         if trigger_character.is_empty() {
             return Task::ready(Ok(vec![]));
         }
+
+        let _ = rope.to_string(); // Just to use the rope parameter.
 
         // Simulate to delay for fetching completions
         let items = self.completions.clone();
