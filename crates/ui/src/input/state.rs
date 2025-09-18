@@ -30,7 +30,7 @@ use super::{
     text_wrapper::TextWrapper,
 };
 use crate::input::{
-    popovers::{ContextMenu, DiagnosticPopover},
+    popovers::{ContextMenu, DiagnosticPopover, HoverPopover},
     search::{self, SearchPanel},
     Lsp, Position,
 };
@@ -298,6 +298,7 @@ pub struct InputState {
     pub(super) context_menu: Option<ContextMenu>,
     /// A flag to indicate if we are currently inserting a completion item.
     pub(super) completion_inserting: bool,
+    pub(super) hover_popover: Option<Entity<HoverPopover>>,
 
     pub lsp: Lsp,
 
@@ -382,6 +383,7 @@ impl InputState {
             diagnostic_popover: None,
             context_menu: None,
             completion_inserting: false,
+            hover_popover: None,
             _subscriptions,
             _context_menu_task: Task::ready(Ok(())),
         }
@@ -599,7 +601,7 @@ impl InputState {
             let local_offset = offset.saturating_sub(prev_lines_offset);
             if let Some(pos) = line.position_for_index(local_offset, line_height) {
                 let sub_line_index = (pos.y.0 / line_height.0) as usize;
-                let adjusted_pos = point(pos.x, pos.y + y_offset);
+                let adjusted_pos = point(pos.x + last_layout.line_number_width, pos.y + y_offset);
                 return (line_index, sub_line_index, Some(adjusted_pos));
             }
 
@@ -1573,9 +1575,11 @@ impl InputState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Show diagnostic popover on mouse move
+        let offset = self.index_for_mouse_position(event.position, window, cx);
+        self.handle_hover(offset, window, cx);
+
         if self.mode.is_code_editor() {
-            // Show diagnostic popover on mouse move
-            let offset = self.index_for_mouse_position(event.position, window, cx);
             if let Some(diagnostic) = self
                 .mode
                 .diagnostics()
@@ -2433,5 +2437,6 @@ impl Render for InputState {
             .child(TextElement::new(cx.entity().clone()).placeholder(self.placeholder.clone()))
             .children(self.diagnostic_popover.clone())
             .children(self.context_menu.as_ref().map(|menu| menu.render()))
+            .children(self.hover_popover.clone())
     }
 }
