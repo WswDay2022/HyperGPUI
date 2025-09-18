@@ -32,7 +32,7 @@ use super::{
 use crate::input::{
     popovers::{ContextMenu, DiagnosticPopover},
     search::{self, SearchPanel},
-    Position,
+    Lsp, Position,
 };
 use crate::input::{RopeExt as _, Selection};
 use crate::{highlighter::DiagnosticSet, input::text_wrapper::LineItem};
@@ -299,6 +299,8 @@ pub struct InputState {
     /// A flag to indicate if we are currently inserting a completion item.
     pub(super) completion_inserting: bool,
 
+    pub lsp: Lsp,
+
     /// To remember the horizontal column (x-coordinate) of the cursor position for keep column for move up/down.
     ///
     /// The first element is the x-coordinate (Pixels), preferred to use this.
@@ -376,6 +378,7 @@ impl InputState {
             preferred_column: None,
             placeholder: SharedString::default(),
             mask_pattern: MaskPattern::default(),
+            lsp: Lsp::default(),
             diagnostic_popover: None,
             context_menu: None,
             completion_inserting: false,
@@ -433,8 +436,6 @@ impl InputState {
             highlighter: Rc::new(RefCell::new(None)),
             line_number: true,
             diagnostics: DiagnosticSet::default(),
-            code_action_providers: vec![],
-            completion_provider: None,
         };
         self.searchable = true;
         self
@@ -444,66 +445,6 @@ impl InputState {
     pub fn searchable(mut self, searchable: bool) -> Self {
         self.searchable = searchable;
         self
-    }
-
-    /// Add a code action provider for the code editor mode.
-    ///
-    /// Only for `InputMode::CodeEditor`.
-    pub fn add_code_action_provider(
-        &mut self,
-        provider: Rc<dyn super::CodeActionProvider>,
-        cx: &mut Context<Self>,
-    ) {
-        if let InputMode::CodeEditor {
-            code_action_providers,
-            ..
-        } = &mut self.mode
-        {
-            code_action_providers.push(provider);
-            cx.notify();
-        }
-    }
-
-    /// Remove a code action provider for the code editor mode.
-    pub fn remove_code_action_provider(&mut self, id: &str, cx: &mut Context<Self>) {
-        if let InputMode::CodeEditor {
-            code_action_providers,
-            ..
-        } = &mut self.mode
-        {
-            code_action_providers.retain(|p| p.id().as_str() != id);
-            cx.notify();
-        }
-    }
-
-    /// Clear all code action providers for the code editor mode.
-    pub fn clear_code_action_providers(&mut self, cx: &mut Context<Self>) {
-        if let InputMode::CodeEditor {
-            code_action_providers,
-            ..
-        } = &mut self.mode
-        {
-            code_action_providers.clear();
-            cx.notify();
-        }
-    }
-
-    /// Set the completion provider for the code editor mode.
-    ///
-    /// Only for `InputMode::CodeEditor`.
-    pub fn set_completion_provider(
-        &mut self,
-        provider: Option<Rc<dyn super::CompletionProvider>>,
-        cx: &mut Context<Self>,
-    ) {
-        if let InputMode::CodeEditor {
-            completion_provider,
-            ..
-        } = &mut self.mode
-        {
-            *completion_provider = provider;
-            cx.notify();
-        }
     }
 
     /// Set placeholder

@@ -489,9 +489,9 @@ impl Example {
                 .default_value(default_language.1)
                 .placeholder("Enter your code here...");
 
-            editor.set_completion_provider(Some(Rc::new(lsp_store.clone())), cx);
-            editor.add_code_action_provider(Rc::new(lsp_store.clone()), cx);
-            editor.add_code_action_provider(Rc::new(TextConvertor), cx);
+            editor.lsp.completion_provider = Some(Rc::new(lsp_store.clone()));
+            editor.lsp.code_action_providers =
+                vec![Rc::new(lsp_store.clone()), Rc::new(TextConvertor)];
 
             editor
         });

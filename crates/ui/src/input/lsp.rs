@@ -12,6 +12,21 @@ use crate::input::{
     InputState, RopeExt,
 };
 
+/// LSP ServerCapabilities
+///
+/// https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#serverCapabilities
+#[derive(Clone, Default)]
+pub struct Lsp {
+    /// The completion provider.
+    pub completion_provider: Option<Rc<dyn CompletionProvider>>,
+    /// The code action providers.
+    pub code_action_providers: Vec<Rc<dyn CodeActionProvider>>,
+    /// The hover provider.
+    pub hover_provider: Option<Rc<dyn HoverProvider>>,
+}
+
+impl Lsp {}
+
 /// A trait for providing code completions based on the current input state and context.
 pub trait CompletionProvider {
     /// Fetches completions based on the given byte offset.
@@ -66,6 +81,21 @@ pub trait CodeActionProvider {
         window: &mut Window,
         cx: &mut App,
     ) -> Task<Result<()>>;
+}
+
+pub trait HoverProvider {
+    /// Hover provider
+    ///
+    /// https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_hover
+    fn hover(
+        &self,
+        _text: &Rope,
+        _offset: usize,
+        _window: &mut Window,
+        _cx: &mut App,
+    ) -> Task<Result<Option<lsp_types::Hover>>> {
+        Task::ready(Ok(None))
+    }
 }
 
 impl InputState {
@@ -125,7 +155,7 @@ impl InputState {
             return;
         }
 
-        let Some(provider) = self.mode.completion_provider().cloned() else {
+        let Some(provider) = self.lsp.completion_provider.clone() else {
             return;
         };
 
@@ -220,7 +250,7 @@ impl InputState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let providers = self.mode.code_action_providers();
+        let providers = self.lsp.code_action_providers.clone();
         let menu = match self.context_menu.as_ref() {
             Some(ContextMenu::CodeAction(menu)) => Some(menu),
             _ => None,
@@ -289,7 +319,7 @@ impl InputState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let providers = self.mode.code_action_providers();
+        let providers = self.lsp.code_action_providers.clone();
         let Some(provider) = providers
             .iter()
             .find(|provider| provider.id() == item.provider_id)

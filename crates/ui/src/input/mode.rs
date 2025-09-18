@@ -5,11 +5,9 @@ use gpui::{App, SharedString};
 use rope::Rope;
 use tree_sitter::{InputEdit, Point};
 
+use super::text_wrapper::TextWrapper;
 use crate::highlighter::DiagnosticSet;
 use crate::highlighter::SyntaxHighlighter;
-use crate::input::{CodeActionProvider, CompletionProvider};
-
-use super::text_wrapper::TextWrapper;
 
 #[derive(Debug, Copy, Clone)]
 pub struct TabSize {
@@ -59,8 +57,6 @@ pub enum InputMode {
         language: SharedString,
         highlighter: Rc<RefCell<Option<SyntaxHighlighter>>>,
         diagnostics: DiagnosticSet,
-        completion_provider: Option<Rc<dyn CompletionProvider>>,
-        code_action_providers: Vec<Rc<dyn CodeActionProvider>>,
     },
 }
 
@@ -239,26 +235,6 @@ impl InputMode {
         match self {
             InputMode::CodeEditor { diagnostics, .. } => Some(diagnostics),
             _ => None,
-        }
-    }
-
-    pub(super) fn completion_provider(&self) -> Option<&Rc<dyn CompletionProvider>> {
-        match self {
-            InputMode::CodeEditor {
-                completion_provider,
-                ..
-            } => completion_provider.as_ref(),
-            _ => None,
-        }
-    }
-
-    pub(super) fn code_action_providers(&self) -> Vec<Rc<dyn CodeActionProvider>> {
-        match self {
-            InputMode::CodeEditor {
-                code_action_providers,
-                ..
-            } => code_action_providers.clone(),
-            _ => vec![],
         }
     }
 }
