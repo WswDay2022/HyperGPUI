@@ -3,8 +3,8 @@ use std::{ops::Range, rc::Rc};
 use gpui::{
     fill, point, px, relative, size, App, Bounds, Corners, Element, ElementId, ElementInputHandler,
     Entity, GlobalElementId, Half, HighlightStyle, Hitbox, IntoElement, LayoutId, MouseButton,
-    MouseMoveEvent, Path, Pixels, Point, SharedString, Size, Style, TextAlign, TextRun,
-    UnderlineStyle, Window, WrappedLine,
+    MouseMoveEvent, Path, Pixels, Point, ShapedLine, SharedString, Size, Style, TextAlign, TextRun,
+    UnderlineStyle, Window,
 };
 use rope::Rope;
 use smallvec::SmallVec;
@@ -533,7 +533,9 @@ pub(super) struct PrepaintState {
     /// The lines of entire lines.
     last_layout: LastLayout,
     /// The lines only contains the visible lines in the viewport, based on `visible_range`.
-    line_numbers: Option<Vec<SmallVec<[WrappedLine; 1]>>>,
+    ///
+    /// The child is the soft lines.
+    line_numbers: Option<Vec<SmallVec<[ShapedLine; 1]>>>,
     /// Size of the scrollable area by entire lines.
     scroll_size: Size<Pixels>,
     cursor_bounds: Option<Bounds<Pixels>>,
@@ -876,7 +878,7 @@ impl Element for TextElement {
         let state = self.state.read(cx);
         let line_numbers = if state.mode.line_number() {
             let mut line_numbers = vec![];
-            let run_len = 4;
+            let run_len = 6;
             let other_line_runs = vec![TextRun {
                 len: run_len,
                 font: style.font(),
@@ -897,12 +899,7 @@ impl Element for TextElement {
             // build line numbers
             for (ix, line) in last_layout.lines.iter().enumerate() {
                 let ix = last_layout.visible_range.start + ix;
-                let line_no = ix + 1;
-
-                let mut line_no_text = format!("{:>6}", line_no);
-                if !line.wrap_boundaries.is_empty() {
-                    line_no_text.push_str(&"\n    ".repeat(line.wrap_boundaries.len()));
-                }
+                let line_no_text = format!("{:>6}", ix + 1);
 
                 let runs = if current_row == Some(ix) {
                     &current_line_runs
@@ -910,11 +907,17 @@ impl Element for TextElement {
                     &other_line_runs
                 };
 
-                let shape_line = window
-                    .text_system()
-                    .shape_text(line_no_text.into(), font_size, &runs, None, None)
-                    .unwrap();
-                line_numbers.push(shape_line);
+                let mut sub_lines: SmallVec<[ShapedLine; 1]> = SmallVec::new();
+                sub_lines.push(window.text_system().shape_line(
+                    line_no_text.into(),
+                    font_size,
+                    &runs,
+                    None,
+                ));
+                for _ in 0..line.wrap_boundaries.len() {
+                    sub_lines.push(ShapedLine::default());
+                }
+                line_numbers.push(sub_lines);
             }
             Some(line_numbers)
         } else {
@@ -1012,20 +1015,18 @@ impl Element for TextElement {
             for (ix, lines) in line_numbers.iter().enumerate() {
                 let row = visible_range.start + ix;
                 let is_active = prepaint.current_row == Some(row);
-                for line in lines {
-                    let p = point(input_bounds.origin.x, origin.y + offset_y);
-                    let line_size = line.size(line_height);
-                    // Paint the current line background
-                    if is_active {
-                        if let Some(bg_color) = active_line_color {
-                            window.paint_quad(fill(
-                                Bounds::new(p, size(bounds.size.width, line_height)),
-                                bg_color,
-                            ));
-                        }
+                let p = point(input_bounds.origin.x, origin.y + offset_y);
+                let height = line_height * lines.len() as f32;
+                // Paint the current line background
+                if is_active {
+                    if let Some(bg_color) = active_line_color {
+                        window.paint_quad(fill(
+                            Bounds::new(p, size(bounds.size.width, height)),
+                            bg_color,
+                        ));
                     }
-                    offset_y += line_size.height;
                 }
+                offset_y += height;
             }
         }
 
@@ -1089,27 +1090,24 @@ impl Element for TextElement {
             // Each item is the normal lines.
             for (ix, lines) in line_numbers.iter().enumerate() {
                 let row = visible_range.start + ix;
-                for line in lines {
-                    let p = point(input_bounds.origin.x, origin.y + offset_y);
 
-                    let is_active = prepaint.current_row == Some(row);
-                    let line_size = line.size(line_height);
+                let p = point(input_bounds.origin.x, origin.y + offset_y);
+                let is_active = prepaint.current_row == Some(row);
 
-                    // paint active line number background
-                    if is_active {
-                        if let Some(bg_color) = active_line_color {
-                            window.paint_quad(fill(
-                                Bounds::new(
-                                    p,
-                                    size(prepaint.last_layout.line_number_width, line_height),
-                                ),
-                                bg_color,
-                            ));
-                        }
+                let height = line_height * lines.len() as f32;
+                // paint active line number background
+                if is_active {
+                    if let Some(bg_color) = active_line_color {
+                        window.paint_quad(fill(
+                            Bounds::new(p, size(prepaint.last_layout.line_number_width, height)),
+                            bg_color,
+                        ));
                     }
+                }
 
-                    _ = line.paint(p, line_height, TextAlign::Left, None, window, cx);
-                    offset_y += line_size.height;
+                for line in lines {
+                    _ = line.paint(p, line_height, window, cx);
+                    offset_y += line_height;
                 }
             }
         }
