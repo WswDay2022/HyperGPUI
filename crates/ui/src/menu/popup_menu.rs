@@ -6,18 +6,17 @@ use crate::{
     button::Button, h_flex, popover::Popover, v_flex, ActiveTheme, Icon, IconName, Selectable,
     Sizable as _,
 };
-use crate::{Kbd, Side, StyledExt};
+use crate::{Kbd, Side, Size, StyledExt};
 use gpui::{
     anchored, canvas, div, prelude::FluentBuilder, px, rems, Action, AnyElement, App, AppContext,
     Bounds, Context, Corner, DismissEvent, Edges, Entity, EventEmitter, FocusHandle, Focusable,
     InteractiveElement, IntoElement, KeyBinding, ParentElement, Pixels, Render, ScrollHandle,
     SharedString, StatefulInteractiveElement, Styled, WeakEntity, Window,
 };
-use gpui::{AsKeystroke, MouseDownEvent, Subscription};
+use gpui::{AsKeystroke, Half, MouseDownEvent, Subscription};
 use std::ops::Deref;
 use std::rc::Rc;
 
-const ITEM_HEIGHT: Pixels = px(26.);
 const CONTEXT: &str = "PopupMenu";
 
 pub fn init(cx: &mut App) {
@@ -61,7 +60,7 @@ pub trait PopupMenuExt: Styled + Selectable + InteractiveElement + IntoElement +
 }
 impl PopupMenuExt for Button {}
 
-enum PopupMenuItem {
+pub(crate) enum PopupMenuItem {
     Separator,
     Label(SharedString),
     Item {
@@ -113,13 +112,14 @@ pub struct PopupMenu {
     /// The parent menu of this menu, if this is a submenu
     parent_menu: Option<WeakEntity<Self>>,
     focus_handle: FocusHandle,
-    menu_items: Vec<PopupMenuItem>,
+    pub(crate) menu_items: Vec<PopupMenuItem>,
     has_icon: bool,
     selected_index: Option<usize>,
     min_width: Option<Pixels>,
     max_width: Option<Pixels>,
     max_height: Option<Pixels>,
     bounds: Bounds<Pixels>,
+    size: Size,
 
     scrollable: bool,
     external_link_icon: bool,
@@ -131,32 +131,35 @@ pub struct PopupMenu {
 }
 
 impl PopupMenu {
+    pub(crate) fn new(cx: &mut App) -> Self {
+        Self {
+            focus_handle: cx.focus_handle(),
+            previous_focus_handle: None,
+            parent_menu: None,
+            menu_items: Vec::new(),
+            selected_index: None,
+            min_width: None,
+            max_width: None,
+            max_height: None,
+            has_icon: false,
+            bounds: Bounds::default(),
+            scrollable: false,
+            scroll_handle: ScrollHandle::default(),
+            scroll_state: ScrollbarState::default(),
+            external_link_icon: true,
+            size: Size::default(),
+            _subscriptions: vec![],
+        }
+    }
+
     pub fn build(
         window: &mut Window,
         cx: &mut App,
         f: impl FnOnce(Self, &mut Window, &mut Context<PopupMenu>) -> Self,
     ) -> Entity<Self> {
         cx.new(|cx| {
-            let focus_handle = cx.focus_handle();
-            let _subscriptions = vec![];
-
-            let menu = Self {
-                focus_handle,
-                previous_focus_handle: window.focused(cx),
-                parent_menu: None,
-                menu_items: Vec::new(),
-                selected_index: None,
-                min_width: None,
-                max_width: None,
-                max_height: None,
-                has_icon: false,
-                bounds: Bounds::default(),
-                scrollable: false,
-                scroll_handle: ScrollHandle::default(),
-                scroll_state: ScrollbarState::default(),
-                external_link_icon: true,
-                _subscriptions,
-            };
+            let mut menu = Self::new(cx);
+            menu.previous_focus_handle = window.focused(cx);
             f(menu, window, cx)
         })
     }
@@ -196,6 +199,17 @@ impl PopupMenu {
     /// Add Menu Item
     pub fn menu(self, label: impl Into<SharedString>, action: Box<dyn Action>) -> Self {
         self.menu_with_disabled(label, action, false)
+    }
+
+    /// Add Menu Item with enable state
+    pub fn menu_with_enable(
+        mut self,
+        label: impl Into<SharedString>,
+        action: Box<dyn Action>,
+        enable: bool,
+    ) -> Self {
+        self.add_menu_item(label, None, action, !enable);
+        self
     }
 
     /// Add Menu Item with disabled state
@@ -426,6 +440,12 @@ impl PopupMenu {
         Rc::new(move |window, cx| {
             window.dispatch_action(action.boxed_clone(), cx);
         })
+    }
+
+    /// Use small size, the menu item will have smaller height.
+    pub(crate) fn small(mut self) -> Self {
+        self.size = Size::Small;
+        self
     }
 
     /// Add a separator Menu Item
@@ -805,12 +825,17 @@ impl PopupMenu {
         const EDGE_PADDING: Pixels = px(8.);
         const INNER_PADDING: Pixels = px(4.);
 
+        let (item_height, radius) = match self.size {
+            Size::Small => (px(20.), state.radius.half()),
+            _ => (px(26.), state.radius),
+        };
+
         let this = MenuItem::new(ix)
             .relative()
             .text_sm()
             .py_0()
             .px(INNER_PADDING)
-            .rounded(state.radius)
+            .rounded(radius)
             .items_center()
             .hovered(selected)
             .on_mouse_enter(cx.listener(move |this, _, _, cx| {
@@ -853,7 +878,7 @@ impl PopupMenu {
                 .disabled(*disabled)
                 .child(
                     h_flex()
-                        .min_h(ITEM_HEIGHT)
+                        .min_h(item_height)
                         .items_center()
                         .gap_x_1()
                         .children(Self::render_icon(has_icon, icon.clone(), window, cx))
@@ -877,7 +902,7 @@ impl PopupMenu {
                     )
                 })
                 .disabled(*disabled)
-                .h(ITEM_HEIGHT)
+                .h(item_height)
                 .children(Self::render_icon(has_icon, icon.clone(), window, cx))
                 .child(
                     h_flex()
@@ -914,7 +939,7 @@ impl PopupMenu {
                 .items_start()
                 .child(
                     h_flex()
-                        .min_h(ITEM_HEIGHT)
+                        .min_h(item_height)
                         .size_full()
                         .items_center()
                         .gap_x_1()
