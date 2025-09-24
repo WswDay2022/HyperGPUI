@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use gpui::{App, Font, LineFragment, Pixels};
-use rope::Rope;
+use ropey::{LineType, Rope};
 
 use crate::input::RopeExt;
 
@@ -37,6 +37,14 @@ impl LineItem {
     }
 }
 
+#[derive(Debug, Default)]
+pub(super) struct LongestRow {
+    /// The 0-based row index.
+    pub row: usize,
+    /// The bytes length of the longest line.
+    pub len: usize,
+}
+
 /// Used to prepare the text with soft wrap to be get lines to displayed in the Editor.
 ///
 /// After use lines to calculate the scroll size of the Editor.
@@ -48,6 +56,8 @@ pub(super) struct TextWrapper {
     font_size: Pixels,
     /// If is none, it means the text is not wrapped
     wrap_width: Option<Pixels>,
+    /// The longest (row, bytes len) in characters, used to calculate the horizontal scroll width.
+    pub(super) longest_row: LongestRow,
     /// The lines by split \n
     pub(super) lines: Vec<LineItem>,
 }
@@ -61,6 +71,7 @@ impl TextWrapper {
             font_size,
             wrap_width,
             soft_lines: 0,
+            longest_row: LongestRow::default(),
             lines: Vec::new(),
         }
     }
@@ -149,18 +160,25 @@ impl TextWrapper {
         }
 
         // Remove the old changed lines.
-        let start_row = self.text.offset_to_point(range.start).row as usize;
+        let start_row = self.text.offset_to_point(range.start).row;
         let start_row = start_row.min(self.lines.len().saturating_sub(1));
-        let end_row = self.text.offset_to_point(range.end).row as usize;
+        let end_row = self.text.offset_to_point(range.end).row;
         let end_row = end_row.min(self.lines.len().saturating_sub(1));
         let rows_range = start_row..=end_row;
 
+        if rows_range.contains(&self.longest_row.row) {
+            self.longest_row = LongestRow::default();
+        }
+
+        let mut longest_row_ix = self.longest_row.row;
+        let mut longest_row_len = self.longest_row.len;
+
         // To add the new lines.
-        let new_start_row = changed_text.offset_to_point(range.start).row as usize;
+        let new_start_row = changed_text.offset_to_point(range.start).row;
         let new_start_offset = changed_text.line_start_offset(new_start_row);
         let new_end_row = changed_text
             .offset_to_point(range.start + new_text.len())
-            .row as usize;
+            .row;
         let new_end_offset = changed_text.line_end_offset(new_end_row);
         let new_range = new_start_offset..new_end_offset;
 
@@ -168,10 +186,26 @@ impl TextWrapper {
 
         let wrap_width = self.wrap_width;
 
-        for line in changed_text.slice(new_range).lines() {
+        for (ix, line) in changed_text
+            .slice(new_range)
+            .lines(LineType::LF_CR)
+            .enumerate()
+        {
+            // Remove the last `\n`
+            let line = if line.len() > 0 && line.chars().last() == Some('\n') {
+                line.slice(..line.len().saturating_sub(1))
+            } else {
+                line
+            };
+
             let line_str = line.to_string();
             let mut wrapped_lines = vec![];
             let mut prev_boundary_ix = 0;
+
+            if line_str.len() > longest_row_len {
+                longest_row_ix = new_start_row + ix;
+                longest_row_len = line_str.len();
+            }
 
             // If wrap_width is Pixels::MAX, skip wrapping to disable word wrap
             if let Some(wrap_width) = wrap_width {
@@ -188,7 +222,7 @@ impl TextWrapper {
             }
 
             new_lines.push(LineItem {
-                line: line.clone(),
+                line: Rope::from(line),
                 wrapped_lines,
             });
         }
@@ -204,6 +238,10 @@ impl TextWrapper {
         // dbg!(self.lines.len());
         self.text = changed_text.clone();
         self.soft_lines = self.lines.iter().map(|l| l.lines_len()).sum();
+        self.longest_row = LongestRow {
+            row: longest_row_ix,
+            len: longest_row_len,
+        }
     }
 
     /// Update the text wrapper and recalculate the wrapped lines.

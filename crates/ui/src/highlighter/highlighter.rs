@@ -1,9 +1,9 @@
-use crate::{highlighter::LanguageRegistry, input::RopeExt as _, ActiveTheme};
+use crate::{highlighter::LanguageRegistry, ActiveTheme};
 
 use anyhow::{anyhow, Context, Result};
 use gpui::{App, HighlightStyle, SharedString};
 
-use rope::Rope;
+use ropey::{ChunkCursor, Rope};
 use std::{
     collections::{BTreeSet, HashMap},
     ops::Range,
@@ -40,12 +40,21 @@ pub struct SyntaxHighlighter {
 }
 
 struct TextProvider<'a>(&'a Rope);
-struct ByteChunks<'a>(rope::Chunks<'a>);
+struct ByteChunks<'a> {
+    cursor: ChunkCursor<'a>,
+    end: usize,
+}
 impl<'a> tree_sitter::TextProvider<&'a [u8]> for TextProvider<'a> {
     type I = ByteChunks<'a>;
 
     fn text(&mut self, node: tree_sitter::Node) -> Self::I {
-        ByteChunks(self.0.chunks_in_range(node.byte_range()))
+        let range = node.byte_range();
+        let cursor = self.0.chunk_cursor_at(range.start);
+
+        ByteChunks {
+            cursor,
+            end: range.end,
+        }
     }
 }
 
@@ -53,7 +62,14 @@ impl<'a> Iterator for ByteChunks<'a> {
     type Item = &'a [u8];
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.0.next().map(str::as_bytes)
+        let cursor = &mut self.cursor;
+        let end = self.end;
+
+        if cursor.next() && cursor.byte_offset() < end {
+            Some(cursor.chunk().as_bytes())
+        } else {
+            None
+        }
     }
 }
 
@@ -315,11 +331,14 @@ impl SyntaxHighlighter {
             .unwrap_or(self.parser.parse("", None).unwrap());
         old_tree.edit(&edit);
 
-        let mut chunks = text.chunks();
         let new_tree = self.parser.parse_with_options(
             &mut move |offset, _| {
-                chunks.seek(offset);
-                chunks.next().unwrap_or("").as_bytes()
+                if offset >= text.len() {
+                    ""
+                } else {
+                    let (chunk, chunk_byte_ix) = text.chunk(offset);
+                    &chunk[offset - chunk_byte_ix..]
+                }
             },
             Some(&old_tree),
             None,

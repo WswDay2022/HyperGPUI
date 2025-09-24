@@ -11,7 +11,7 @@ use gpui::{
     ScrollWheelEvent, SharedString, Styled as _, Subscription, Task, UTF16Selection, Window,
     WrappedLine,
 };
-use rope::{OffsetUtf16, Rope};
+use ropey::{Rope, RopeSlice};
 use serde::Deserialize;
 use smallvec::SmallVec;
 use std::cell::RefCell;
@@ -581,19 +581,18 @@ impl InputState {
         };
 
         let point = self.text.offset_to_point(self.cursor());
-        let row = (point.row as usize).saturating_sub(last_layout.visible_range.start);
+        let row = point.row.saturating_sub(last_layout.visible_range.start);
         let Some(line) = last_layout.lines.get(row) else {
             self.preferred_column = None;
             return;
         };
 
-        let Some(pos) = line.position_for_index(point.column as usize, last_layout.line_height)
-        else {
+        let Some(pos) = line.position_for_index(point.column, last_layout.line_height) else {
             self.preferred_column = None;
             return;
         };
 
-        self.preferred_column = Some((pos.x, point.column as usize));
+        self.preferred_column = Some((pos.x, point.column));
     }
 
     /// Find which line and sub-line the given offset belongs to, along with the position within that sub-line.
@@ -644,17 +643,18 @@ impl InputState {
         let was_preferred_column = self.preferred_column;
 
         let row = self.text.offset_to_point(offset).row;
-        let new_row = row.saturating_add_signed(move_lines as i32);
-        let line_start_offset = self.text.point_to_offset(rope::Point::new(new_row, 0));
+        let new_row = row.saturating_add_signed(move_lines);
+        let line_start_offset = self
+            .text
+            .point_to_offset(tree_sitter::Point::new(new_row, 0));
 
         let mut new_offset = line_start_offset;
 
         if let Some((preferred_x, column)) = was_preferred_column {
-            let new_column = column.min(self.text.line(new_row as usize).len());
+            let new_column = column.min(self.text.slice_row(new_row).len());
             new_offset = line_start_offset + new_column;
 
             // If in visible range, prefer to use position to get column.
-            let new_row = new_row as usize;
             if new_row >= last_layout.visible_range.start {
                 let visible_row = new_row.saturating_sub(last_layout.visible_range.start);
                 if let Some(line) = last_layout.lines.get(visible_row) {
@@ -889,13 +889,7 @@ impl InputState {
         cx: &mut Context<Self>,
     ) {
         let position: Position = position.into();
-        let max_point = self.text.max_point();
-        let row = position.line.min(max_point.row);
-        let col = position.character.min(self.text.line_len(row));
-
-        let offset = self
-            .text
-            .point_to_offset(rope::Point::new(row as u32, col as u32));
+        let offset = self.text.position_to_offset(&position);
 
         self.move_to(offset, cx);
         self.update_preferred_column();
@@ -1164,7 +1158,7 @@ impl InputState {
         }
 
         let row = self.text.offset_to_point(self.cursor()).row;
-        self.text.line_start_offset(row as usize)
+        self.text.line_start_offset(row)
     }
 
     /// Get end of line byte offset of cursor
@@ -1174,7 +1168,7 @@ impl InputState {
         }
 
         let row = self.text.offset_to_point(self.cursor()).row;
-        self.text.line_end_offset(row as usize)
+        self.text.line_end_offset(row)
     }
 
     /// Get start line of selection start or end (The min value).
@@ -1668,7 +1662,7 @@ impl InputState {
         let line_height = last_layout.line_height;
 
         let point = self.text.offset_to_point(offset);
-        let row = point.row as usize;
+        let row = point.row;
 
         let mut row_offset_y = px(0.);
         for (ix, wrap_line) in self.text_wrapper.lines.iter().enumerate() {
@@ -1710,7 +1704,7 @@ impl InputState {
             return;
         }
 
-        let selected_text = self.text.slice(self.selected_range.into()).to_string();
+        let selected_text = self.text.slice(self.selected_range).to_string();
         cx.write_to_clipboard(ClipboardItem::new_string(selected_text));
     }
 
@@ -1719,7 +1713,7 @@ impl InputState {
             return;
         }
 
-        let selected_text = self.text.slice(self.selected_range.into()).to_string();
+        let selected_text = self.text.slice(self.selected_range).to_string();
         cx.write_to_clipboard(ClipboardItem::new_string(selected_text));
 
         self.replace_text_in_range_silent(None, "", window, cx);
@@ -2014,12 +2008,12 @@ impl InputState {
 
     #[inline]
     pub(super) fn offset_from_utf16(&self, offset: usize) -> usize {
-        self.text.offset_utf16_to_offset(OffsetUtf16(offset))
+        self.text.offset_utf16_to_offset(offset)
     }
 
     #[inline]
     pub(super) fn offset_to_utf16(&self, offset: usize) -> usize {
-        self.text.offset_to_offset_utf16(offset).0
+        self.text.offset_to_offset_utf16(offset)
     }
 
     #[inline]
@@ -2191,7 +2185,7 @@ impl InputState {
         }
     }
 
-    pub(super) fn selected_text(&self) -> Rope {
+    pub(super) fn selected_text(&self) -> RopeSlice<'_> {
         let range_utf16 = self.range_to_utf16(&self.selected_range.into());
         let range = self.range_from_utf16(&range_utf16);
         self.text.slice(range)
