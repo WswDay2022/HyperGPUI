@@ -1,7 +1,7 @@
 use gpui::{
     anchored, deferred, div, prelude::FluentBuilder as _, px, App, AppContext as _, Context,
-    DismissEvent, Entity, IntoElement, MouseDownEvent, ParentElement as _, Pixels, Point, Render,
-    Styled, Subscription, Window,
+    Corner, DismissEvent, Entity, IntoElement, MouseDownEvent, ParentElement as _, Pixels, Point,
+    Render, Styled, Subscription, Window,
 };
 use rust_i18n::t;
 
@@ -40,11 +40,13 @@ impl InputState {
             self.handle_hover_definition(offset, window, cx);
         }
 
-        let has_goto_definition = self.lsp.definition_provider.is_some();
-        let has_code_action = !self.lsp.code_action_providers.is_empty();
-        let is_selected = !self.selected_range.is_empty();
-        let has_paste = cx.read_from_clipboard().is_some();
+        let is_enable = !self.disabled;
+        let has_goto_definition = is_enable && self.lsp.definition_provider.is_some();
+        let has_code_action = is_enable && !self.lsp.code_action_providers.is_empty();
+        let is_selected = is_enable && !self.selected_range.is_empty();
+        let has_paste = is_enable && cx.read_from_clipboard().is_some();
 
+        let action_context = self.focus_handle.clone();
         self.mouse_context_menu.update(cx, |this, cx| {
             this.mouse_position = event.position;
             this.menu.update(cx, |menu, cx| {
@@ -62,13 +64,18 @@ impl InputState {
                         )
                         .separator()
                     })
-                    .menu_with_enable(t!("Input.Cut"), Box::new(input::Cut), is_selected)
+                    .menu_with_enable(
+                        t!("Input.Cut"),
+                        Box::new(input::Cut),
+                        is_enable && is_selected,
+                    )
                     .menu_with_enable(t!("Input.Copy"), Box::new(input::Copy), is_selected)
                     .menu_with_enable(t!("Input.Paste"), Box::new(input::Paste), has_paste)
                     .separator()
                     .menu(t!("Input.Select All"), Box::new(input::SelectAll));
 
                 menu.menu_items = new_menu.menu_items;
+                menu.action_context = Some(action_context);
                 cx.notify();
             });
             this.open = true;
@@ -123,13 +130,11 @@ impl Render for MouseContextMenu {
             return div().into_any_element();
         }
 
-        let pos = self.mouse_position;
-
         deferred(
             anchored()
                 .snap_to_window_with_margin(px(8.))
-                .anchor(gpui::Corner::TopLeft)
-                .position(pos)
+                .anchor(Corner::TopLeft)
+                .position(self.mouse_position)
                 .child(
                     div()
                         .font_family(".SystemUIFont")
