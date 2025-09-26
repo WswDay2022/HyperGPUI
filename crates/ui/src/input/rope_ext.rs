@@ -367,6 +367,8 @@ impl RopeExt for Rope {
     }
 
     fn replace(&mut self, range: Range<usize>, new_text: &str) {
+        let range =
+            self.clip_offset(range.start, Bias::Left)..self.clip_offset(range.end, Bias::Right);
         self.remove(range.clone());
         self.insert(range.start, new_text);
     }
@@ -586,6 +588,20 @@ mod tests {
             rope.to_string(),
             "Hi\nUniverse\r\nThis is a test 中文\nString"
         );
+
+        // Test for not on a char boundary
+        let mut rope = Rope::from("中文");
+        rope.replace(0..1, "New");
+        assert_eq!(rope.to_string(), "New文");
+        let mut rope = Rope::from("中文");
+        rope.replace(0..2, "New");
+        assert_eq!(rope.to_string(), "New文");
+        let mut rope = Rope::from("中文");
+        rope.replace(0..3, "New");
+        assert_eq!(rope.to_string(), "New文");
+        let mut rope = Rope::from("中文");
+        rope.replace(1..4, "New");
+        assert_eq!(rope.to_string(), "New");
     }
 
     #[test]
