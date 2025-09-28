@@ -9,11 +9,9 @@ use gpui::{
     InteractiveElement as _, IntoElement, KeyBinding, KeyDownEvent, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, Point, Render, ScrollHandle,
     ScrollWheelEvent, SharedString, Styled as _, Subscription, Task, UTF16Selection, Window,
-    WrappedLine,
 };
 use ropey::{Rope, RopeSlice};
 use serde::Deserialize;
-use smallvec::SmallVec;
 use std::cell::RefCell;
 use std::ops::Range;
 use std::rc::Rc;
@@ -33,6 +31,7 @@ use crate::input::{
     element::RIGHT_MARGIN,
     popovers::{ContextMenu, DiagnosticPopover, HoverPopover, MouseContextMenu},
     search::{self, SearchPanel},
+    text_wrapper::LineLayout,
     HoverDefinition, Lsp, Position,
 };
 use crate::input::{RopeExt as _, Selection};
@@ -239,7 +238,7 @@ pub(super) struct LastLayout {
     /// The range of byte offset of the visible lines.
     pub(super) visible_range_offset: Range<usize>,
     /// The last layout lines (Only have visible lines).
-    pub(super) lines: Rc<SmallVec<[WrappedLine; 1]>>,
+    pub(super) lines: Rc<Vec<LineLayout>>,
     /// The line_height of text layout, this will change will InputElement painted.
     pub(super) line_height: Pixels,
     /// The wrap width of text layout, this will change will InputElement painted.
@@ -659,7 +658,7 @@ impl InputState {
             if new_row >= last_layout.visible_range.start {
                 let visible_row = new_row.saturating_sub(last_layout.visible_range.start);
                 if let Some(line) = last_layout.lines.get(visible_row) {
-                    if let Ok(x) = line.closest_index_for_position(
+                    if let Some(x) = line.closest_index_for_position(
                         Point {
                             x: preferred_x,
                             y: px(0.),
@@ -1544,7 +1543,7 @@ impl InputState {
         }
 
         self.selecting = true;
-        let offset = self.index_for_mouse_position(event.position, window, cx);
+        let offset = self.index_for_mouse_position(event.position);
 
         if self.handle_click_hover_definition(event, offset, window, cx) {
             return;
@@ -1586,7 +1585,7 @@ impl InputState {
         cx: &mut Context<Self>,
     ) {
         // Show diagnostic popover on mouse move
-        let offset = self.index_for_mouse_position(event.position, window, cx);
+        let offset = self.index_for_mouse_position(event.position);
         self.handle_mouse_move(offset, event, window, cx);
 
         if self.mode.is_code_editor() {
@@ -1814,12 +1813,7 @@ impl InputState {
         }
     }
 
-    pub(crate) fn index_for_mouse_position(
-        &self,
-        position: Point<Pixels>,
-        _window: &Window,
-        _cx: &App,
-    ) -> usize {
+    pub(crate) fn index_for_mouse_position(&self, position: Point<Pixels>) -> usize {
         // If the text is empty, always return 0
         if self.text.len() == 0 {
             return 0;
@@ -1858,7 +1852,7 @@ impl InputState {
             let line_origin = self.line_origin_with_y_offset(&mut y_offset, line, line_height);
             let pos = inner_position - line_origin;
 
-            let Some(rendered_line) = last_layout.lines.get(ix) else {
+            let Some(line_layout) = last_layout.lines.get(ix) else {
                 if pos.y < line_origin.y + line_height {
                     break;
                 }
@@ -1868,37 +1862,18 @@ impl InputState {
 
             // Return offset by use closest_index_for_x if is single line mode.
             if self.mode.is_single_line() {
-                return rendered_line.unwrapped_layout.closest_index_for_x(pos.x);
+                return line_layout.closest_index_for_x(pos.x);
             }
 
-            let index_result = rendered_line.closest_index_for_position(pos, line_height);
-            if let Ok(v) = index_result {
+            if let Some(v) = line_layout.closest_index_for_position(pos, line_height) {
                 index += v;
                 break;
-            } else if let Ok(_) =
-                rendered_line.index_for_position(point(px(0.), pos.y), line_height)
-            {
-                // Click in the this line but not in the text, move cursor to the end of the line.
-                // The fallback index is saved in Err from `index_for_position` method.
-                index += index_result.unwrap_err();
+            } else if pos.y < px(0.) {
                 break;
-            } else if rendered_line.text.trim_end_matches(|c| c == '\r').len() == 0 {
-                // empty line on Windows is `\r`, other is ''
-                let line_bounds = Bounds {
-                    origin: line_origin,
-                    size: gpui::size(bounds.size.width, line_height),
-                };
-                let pos = inner_position;
-                index += rendered_line.len();
-                if line_bounds.contains(&pos) {
-                    break;
-                }
-            } else {
-                index += rendered_line.len();
             }
 
-            // +1 for revert `lines` split `\n`
-            index += 1;
+            // +1 for `\n`
+            index += line_layout.len() + 1;
         }
 
         if index > self.text.len() {
@@ -2126,7 +2101,7 @@ impl InputState {
             return;
         }
 
-        let offset = self.index_for_mouse_position(event.position, window, cx);
+        let offset = self.index_for_mouse_position(event.position);
         self.select_to(offset, cx);
     }
 
@@ -2504,7 +2479,7 @@ impl EntityInputHandler for InputState {
         let offset = last_layout.visible_range_offset.start;
 
         for line in last_layout.lines.iter() {
-            if let Ok(utf8_index) = line.index_for_position(line_point, line_height) {
+            if let Some(utf8_index) = line.index_for_position(line_point, line_height) {
                 return Some(self.offset_to_utf16(offset + utf8_index));
             }
         }
