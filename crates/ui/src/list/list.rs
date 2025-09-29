@@ -24,7 +24,7 @@ use gpui::{
 use rust_i18n::t;
 use smol::Timer;
 
-pub fn init(cx: &mut App) {
+pub(crate) fn init(cx: &mut App) {
     let context: Option<&str> = Some("List");
     cx.bind_keys([
         KeyBinding::new("escape", Cancel, context),

@@ -106,7 +106,7 @@ pub enum InputEvent {
 
 pub(super) const CONTEXT: &str = "Input";
 
-pub fn init(cx: &mut App) {
+pub(crate) fn init(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("backspace", Backspace, Some(CONTEXT)),
         KeyBinding::new("delete", Delete, Some(CONTEXT)),
@@ -328,7 +328,7 @@ impl InputState {
     ///
     /// See also: [`Self::multi_line`], [`Self::auto_grow`] to set other mode.
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let focus_handle = cx.focus_handle();
+        let focus_handle = cx.focus_handle().tab_stop(true);
         let blink_cursor = cx.new(|_| BlinkCursor::new());
         let history = History::new().group_interval(std::time::Duration::from_secs(1));
 
@@ -1380,6 +1380,7 @@ impl InputState {
 
     pub(super) fn indent(&mut self, block: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(tab_size) = self.mode.tab_size() else {
+            cx.propagate();
             return;
         };
 
@@ -1437,6 +1438,7 @@ impl InputState {
 
     pub(super) fn outdent(&mut self, block: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(tab_size) = self.mode.tab_size() else {
+            cx.propagate();
             return;
         };
 
