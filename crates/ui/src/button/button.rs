@@ -423,7 +423,6 @@ impl RenderOnce for Button {
                         .tab_stop(self.tab_stop),
                 )
             })
-            .flex_shrink_0()
             .cursor_default()
             .flex()
             .flex_shrink_0()
@@ -534,7 +533,6 @@ impl RenderOnce for Button {
             .child({
                 h_flex()
                     .id("label")
-                    .overflow_hidden()
                     .items_center()
                     .justify_center()
                     .button_text_size(self.size)
