@@ -578,9 +578,6 @@ impl TextElement {
                 .get(visible_range.start + ix)
                 .expect("line should exists in text_wrapper");
 
-            // if line_item.len() != line.len() {
-            //     dbg!(&line, &line_item.wrapped_lines);
-            // }
             debug_assert_eq!(line_item.len(), line.len());
 
             let mut line_layout = LineLayout::new();

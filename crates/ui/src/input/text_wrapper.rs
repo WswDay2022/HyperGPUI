@@ -213,15 +213,12 @@ impl TextWrapper {
             });
         }
 
-        // dbg!(&new_lines.len());
-        // dbg!(self.lines.len());
         if self.lines.len() == 0 {
             self.lines = new_lines;
         } else {
             self.lines.splice(rows_range, new_lines);
         }
 
-        // dbg!(self.lines.len());
         self.text = changed_text.clone();
         self.soft_lines = self.lines.iter().map(|l| l.lines_len()).sum();
         self.longest_row = LongestRow {
@@ -467,7 +464,6 @@ mod tests {
             text.to_string(),
             "AAA, 世界!\r\nThis is second line.\nThis is third line.\n这里是第 4 行。New text"
         );
-        dbg!(&wrapper.lines);
         assert_eq!(wrapper.lines.len(), 4);
         assert_wrapper_lines(
             &text,

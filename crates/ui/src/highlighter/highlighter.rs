@@ -592,7 +592,6 @@ impl SyntaxHighlighter {
 
             styles.push((node_range, theme.style(name.as_ref()).unwrap_or_default()));
         }
-        // dbg!(iter_count);
 
         // If the matched styles is empty, return a default range.
         if styles.len() == 0 {
