@@ -323,6 +323,10 @@ pub struct InputState {
 
     pub lsp: Lsp,
 
+    /// A flag to indicate if we have a pending update to the text.
+    ///
+    /// If true, will call some update (for example LSP, Syntax Highlight) before render.
+    _pending_update: bool,
     /// A flag to indicate if we should ignore the next completion event.
     pub(super) silent_replace_text: bool,
 
@@ -415,6 +419,7 @@ impl InputState {
             silent_replace_text: false,
             _subscriptions,
             _context_menu_task: Task::ready(Ok(())),
+            _pending_update: false,
         }
     }
 
@@ -640,6 +645,9 @@ impl InputState {
             self.selected_range = (self.text.len()..self.text.len()).into();
         } else {
             self.selected_range.clear();
+
+            self._pending_update = true;
+            self.lsp.reset();
         }
         // Move scroll to top
         self.scroll_handle.set_offset(point(px(0.), px(0.)));
@@ -799,6 +807,7 @@ impl InputState {
             diagnostics.reset(&self.text)
         }
         self.text_wrapper.set_default_text(&self.text);
+        self._pending_update = true;
         self
     }
 
@@ -2145,6 +2154,7 @@ impl EntityInputHandler for InputState {
             .update(&self.text, &range, &Rope::from(new_text), cx);
         self.mode
             .update_highlighter(&range, &self.text, &new_text, true, cx);
+        self.lsp.update(&self.text, window, cx);
         self.selected_range = (new_offset..new_offset).into();
         self.ime_marked_range.take();
         self.update_preferred_column();
@@ -2163,12 +2173,14 @@ impl EntityInputHandler for InputState {
         range_utf16: Option<Range<usize>>,
         new_text: &str,
         new_selected_range_utf16: Option<Range<usize>>,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if self.disabled {
             return;
         }
+
+        self.lsp.reset();
 
         let range = range_utf16
             .as_ref()
@@ -2198,6 +2210,7 @@ impl EntityInputHandler for InputState {
             .update(&self.text, &range, &Rope::from(new_text), cx);
         self.mode
             .update_highlighter(&range, &self.text, &new_text, true, cx);
+        self.lsp.update(&self.text, window, cx);
         if new_text.is_empty() {
             // Cancel selection, when cancel IME input.
             self.selected_range = (range.start..range.start).into();
@@ -2300,9 +2313,13 @@ impl Focusable for InputState {
 }
 
 impl Render for InputState {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.mode
-            .update_highlighter(&(0..0), &self.text, "", false, cx);
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self._pending_update {
+            self.mode
+                .update_highlighter(&(0..0), &self.text, "", false, cx);
+            self.lsp.update(&self.text, window, cx);
+            self._pending_update = false;
+        }
 
         div()
             .id("input-state")

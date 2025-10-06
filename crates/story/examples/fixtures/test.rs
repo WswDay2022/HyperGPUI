@@ -30,6 +30,8 @@ pub enum HelloError {
     Timeout,
 }
 
+// Document colors: #FF0033, #00AA33, #0033FF, #FFAA33
+
 type Result<T> = std::result::Result<T, HelloError>;
 
 impl HelloWorld {
