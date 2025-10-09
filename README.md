@@ -1,6 +1,6 @@
 # GPUI Component
 
-[![Build Status](https://github.com/longbridge/gpui-component/actions/workflows/ci.yml/badge.svg)](https://github.com/longbridge/gpui-component/actions/workflows/ci.yml)
+[![Build Status](https://github.com/longbridge/gpui-component/actions/workflows/ci.yml/badge.svg)](https://github.com/longbridge/gpui-component/actions/workflows/ci.yml) [![Docs](https://docs.rs/gpui-component/badge.svg)](https://docs.rs/gpui-component/) [![Crates.io](https://img.shields.io/crates/v/gpui-component.svg)](https://crates.io/crates/gpui-component)
 
 UI components for building fantastic desktop applications using [GPUI](https://gpui.rs).
 
@@ -31,8 +31,8 @@ We built multi-theme support in the application. This feature is not included in
 GPUI and GPUI Component are still in development, so you need to add dependencies by git.
 
 ```toml
-gpui = { git = "https://github.com/zed-industries/zed.git" }
-gpui-component = { git = "https://github.com/longbridge/gpui-component.git" }
+gpui = "0.2.0"
+gpui-component = "0.2.0"
 ```
 
 ### WebView
@@ -42,7 +42,8 @@ gpui-component = { git = "https://github.com/longbridge/gpui-component.git" }
 GPUI Component has a `WebView` element based on [Wry](https://github.com/tauri-apps/wry). This is an optional feature, which you can enable with a feature flag.
 
 ```toml
-gpui-component = { git = "https://github.com/longbridge/gpui-component.git", features = ["webview"] }
+gpui-component = { version = "0.2.0", features = ["webview"] }
+wry = { version = "0.53.3, package = "lb-wry" }
 ```
 
 More usage examples can be found in the [story](https://github.com/longbridge/gpui-component/tree/main/crates/story) directory.
