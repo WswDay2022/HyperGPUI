@@ -1,10 +1,10 @@
 use gpui::{prelude::*, *};
 use gpui_component::{
-    h_flex,
+    ActiveTheme as _, Icon, IconName, h_flex,
     input::{InputEvent, InputState, TextInput},
-    resizable::{h_resizable, resizable_panel, ResizableState},
+    resizable::{ResizableState, h_resizable, resizable_panel},
     sidebar::{Sidebar, SidebarGroup, SidebarHeader, SidebarMenu, SidebarMenuItem},
-    v_flex, ActiveTheme as _, Icon, IconName,
+    v_flex,
 };
 use story::*;
 
@@ -298,7 +298,7 @@ fn main() {
         cx.activate(true);
 
         story::create_new_window(
-            "Gallery of GPUI Component",
+            "GPUI Component",
             move |window, cx| Gallery::view(name.as_deref(), window, cx),
             cx,
         );

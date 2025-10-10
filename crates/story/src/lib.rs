@@ -1,5 +1,6 @@
 mod accordion_story;
 mod alert_story;
+mod app_menus;
 mod assets;
 mod avatar_story;
 mod badge_story;
@@ -50,11 +51,11 @@ mod welcome_story;
 
 pub use assets::Assets;
 use gpui::{
-    actions, div, prelude::FluentBuilder as _, px, rems, size, Action, AnyElement, AnyView, App,
-    AppContext, Bounds, Context, Div, Entity, EventEmitter, Focusable, Global, Hsla,
-    InteractiveElement, IntoElement, KeyBinding, Menu, MenuItem, ParentElement, Pixels, Render,
-    RenderOnce, SharedString, Size, StatefulInteractiveElement, StyleRefinement, Styled, Window,
-    WindowBounds, WindowKind, WindowOptions,
+    Action, AnyElement, AnyView, App, AppContext, Bounds, Context, Div, Entity, EventEmitter,
+    Focusable, Global, Hsla, InteractiveElement, IntoElement, KeyBinding, ParentElement, Pixels,
+    Render, RenderOnce, SharedString, Size, StatefulInteractiveElement, StyleRefinement, Styled,
+    Window, WindowBounds, WindowKind, WindowOptions, actions, div, prelude::FluentBuilder as _, px,
+    rems, size,
 };
 
 pub use accordion_story::AccordionStory;
@@ -108,15 +109,16 @@ pub use webview_story::WebViewStory;
 pub use welcome_story::WelcomeStory;
 
 use gpui_component::{
+    ActiveTheme, ContextModal, IconName, Root, TitleBar,
     button::Button,
     context_menu::ContextMenuExt,
-    dock::{register_panel, Panel, PanelControl, PanelEvent, PanelInfo, PanelState, TitleStyle},
+    dock::{Panel, PanelControl, PanelEvent, PanelInfo, PanelState, TitleStyle, register_panel},
     group_box::GroupBox,
     h_flex,
     notification::Notification,
     popup_menu::PopupMenu,
     scroll::ScrollbarShow,
-    v_flex, ActiveTheme, ContextModal, IconName, Root, TitleBar,
+    v_flex,
 };
 
 #[derive(Action, Clone, PartialEq, Eq, Deserialize)]
@@ -135,11 +137,21 @@ pub struct SelectFont(usize);
 #[action(namespace = story, no_json)]
 pub struct SelectRadius(usize);
 
-actions!(story, [Quit, Open, CloseWindow, ToggleSearch]);
+actions!(
+    story,
+    [
+        Quit,
+        Open,
+        CloseWindow,
+        ToggleSearch,
+        TestAction,
+        Tab,
+        TabPrev,
+        ShowPanelInfo
+    ]
+);
 
 const PANEL_NAME: &str = "StoryContainer";
-
-actions!(story, [TestAction, Tab, TabPrev]);
 
 pub struct AppState {
     pub invisible_panels: Entity<Vec<SharedString>>,
@@ -335,32 +347,8 @@ pub fn init(cx: &mut App) {
         Box::new(view)
     });
 
-    use gpui_component::input::{Copy, Cut, Paste, Redo, Undo};
-    cx.set_menus(vec![
-        Menu {
-            name: "GPUI App".into(),
-            items: vec![MenuItem::action("Quit", Quit)],
-        },
-        Menu {
-            name: "Edit".into(),
-            items: vec![
-                MenuItem::os_action("Undo", Undo, gpui::OsAction::Undo),
-                MenuItem::os_action("Redo", Redo, gpui::OsAction::Redo),
-                MenuItem::separator(),
-                MenuItem::os_action("Cut", Cut, gpui::OsAction::Cut),
-                MenuItem::os_action("Copy", Copy, gpui::OsAction::Copy),
-                MenuItem::os_action("Paste", Paste, gpui::OsAction::Paste),
-            ],
-        },
-        Menu {
-            name: "Window".into(),
-            items: vec![],
-        },
-    ]);
     cx.activate(true);
 }
-
-actions!(story, [ShowPanelInfo]);
 
 #[derive(IntoElement)]
 struct StorySection {
