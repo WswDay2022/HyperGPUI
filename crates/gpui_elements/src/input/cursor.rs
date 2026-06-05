@@ -1,6 +1,9 @@
 use gpui::Context;
 use std::time::Duration;
 
+/// Default interval for cursor blinking.
+pub const DEFAULT_BLINK_INTERVAL: Duration = Duration::from_millis(500);
+
 /// Manages the blinking state of a text cursor.
 ///
 /// The cursor blinks at a configurable interval when enabled. Blinking can be
@@ -30,11 +33,6 @@ impl CursorBlink {
     /// Returns whether the cursor should currently be rendered.
     pub fn visible(&self) -> bool {
         self.visible
-    }
-
-    /// Returns whether blinking is currently active.
-    pub fn is_active(&self) -> bool {
-        self.active
     }
 
     /// Activates cursor blinking.
