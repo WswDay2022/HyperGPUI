@@ -3,8 +3,8 @@ use gpui::{
     Along, App, Bounds, ContentMask, CursorStyle, DispatchPhase, Element, ElementId,
     ElementInputHandler, Entity, FocusHandle, Focusable, GlobalElementId, Hitbox, HitboxBehavior,
     Hsla, InspectorElementId, LayoutId, Length, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, Pixels, ScrollWheelEvent, SharedString, Style, TextAlign, TextRun, TextStyle,
-    Window, WrappedLine, fill, point, px, relative, size,
+    MouseUpEvent, Pixels, Point, ScrollWheelEvent, SharedString, Style, TextAlign, TextRun,
+    TextStyle, Window, WrappedLine, fill, point, px, relative, size,
 };
 use std::{ops::Range, sync::Arc};
 
@@ -500,17 +500,14 @@ fn paint_multiline_selection(
         }
 
         if line.text_range.is_empty() {
-            let empty_line_selection_width = px(6.);
-            window.paint_quad(fill(
-                Bounds::from_corners(
-                    point(bounds.left(), bounds.top() + line_y),
-                    point(
-                        bounds.left() + empty_line_selection_width,
-                        bounds.top() + line_y + line_height,
-                    ),
-                ),
+            const EMPTY_LINE_SELECTION_WIDTH: Pixels = px(6.);
+            paint_selection_quad(
+                window,
                 selection_color,
-            ));
+                &bounds,
+                point(px(0.), line_y),
+                point(EMPTY_LINE_SELECTION_WIDTH, line_y + line_height),
+            );
         } else if let Some(wrapped) = &line.wrapped_line {
             let line_start = line.text_range.start;
             let line_end = line.text_range.end;
@@ -532,63 +529,45 @@ fn paint_multiline_selection(
             let end_visual_line = compute_visual_line_index(end_pos.y, line_height);
 
             if start_visual_line == end_visual_line {
-                window.paint_quad(fill(
-                    Bounds::from_corners(
-                        point(
-                            bounds.left() + start_pos.x,
-                            bounds.top() + line_y + start_pos.y,
-                        ),
-                        point(
-                            bounds.left() + end_pos.x,
-                            bounds.top() + line_y + start_pos.y + line_height,
-                        ),
-                    ),
+                paint_selection_quad(
+                    window,
                     selection_color,
-                ));
+                    &bounds,
+                    point(start_pos.x, line_y + start_pos.y),
+                    point(end_pos.x, line_y + start_pos.y + line_height),
+                );
             } else {
                 let line_width = wrapped.width();
 
                 // First visual line
-                window.paint_quad(fill(
-                    Bounds::from_corners(
-                        point(
-                            bounds.left() + start_pos.x,
-                            bounds.top() + line_y + start_pos.y,
-                        ),
-                        point(
-                            bounds.left() + line_width,
-                            bounds.top() + line_y + start_pos.y + line_height,
-                        ),
-                    ),
+                paint_selection_quad(
+                    window,
                     selection_color,
-                ));
+                    &bounds,
+                    point(start_pos.x, line_y + start_pos.y),
+                    point(line_width, line_y + start_pos.y + line_height),
+                );
 
                 // Middle visual lines
                 for visual_line in (start_visual_line + 1)..end_visual_line {
                     let y = line_height * visual_line as f32;
-                    window.paint_quad(fill(
-                        Bounds::from_corners(
-                            point(bounds.left(), bounds.top() + line_y + y),
-                            point(
-                                bounds.left() + line_width,
-                                bounds.top() + line_y + y + line_height,
-                            ),
-                        ),
+                    paint_selection_quad(
+                        window,
                         selection_color,
-                    ));
+                        &bounds,
+                        point(px(0.), line_y + y),
+                        point(line_width, line_y + y + line_height),
+                    );
                 }
 
                 // Last visual line
-                window.paint_quad(fill(
-                    Bounds::from_corners(
-                        point(bounds.left(), bounds.top() + line_y + end_pos.y),
-                        point(
-                            bounds.left() + end_pos.x,
-                            bounds.top() + line_y + end_pos.y + line_height,
-                        ),
-                    ),
+                paint_selection_quad(
+                    window,
                     selection_color,
-                ));
+                    &bounds,
+                    point(px(0.), line_y + end_pos.y),
+                    point(end_pos.x, line_y + end_pos.y + line_height),
+                );
             }
         }
     }
@@ -858,6 +837,20 @@ fn x_for_index<'chars>(
     char_positions.get(char_index).unwrap_or(default).clone()
 }
 
+fn paint_selection_quad(
+    window: &mut Window,
+    color: Hsla,
+    bounds: &Bounds<Pixels>,
+    offset_start: Point<Pixels>,
+    offset_end: Point<Pixels>,
+) {
+    let top_left = point(bounds.left(), bounds.top());
+    window.paint_quad(fill(
+        Bounds::from_corners(top_left + offset_start, top_left + offset_end),
+        color,
+    ));
+}
+
 fn paint_singleline_selection(
     snapshot: &InputStateSnapshot,
     state: &SingleLinePaintState,
@@ -880,16 +873,13 @@ fn paint_singleline_selection(
 
     let y_offset = (bounds.size.height - snapshot.line_height).max(px(0.)) / 2.0;
 
-    window.paint_quad(fill(
-        Bounds::from_corners(
-            point(bounds.left() + start_x, bounds.top() + y_offset),
-            point(
-                bounds.left() + end_x,
-                bounds.top() + y_offset + snapshot.line_height,
-            ),
-        ),
+    paint_selection_quad(
+        window,
         selection_color,
-    ));
+        &bounds,
+        point(start_x, y_offset),
+        point(end_x, y_offset + snapshot.line_height),
+    );
 }
 
 fn paint_placeholder(
