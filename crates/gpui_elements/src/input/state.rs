@@ -37,7 +37,7 @@ impl EventEmitter<InputStateEvent> for InputState {}
 pub struct InputState {
     entity_id: EntityId,
     focus_handle: FocusHandle,
-    content: String,
+    pub(super) content: SharedString,
     placeholder: SharedString,
     pub(super) selected_range: Range<usize>,
     pub(super) selection_reversed: bool,
@@ -105,7 +105,7 @@ impl InputState {
         let mut this = Self {
             entity_id: cx.entity_id(),
             focus_handle: cx.focus_handle(),
-            content: String::new(),
+            content: SharedString::default(),
             placeholder: SharedString::default(),
             selected_range: 0..0,
             selection_reversed: false,
@@ -193,12 +193,8 @@ impl InputState {
     }
 
     /// Returns the current text content.
-    pub fn content(&self) -> &str {
+    pub fn content(&self) -> &SharedString {
         &self.content
-    }
-
-    pub(super) fn content_mut(&mut self) -> &mut String {
-        &mut self.content
     }
 
     pub fn get_layout(&self) -> InputLayout {
@@ -208,7 +204,8 @@ impl InputState {
     /// Sets the text content, resetting selection to the beginning.
     /// This clears the undo/redo history.
     pub fn set_content(&mut self, content: impl AsRef<str>, cx: &mut Context<Self>) {
-        self.content = self.layout.sanitize_content(content.as_ref()).to_string();
+        let content = self.layout.sanitize_content(content.as_ref());
+        self.content = content.to_string().into();
         self.selected_range = 0..0;
         self.selection_reversed = false;
         self.marked_range = None;
@@ -388,7 +385,7 @@ impl InputState {
             self.cached_utf16_len = Some(cached_len - removed_utf16_len + added_utf16_len);
         }
 
-        self.content.replace_range(range.clone(), &text_to_insert);
+        crate::input::replace_range(&mut self.content, range.clone(), &text_to_insert);
         self.selected_range =
             range.start + text_to_insert.len()..range.start + text_to_insert.len();
         self.marked_range.take();

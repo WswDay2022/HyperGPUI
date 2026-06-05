@@ -3,6 +3,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use gpui::SharedString;
+
 /// Maximum number of history entries to keep.
 pub const MAX_HISTORY_LEN: usize = 1000;
 
@@ -29,7 +31,7 @@ pub struct HistoryEntry {
 
 impl HistoryEntry {
     /// Apply this patch to undo an edit, returning the reverse patch for redo.
-    pub fn apply_undo(&self, content: &mut String) -> HistoryEntry {
+    pub fn apply_undo(&self, content: &mut SharedString) -> HistoryEntry {
         let undo_start = self.range.start;
         let undo_end = (self.range.start + self.new_text_len).min(content.len());
 
@@ -37,7 +39,7 @@ impl HistoryEntry {
         let removed_text = content[undo_start..undo_end].to_string();
 
         // Replace with the old text
-        content.replace_range(undo_start..undo_end, &self.old_text);
+        crate::input::replace_range(content, undo_start..undo_end, &self.old_text);
 
         // Return reverse patch for redo
         HistoryEntry {
@@ -51,7 +53,7 @@ impl HistoryEntry {
     }
 
     /// Apply this patch to redo an edit, returning the reverse patch for undo.
-    pub fn apply_redo(&self, content: &mut String) -> HistoryEntry {
+    pub fn apply_redo(&self, content: &mut SharedString) -> HistoryEntry {
         // Redo is the same operation as undo - we're reversing the undo
         self.apply_undo(content)
     }

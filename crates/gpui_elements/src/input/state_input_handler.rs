@@ -74,8 +74,7 @@ impl EntityInputHandler for super::InputState {
             self.cached_utf16_len = Some(cached_len - removed_utf16_len + added_utf16_len);
         }
 
-        self.content_mut()
-            .replace_range(range.clone(), &text_to_insert);
+        crate::input::replace_range(&mut self.content, range.clone(), &text_to_insert);
         self.selected_range =
             range.start + text_to_insert.len()..range.start + text_to_insert.len();
         self.marked_range.take();
@@ -113,8 +112,7 @@ impl EntityInputHandler for super::InputState {
             self.cached_utf16_len = Some(cached_len - removed_utf16_len + added_utf16_len);
         }
 
-        self.content_mut()
-            .replace_range(range.clone(), &text_to_insert);
+        crate::input::replace_range(&mut self.content, range.clone(), &text_to_insert);
 
         if !text_to_insert.is_empty() {
             self.marked_range = Some(range.start..range.start + text_to_insert.len());
