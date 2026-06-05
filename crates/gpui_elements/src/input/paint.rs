@@ -3,10 +3,10 @@ use gpui::{
     Along, App, Bounds, ContentMask, CursorStyle, DispatchPhase, Element, ElementId,
     ElementInputHandler, Entity, FocusHandle, Focusable, GlobalElementId, Hitbox, HitboxBehavior,
     Hsla, InspectorElementId, LayoutId, Length, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, Pixels, Point, ScrollWheelEvent, SharedString, TextAlign, TextRun, TextStyle,
+    MouseUpEvent, Pixels, ScrollWheelEvent, SharedString, Style, TextAlign, TextRun, TextStyle,
     Window, WrappedLine, fill, point, px, relative, size,
 };
-use std::sync::Arc;
+use std::{ops::Range, sync::Arc};
 
 const CURSOR_WIDTH: f32 = 2.0;
 const MARKED_TEXT_UNDERLINE_THICKNESS: f32 = 2.0;
@@ -133,16 +133,32 @@ impl Element for Input {
             cx,
         );
 
-        let input = self.input.clone();
+        let snapshot = InputStateSnapshot::new(&self.input, cx);
         let placeholder = self.placeholder.clone();
         let text_style = layout_state.text_style.clone();
-        let layout = input.read(cx).get_layout();
         let is_focused = focus_handle.is_focused(window);
+        let colors = self.colors;
+
+        // TODO: refactor cursor_visible so it is clear that it is called on_paint
         let cursor_visible = self
             .input
             .update(cx, |input, cx| input.cursor_visible(is_focused, cx));
 
-        let colors = self.colors;
+        let perform_paint = |_style: &Style, window: &mut Window, cx: &mut App| {
+            let context = PaintContext {
+                snapshot,
+                focus_handle: &focus_handle,
+                bounds,
+                text_style: &text_style,
+                placeholder: placeholder.as_ref(),
+                colors: &colors,
+                cursor_visible,
+            };
+            context.process_mouse_events(&self.input, window, cx);
+            window.with_content_mask(Some(ContentMask { bounds }), |window| {
+                context.paint(window, cx);
+            });
+        };
         self.interactivity.paint(
             global_id,
             inspector_id,
@@ -150,256 +166,286 @@ impl Element for Input {
             prepaint_state.hitbox.as_ref(),
             window,
             cx,
-            |_style, window, cx| {
-                handle_mouse(&input, bounds, layout.axis(), window, cx);
-
-                window.with_content_mask(Some(ContentMask { bounds }), |window| match layout {
-                    super::InputLayout::SingleLine => paint_singleline(
-                        &input,
-                        &focus_handle,
-                        bounds,
-                        &text_style,
-                        placeholder.as_ref(),
-                        &colors,
-                        cursor_visible,
-                        window,
-                        cx,
-                    ),
-                    super::InputLayout::MultiLine => paint_multiline(
-                        &input,
-                        &focus_handle,
-                        bounds,
-                        &text_style,
-                        placeholder.as_ref(),
-                        &colors,
-                        cursor_visible,
-                        window,
-                        cx,
-                    ),
-                });
-            },
+            perform_paint,
         );
     }
 }
 
-/// Registers all mouse event handlers for the input.
-fn handle_mouse(
-    input: &Entity<InputState>,
-    bounds: Bounds<Pixels>,
-    axis: gpui::Axis,
-    window: &mut Window,
-    cx: &App,
-) {
-    mouse_down(input.clone(), bounds, axis, window);
-    mouse_up(input.clone(), window);
-    mouse_move(input.clone(), bounds, axis, window);
-    handle_scroll(input.clone(), bounds, axis, window, cx);
+struct InputStateSnapshot {
+    layout: super::InputLayout,
+    content: SharedString,
+    selected_range: Range<usize>,
+    marked_range: Option<Range<usize>>,
+    cursor_offset: usize,
+    line_layouts: Vec<InputLineLayout>,
+    scroll_offset: Pixels,
+    line_height: Pixels,
+}
+impl InputStateSnapshot {
+    fn new(entity: &Entity<InputState>, cx: &App) -> Self {
+        let input_state = entity.read(cx);
+        let selected_range = input_state.selected_range().clone();
+        let marked_range = input_state.marked_range().cloned();
+        let cursor_offset = input_state.cursor_offset();
+        let line_layouts = input_state.line_layouts.clone();
+        let scroll_offset = input_state.scroll_offset;
+        let line_height = input_state.line_height;
+        Self {
+            layout: input_state.get_layout(),
+            content: input_state.content().clone(),
+            selected_range,
+            marked_range,
+            cursor_offset,
+            line_layouts,
+            scroll_offset,
+            line_height,
+        }
+    }
 }
 
-fn mouse_down(
-    input: Entity<InputState>,
+struct PaintContext<'app> {
+    snapshot: InputStateSnapshot,
+    focus_handle: &'app FocusHandle,
     bounds: Bounds<Pixels>,
-    axis: gpui::Axis,
-    window: &mut Window,
-) {
-    window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
-        if phase != DispatchPhase::Bubble {
-            return;
-        }
-        if !bounds.contains(&event.position) {
-            return;
-        }
-        if event.button != MouseButton::Left {
-            return;
-        }
+    text_style: &'app TextStyle,
+    placeholder: Option<&'app SharedString>,
+    colors: &'app PaintColors,
+    cursor_visible: bool,
+}
 
-        input.update(cx, |input, cx| {
-            let text_position =
-                screen_to_text_position(event.position, bounds, input.scroll_offset, axis);
-            input.on_mouse_down(
-                text_position,
-                event.click_count,
-                event.modifiers.shift,
-                window,
-                cx,
-            );
+impl<'app> PaintContext<'app> {
+    pub fn process_mouse_events(
+        &self,
+        entity: &Entity<InputState>,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let axis = self.snapshot.layout.axis();
+        let bounds = self.bounds;
+        window.on_mouse_event({
+            let input = entity.clone();
+            move |event: &MouseDownEvent, phase, window, cx| {
+                if phase != DispatchPhase::Bubble {
+                    return;
+                }
+                if !bounds.contains(&event.position) {
+                    return;
+                }
+                if event.button != MouseButton::Left {
+                    return;
+                }
+
+                input.update(cx, |input, cx| {
+                    // Converts a screen position to a position relative to the text area origin, adjusted for scroll offset.
+                    let text_position = (event.position - bounds.origin)
+                        .apply_along(axis, |pos| pos + input.scroll_offset);
+                    input.on_mouse_down(
+                        text_position,
+                        event.click_count,
+                        event.modifiers.shift,
+                        window,
+                        cx,
+                    );
+                });
+            }
         });
-    });
-}
+        window.on_mouse_event({
+            let input = entity.clone();
+            move |event: &MouseUpEvent, phase, _window, cx| {
+                if phase != DispatchPhase::Bubble {
+                    return;
+                }
+                if event.button != MouseButton::Left {
+                    return;
+                }
 
-fn mouse_up(input: Entity<InputState>, window: &mut Window) {
-    window.on_mouse_event(move |event: &MouseUpEvent, phase, _window, cx| {
-        if phase != DispatchPhase::Bubble {
-            return;
-        }
-        if event.button != MouseButton::Left {
-            return;
-        }
-
-        input.update(cx, |input, cx| {
-            input.on_mouse_up(cx);
+                input.update(cx, |input, cx| {
+                    input.on_mouse_up(cx);
+                });
+            }
         });
-    });
-}
+        window.on_mouse_event({
+            let input = entity.clone();
+            move |event: &MouseMoveEvent, phase, _window, cx| {
+                if phase != DispatchPhase::Bubble {
+                    return;
+                }
 
-fn mouse_move(
-    input: Entity<InputState>,
-    bounds: Bounds<Pixels>,
-    axis: gpui::Axis,
-    window: &mut Window,
-) {
-    window.on_mouse_event(move |event: &MouseMoveEvent, phase, _window, cx| {
-        if phase != DispatchPhase::Bubble {
-            return;
-        }
-
-        input.update(cx, |input, cx| {
-            let text_position =
-                screen_to_text_position(event.position, bounds, input.scroll_offset, axis);
-            input.on_mouse_move(text_position, cx);
+                input.update(cx, |input, cx| {
+                    // Converts a screen position to a position relative to the text area origin, adjusted for scroll offset.
+                    let text_position = (event.position - bounds.origin)
+                        .apply_along(axis, |pos| pos + input.scroll_offset);
+                    input.on_mouse_move(text_position, cx);
+                });
+            }
         });
-    });
-}
+        window.on_mouse_event({
+            let input = entity.clone();
+            let content_size = match axis {
+                gpui::Axis::Horizontal => {
+                    let state = input.read(cx);
+                    let line = state.line_layouts.first();
+                    let line = line.and_then(|l| l.wrapped_line.as_ref());
+                    line.map(|w| w.width()).unwrap_or(px(0.))
+                }
+                gpui::Axis::Vertical => input.read(cx).total_content_height(),
+            };
+            let max_scroll = (content_size - bounds.size.along(axis)).max(px(0.));
+            move |event: &ScrollWheelEvent, phase, _window, cx| {
+                if phase != DispatchPhase::Bubble {
+                    return;
+                }
+                if !bounds.contains(&event.position) {
+                    return;
+                }
 
-fn handle_scroll(
-    input: Entity<InputState>,
-    bounds: Bounds<Pixels>,
-    axis: gpui::Axis,
-    window: &mut Window,
-    cx: &App,
-) {
-    let content_size = match axis {
-        gpui::Axis::Horizontal => {
-            let state = input.read(cx);
-            let line = state.line_layouts.first();
-            let line = line.and_then(|l| l.wrapped_line.as_ref());
-            line.map(|w| w.width()).unwrap_or(px(0.))
-        }
-        gpui::Axis::Vertical => input.read(cx).total_content_height(),
-    };
-    let max_scroll = (content_size - bounds.size.along(axis)).max(px(0.));
+                let pixel_delta = event.delta.pixel_delta(px(20.));
+                input.update(cx, |input, cx| {
+                    let delta = match axis {
+                        gpui::Axis::Horizontal => pixel_delta.y,
+                        gpui::Axis::Vertical => {
+                            if pixel_delta.x.abs() > pixel_delta.y.abs() {
+                                pixel_delta.x
+                            } else {
+                                pixel_delta.y
+                            }
+                        }
+                    };
+                    input.scroll_offset = (input.scroll_offset - delta).clamp(px(0.), max_scroll);
+                    cx.notify();
+                });
+            }
+        });
+    }
 
-    window.on_mouse_event(move |event: &ScrollWheelEvent, phase, _window, cx| {
-        if phase != DispatchPhase::Bubble {
-            return;
-        }
-        if !bounds.contains(&event.position) {
-            return;
-        }
+    pub fn paint(&self, window: &mut Window, cx: &mut App) {
+        match self.snapshot.layout {
+            super::InputLayout::MultiLine => {
+                let is_focused = self.focus_handle.is_focused(window);
 
-        let pixel_delta = event.delta.pixel_delta(px(20.));
-        input.update(cx, |input, cx| {
-            let delta = match axis {
-                gpui::Axis::Horizontal => pixel_delta.y,
-                gpui::Axis::Vertical => {
-                    if pixel_delta.x.abs() > pixel_delta.y.abs() {
-                        pixel_delta.x
-                    } else {
-                        pixel_delta.y
+                if !self.snapshot.selected_range.is_empty() {
+                    paint_multiline_selection(
+                        &self.snapshot.line_layouts,
+                        &self.snapshot.selected_range,
+                        self.bounds,
+                        self.snapshot.scroll_offset,
+                        self.snapshot.line_height,
+                        self.colors.selection,
+                        window,
+                    );
+                }
+
+                if self.snapshot.content.is_empty() {
+                    if let Some(placeholder_str) = self.placeholder {
+                        if !placeholder_str.is_empty() {
+                            paint_placeholder(
+                                placeholder_str,
+                                self.bounds,
+                                self.text_style,
+                                self.colors.placeholder,
+                                window,
+                                cx,
+                                false,
+                            );
+                        }
+                    }
+                } else {
+                    paint_multiline_text(
+                        &self.snapshot.line_layouts,
+                        self.bounds,
+                        self.snapshot.scroll_offset,
+                        self.snapshot.line_height,
+                        window,
+                        cx,
+                    );
+                }
+
+                if let Some(marked_range) = &self.snapshot.marked_range {
+                    if !marked_range.is_empty() {
+                        paint_multiline_marked_underline(
+                            &self.snapshot.line_layouts,
+                            marked_range,
+                            self.bounds,
+                            self.snapshot.scroll_offset,
+                            self.snapshot.line_height,
+                            self.colors.cursor,
+                            window,
+                        );
                     }
                 }
-            };
-            input.scroll_offset = (input.scroll_offset - delta).clamp(px(0.), max_scroll);
-            cx.notify();
-        });
-    });
-}
 
-/// Converts a screen position to a position relative to the text area origin,
-/// adjusted for scroll offset.
-fn screen_to_text_position(
-    screen_position: Point<Pixels>,
-    bounds: Bounds<Pixels>,
-    scroll_offset: Pixels,
-    axis: gpui::Axis,
-) -> Point<Pixels> {
-    let point = screen_position - bounds.origin;
-    point.apply_along(axis, |pos| pos + scroll_offset)
-}
+                if is_focused && self.snapshot.selected_range.is_empty() && self.cursor_visible {
+                    paint_multiline_cursor(
+                        &self.snapshot.line_layouts,
+                        self.snapshot.cursor_offset,
+                        &self.snapshot.content,
+                        self.bounds,
+                        self.snapshot.scroll_offset,
+                        self.snapshot.line_height,
+                        self.colors.cursor,
+                        window,
+                    );
+                }
+            }
+            super::InputLayout::SingleLine => {
+                let state =
+                    SingleLinePaintState::from_input(&self.snapshot, self.focus_handle, window);
 
-fn paint_multiline(
-    input: &Entity<InputState>,
-    focus_handle: &FocusHandle,
-    bounds: Bounds<Pixels>,
-    text_style: &TextStyle,
-    placeholder: Option<&SharedString>,
-    colors: &PaintColors,
-    cursor_visible: bool,
-    window: &mut Window,
-    cx: &mut App,
-) {
-    let input_state = input.read(cx);
-    let content = input_state.content().to_string();
-    let selected_range = input_state.selected_range().clone();
-    let marked_range = input_state.marked_range().cloned();
-    let cursor_offset = input_state.cursor_offset();
-    let line_layouts = input_state.line_layouts.clone();
-    let scroll_offset = input_state.scroll_offset;
-    let line_height = input_state.line_height;
-    let is_focused = focus_handle.is_focused(window);
+                if !self.snapshot.selected_range.is_empty() {
+                    paint_singleline_selection(
+                        &self.snapshot,
+                        &state,
+                        self.bounds,
+                        self.colors.selection,
+                        window,
+                    );
+                }
 
-    if !selected_range.is_empty() {
-        paint_multiline_selection(
-            &line_layouts,
-            &selected_range,
-            bounds,
-            scroll_offset,
-            line_height,
-            colors.selection,
-            window,
-        );
-    }
+                if self.snapshot.content.is_empty() {
+                    if let Some(placeholder_str) = self.placeholder {
+                        if !placeholder_str.is_empty() {
+                            paint_placeholder(
+                                placeholder_str,
+                                self.bounds,
+                                self.text_style,
+                                self.colors.placeholder,
+                                window,
+                                cx,
+                                true,
+                            );
+                        }
+                    }
+                } else {
+                    paint_singleline_text(&self.snapshot, &state, self.bounds, window, cx);
+                }
 
-    if content.is_empty() {
-        if let Some(placeholder_str) = placeholder {
-            if !placeholder_str.is_empty() {
-                paint_placeholder(
-                    placeholder_str,
-                    bounds,
-                    text_style,
-                    colors.placeholder,
-                    window,
-                    cx,
-                    false,
-                );
+                if let Some(marked_range) = &self.snapshot.marked_range {
+                    if !marked_range.is_empty() {
+                        paint_singleline_marked_underline(
+                            &self.snapshot,
+                            &state,
+                            marked_range,
+                            self.bounds,
+                            self.colors.cursor,
+                            window,
+                        );
+                    }
+                }
+
+                if state.is_focused
+                    && self.snapshot.selected_range.is_empty()
+                    && self.cursor_visible
+                {
+                    paint_singleline_cursor(
+                        &self.snapshot,
+                        &state,
+                        self.bounds,
+                        self.colors.cursor,
+                        window,
+                    );
+                }
             }
         }
-    } else {
-        paint_multiline_text(
-            &line_layouts,
-            bounds,
-            scroll_offset,
-            line_height,
-            window,
-            cx,
-        );
-    }
-
-    if let Some(marked_range) = &marked_range {
-        if !marked_range.is_empty() {
-            paint_multiline_marked_underline(
-                &line_layouts,
-                marked_range,
-                bounds,
-                scroll_offset,
-                line_height,
-                colors.cursor,
-                window,
-            );
-        }
-    }
-
-    if is_focused && selected_range.is_empty() && cursor_visible {
-        paint_multiline_cursor(
-            &line_layouts,
-            cursor_offset,
-            &content,
-            bounds,
-            scroll_offset,
-            line_height,
-            colors.cursor,
-            window,
-        );
     }
 }
 
@@ -756,12 +802,6 @@ fn paint_multiline_cursor(
 
 /// State for single-line painting that pre-computes character positions.
 struct SingleLinePaintState {
-    content: String,
-    selected_range: std::ops::Range<usize>,
-    marked_range: Option<std::ops::Range<usize>>,
-    cursor_offset: usize,
-    scroll_offset: Pixels,
-    line_height: Pixels,
     text_width: Pixels,
     is_focused: bool,
     char_positions: Vec<Pixels>,
@@ -770,23 +810,20 @@ struct SingleLinePaintState {
 
 impl SingleLinePaintState {
     fn from_input(
-        input: &Entity<InputState>,
+        snapshot: &InputStateSnapshot,
         focus_handle: &FocusHandle,
         window: &Window,
-        cx: &App,
     ) -> Self {
-        let input_state = input.read(cx);
-
         let mut char_positions = Vec::new();
         let mut text_width = px(0.);
 
-        if let Some(line) = input_state.line_layouts.first() {
+        if let Some(line) = snapshot.line_layouts.first() {
             if let Some(wrapped) = &line.wrapped_line {
                 text_width = wrapped.width();
-                let content = input_state.content();
+                let content = &snapshot.content;
                 let mut idx = 0;
                 for ch in content.chars() {
-                    if let Some(pos) = wrapped.position_for_index(idx, input_state.line_height) {
+                    if let Some(pos) = wrapped.position_for_index(idx, snapshot.line_height) {
                         char_positions.push(pos.x);
                     } else {
                         char_positions.push(text_width);
@@ -797,99 +834,58 @@ impl SingleLinePaintState {
             }
         }
 
-        let wrapped_line = input_state
+        let wrapped_line = snapshot
             .line_layouts
             .first()
             .and_then(|l| l.wrapped_line.clone());
 
         Self {
-            content: input_state.content().to_string(),
-            selected_range: input_state.selected_range().clone(),
-            marked_range: input_state.marked_range().cloned(),
-            cursor_offset: input_state.cursor_offset(),
-            scroll_offset: input_state.scroll_offset,
-            line_height: input_state.line_height,
             text_width,
             is_focused: focus_handle.is_focused(window),
             char_positions,
             wrapped_line,
         }
     }
-
-    fn x_for_index(&self, index: usize) -> Pixels {
-        let char_index = self.content[..index.min(self.content.len())]
-            .chars()
-            .count();
-        self.char_positions
-            .get(char_index)
-            .copied()
-            .unwrap_or(self.text_width)
-    }
 }
 
-fn paint_singleline(
-    input: &Entity<InputState>,
-    focus_handle: &FocusHandle,
-    bounds: Bounds<Pixels>,
-    text_style: &TextStyle,
-    placeholder: Option<&SharedString>,
-    colors: &PaintColors,
-    cursor_visible: bool,
-    window: &mut Window,
-    cx: &mut App,
-) {
-    let state = SingleLinePaintState::from_input(input, focus_handle, window, cx);
-
-    if !state.selected_range.is_empty() {
-        paint_singleline_selection(&state, bounds, colors.selection, window);
-    }
-
-    if state.content.is_empty() {
-        if let Some(placeholder_str) = placeholder {
-            if !placeholder_str.is_empty() {
-                paint_placeholder(
-                    placeholder_str,
-                    bounds,
-                    text_style,
-                    colors.placeholder,
-                    window,
-                    cx,
-                    true,
-                );
-            }
-        }
-    } else {
-        paint_singleline_text(&state, bounds, window, cx);
-    }
-
-    if let Some(marked_range) = &state.marked_range {
-        if !marked_range.is_empty() {
-            paint_singleline_marked_underline(&state, marked_range, bounds, colors.cursor, window);
-        }
-    }
-
-    if state.is_focused && state.selected_range.is_empty() && cursor_visible {
-        paint_singleline_cursor(&state, bounds, colors.cursor, window);
-    }
+fn x_for_index<'chars>(
+    content: &SharedString,
+    char_positions: &'chars Vec<Pixels>,
+    index: usize,
+    default: &Pixels,
+) -> Pixels {
+    let char_index = content[..index.min(content.len())].chars().count();
+    char_positions.get(char_index).unwrap_or(default).clone()
 }
 
 fn paint_singleline_selection(
+    snapshot: &InputStateSnapshot,
     state: &SingleLinePaintState,
     bounds: Bounds<Pixels>,
     selection_color: Hsla,
     window: &mut Window,
 ) {
-    let start_x = state.x_for_index(state.selected_range.start) - state.scroll_offset;
-    let end_x = state.x_for_index(state.selected_range.end) - state.scroll_offset;
+    let start_x = x_for_index(
+        &snapshot.content,
+        &state.char_positions,
+        snapshot.selected_range.start,
+        &state.text_width,
+    ) - snapshot.scroll_offset;
+    let end_x = x_for_index(
+        &snapshot.content,
+        &state.char_positions,
+        snapshot.selected_range.end,
+        &state.text_width,
+    ) - snapshot.scroll_offset;
 
-    let y_offset = (bounds.size.height - state.line_height).max(px(0.)) / 2.0;
+    let y_offset = (bounds.size.height - snapshot.line_height).max(px(0.)) / 2.0;
 
     window.paint_quad(fill(
         Bounds::from_corners(
             point(bounds.left() + start_x, bounds.top() + y_offset),
             point(
                 bounds.left() + end_x,
-                bounds.top() + y_offset + state.line_height,
+                bounds.top() + y_offset + snapshot.line_height,
             ),
         ),
         selection_color,
@@ -930,6 +926,7 @@ fn paint_placeholder(
 }
 
 fn paint_singleline_text(
+    snapshot: &InputStateSnapshot,
     state: &SingleLinePaintState,
     bounds: Bounds<Pixels>,
     window: &mut Window,
@@ -939,15 +936,15 @@ fn paint_singleline_text(
         return;
     };
 
-    let y_offset = (bounds.size.height - state.line_height).max(px(0.)) / 2.0;
+    let y_offset = (bounds.size.height - snapshot.line_height).max(px(0.)) / 2.0;
     let paint_origin = point(
-        bounds.origin.x - state.scroll_offset,
+        bounds.origin.x - snapshot.scroll_offset,
         bounds.origin.y + y_offset,
     );
 
     let _ = wrapped_line.paint(
         paint_origin,
-        state.line_height,
+        snapshot.line_height,
         TextAlign::Left,
         Some(bounds),
         window,
@@ -956,18 +953,29 @@ fn paint_singleline_text(
 }
 
 fn paint_singleline_marked_underline(
+    snapshot: &InputStateSnapshot,
     state: &SingleLinePaintState,
     marked_range: &std::ops::Range<usize>,
     bounds: Bounds<Pixels>,
     underline_color: Hsla,
     window: &mut Window,
 ) {
-    let start_x = state.x_for_index(marked_range.start) - state.scroll_offset;
-    let end_x = state.x_for_index(marked_range.end) - state.scroll_offset;
+    let start_x = x_for_index(
+        &snapshot.content,
+        &state.char_positions,
+        marked_range.start,
+        &state.text_width,
+    ) - snapshot.scroll_offset;
+    let end_x = x_for_index(
+        &snapshot.content,
+        &state.char_positions,
+        marked_range.end,
+        &state.text_width,
+    ) - snapshot.scroll_offset;
 
     let underline_thickness = px(MARKED_TEXT_UNDERLINE_THICKNESS);
-    let y_offset = (bounds.size.height - state.line_height).max(px(0.)) / 2.0;
-    let underline_y = bounds.top() + y_offset + state.line_height - underline_thickness;
+    let y_offset = (bounds.size.height - snapshot.line_height).max(px(0.)) / 2.0;
+    let underline_y = bounds.top() + y_offset + snapshot.line_height - underline_thickness;
 
     window.paint_quad(fill(
         Bounds::from_corners(
@@ -979,19 +987,25 @@ fn paint_singleline_marked_underline(
 }
 
 fn paint_singleline_cursor(
+    snapshot: &InputStateSnapshot,
     state: &SingleLinePaintState,
     bounds: Bounds<Pixels>,
     cursor_color: Hsla,
     window: &mut Window,
 ) {
-    let cursor_x = state.x_for_index(state.cursor_offset) - state.scroll_offset;
+    let cursor_x = x_for_index(
+        &snapshot.content,
+        &state.char_positions,
+        snapshot.cursor_offset,
+        &state.text_width,
+    ) - snapshot.scroll_offset;
 
-    let y_offset = (bounds.size.height - state.line_height).max(px(0.)) / 2.0;
+    let y_offset = (bounds.size.height - snapshot.line_height).max(px(0.)) / 2.0;
 
     window.paint_quad(fill(
         Bounds::new(
             point(bounds.left() + cursor_x, bounds.top() + y_offset),
-            size(px(CURSOR_WIDTH), state.line_height),
+            size(px(CURSOR_WIDTH), snapshot.line_height),
         ),
         cursor_color,
     ));
