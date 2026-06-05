@@ -1,5 +1,5 @@
 use super::actions::*;
-use crate::input::unicode::UnicodeString;
+use crate::input::{InputLayout, unicode::UnicodeString};
 use gpui::{
     App, AppContext, ClipboardItem, Context, Entity, EntityId, EntityInputHandler, EventEmitter,
     FocusHandle, Focusable, Pixels, Point, SharedString, Subscription, TextRun, TextStyle, Window,
@@ -54,7 +54,7 @@ pub struct InputState {
     pub(super) scroll_offset: Pixels,
     pub(super) available_height: Pixels,
     pub(super) available_width: Pixels,
-    pub(super) multiline: bool,
+    pub(super) layout: InputLayout,
     /// Stack of previous states for undo.
     undo_stack: Vec<super::HistoryEntry>,
     /// Stack of undone states for redo.
@@ -121,7 +121,7 @@ impl InputState {
             scroll_offset: px(0.),
             available_height: px(0.),
             available_width: px(0.),
-            multiline: false,
+            layout: InputLayout::SingleLine,
             undo_stack: Vec::new(),
             cached_utf16_len: None,
             redo_stack: Vec::new(),
@@ -201,16 +201,14 @@ impl InputState {
         &mut self.content
     }
 
+    pub fn get_layout(&self) -> InputLayout {
+        self.layout
+    }
+
     /// Sets the text content, resetting selection to the beginning.
     /// This clears the undo/redo history.
-    pub fn set_content(&mut self, content: impl Into<String>, cx: &mut Context<Self>) {
-        let content = content.into();
-        self.content = if self.multiline {
-            content
-        } else {
-            // Strip newlines for single-line input
-            content.replace('\n', " ").replace('\r', "")
-        };
+    pub fn set_content(&mut self, content: impl AsRef<str>, cx: &mut Context<Self>) {
+        self.content = self.layout.sanitize_content(content.as_ref()).to_string();
         self.selected_range = 0..0;
         self.selection_reversed = false;
         self.marked_range = None;
@@ -375,13 +373,7 @@ impl InputState {
             .unwrap_or(self.selected_range.clone());
         let range = range.start.min(self.content.len())..range.end.min(self.content.len());
 
-        let sanitized_text;
-        let text_to_insert = if self.multiline {
-            text
-        } else {
-            sanitized_text = text.replace('\n', " ").replace('\r', "");
-            &sanitized_text
-        };
+        let text_to_insert = self.layout.sanitize_content(text);
 
         // Record patch for undo before modifying content
         self.push_undo_patch(range.clone(), text_to_insert.len());
@@ -396,7 +388,7 @@ impl InputState {
             self.cached_utf16_len = Some(cached_len - removed_utf16_len + added_utf16_len);
         }
 
-        self.content.replace_range(range.clone(), text_to_insert);
+        self.content.replace_range(range.clone(), &text_to_insert);
         self.selected_range =
             range.start + text_to_insert.len()..range.start + text_to_insert.len();
         self.marked_range.take();
@@ -478,38 +470,44 @@ impl InputState {
 
     pub(crate) fn up(&mut self, _: &Up, _window: &mut Window, cx: &mut Context<Self>) {
         self.pause_cursor_blink(cx);
-        if !self.multiline {
-            // In single-line mode, up moves to start
-            self.selected_range = 0..0;
-            self.selection_reversed = false;
-            self.scroll_to_cursor();
-            cx.notify();
-            return;
-        }
-        if let Some(new_offset) = self.move_vertically(self.cursor_offset(), -1) {
-            self.selected_range = new_offset..new_offset;
-            self.selection_reversed = false;
-            self.scroll_to_cursor();
-            cx.notify();
+        match self.layout {
+            InputLayout::SingleLine => {
+                // In single-line mode, up moves to start
+                self.selected_range = 0..0;
+                self.selection_reversed = false;
+                self.scroll_to_cursor();
+                cx.notify();
+            }
+            InputLayout::MultiLine => {
+                if let Some(new_offset) = self.move_vertically(self.cursor_offset(), -1) {
+                    self.selected_range = new_offset..new_offset;
+                    self.selection_reversed = false;
+                    self.scroll_to_cursor();
+                    cx.notify();
+                }
+            }
         }
     }
 
     pub(crate) fn down(&mut self, _: &Down, _window: &mut Window, cx: &mut Context<Self>) {
         self.pause_cursor_blink(cx);
-        if !self.multiline {
-            // In single-line mode, down moves to end
-            let end = self.content.len();
-            self.selected_range = end..end;
-            self.selection_reversed = false;
-            self.scroll_to_cursor();
-            cx.notify();
-            return;
-        }
-        if let Some(new_offset) = self.move_vertically(self.cursor_offset(), 1) {
-            self.selected_range = new_offset..new_offset;
-            self.selection_reversed = false;
-            self.scroll_to_cursor();
-            cx.notify();
+        match self.layout {
+            InputLayout::SingleLine => {
+                // In single-line mode, down moves to end
+                let end = self.content.len();
+                self.selected_range = end..end;
+                self.selection_reversed = false;
+                self.scroll_to_cursor();
+                cx.notify();
+            }
+            InputLayout::MultiLine => {
+                if let Some(new_offset) = self.move_vertically(self.cursor_offset(), 1) {
+                    self.selected_range = new_offset..new_offset;
+                    self.selection_reversed = false;
+                    self.scroll_to_cursor();
+                    cx.notify();
+                }
+            }
         }
     }
 
@@ -523,23 +521,26 @@ impl InputState {
 
     pub(crate) fn select_up(&mut self, _: &SelectUp, _window: &mut Window, cx: &mut Context<Self>) {
         self.pause_cursor_blink(cx);
-        if !self.multiline {
-            // In single-line mode, select_up selects to start
-            self.select_to(0, cx);
-            return;
-        }
-        if let Some(new_offset) = self.move_vertically(self.cursor_offset(), -1) {
-            if self.selection_reversed {
-                self.selected_range.start = new_offset;
-            } else {
-                self.selected_range.end = new_offset;
+        match self.layout {
+            InputLayout::SingleLine => {
+                // In single-line mode, select_up selects to start
+                self.select_to(0, cx);
             }
-            if self.selected_range.end < self.selected_range.start {
-                self.selection_reversed = !self.selection_reversed;
-                self.selected_range = self.selected_range.end..self.selected_range.start;
+            InputLayout::MultiLine => {
+                if let Some(new_offset) = self.move_vertically(self.cursor_offset(), -1) {
+                    if self.selection_reversed {
+                        self.selected_range.start = new_offset;
+                    } else {
+                        self.selected_range.end = new_offset;
+                    }
+                    if self.selected_range.end < self.selected_range.start {
+                        self.selection_reversed = !self.selection_reversed;
+                        self.selected_range = self.selected_range.end..self.selected_range.start;
+                    }
+                    self.scroll_to_cursor();
+                    cx.notify();
+                }
             }
-            self.scroll_to_cursor();
-            cx.notify();
         }
     }
 
@@ -550,23 +551,26 @@ impl InputState {
         cx: &mut Context<Self>,
     ) {
         self.pause_cursor_blink(cx);
-        if !self.multiline {
-            // In single-line mode, select_down selects to end
-            self.select_to(self.content.len(), cx);
-            return;
-        }
-        if let Some(new_offset) = self.move_vertically(self.cursor_offset(), 1) {
-            if self.selection_reversed {
-                self.selected_range.start = new_offset;
-            } else {
-                self.selected_range.end = new_offset;
+        match self.layout {
+            InputLayout::SingleLine => {
+                // In single-line mode, select_down selects to end
+                self.select_to(self.content.len(), cx);
             }
-            if self.selected_range.end < self.selected_range.start {
-                self.selection_reversed = !self.selection_reversed;
-                self.selected_range = self.selected_range.end..self.selected_range.start;
+            InputLayout::MultiLine => {
+                if let Some(new_offset) = self.move_vertically(self.cursor_offset(), 1) {
+                    if self.selection_reversed {
+                        self.selected_range.start = new_offset;
+                    } else {
+                        self.selected_range.end = new_offset;
+                    }
+                    if self.selected_range.end < self.selected_range.start {
+                        self.selection_reversed = !self.selection_reversed;
+                        self.selected_range = self.selected_range.end..self.selected_range.start;
+                    }
+                    self.scroll_to_cursor();
+                    cx.notify();
+                }
             }
-            self.scroll_to_cursor();
-            cx.notify();
         }
     }
 
@@ -642,7 +646,7 @@ impl InputState {
     }
 
     pub(crate) fn enter(&mut self, _: &Enter, window: &mut Window, cx: &mut Context<Self>) {
-        if self.multiline {
+        if matches!(&self.layout, InputLayout::MultiLine) {
             self.replace_text_in_range(None, "\n", window, cx);
         }
     }
@@ -714,15 +718,11 @@ impl InputState {
     }
 
     pub(crate) fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-            if self.multiline {
-                self.replace_text_in_range(None, &text, window, cx);
-            } else {
-                // Strip newlines for single-line input
-                let text = text.replace('\n', " ").replace('\r', "");
-                self.replace_text_in_range(None, &text, window, cx);
-            }
-        }
+        let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
+            return;
+        };
+        let text = self.layout.sanitize_content(&text);
+        self.replace_text_in_range(None, &text, window, cx);
     }
 
     pub(crate) fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
@@ -986,11 +986,9 @@ impl InputState {
         }
 
         let cursor_offset = self.cursor_offset();
-
-        if self.multiline {
-            self.scroll_to_cursor_vertical(cursor_offset);
-        } else {
-            self.scroll_to_cursor_horizontal(cursor_offset);
+        match self.layout {
+            InputLayout::SingleLine => self.scroll_to_cursor_horizontal(cursor_offset),
+            InputLayout::MultiLine => self.scroll_to_cursor_vertical(cursor_offset),
         }
     }
 

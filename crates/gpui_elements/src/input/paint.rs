@@ -1,8 +1,8 @@
 use crate::input::{Input, InputLineLayout, InputState, PaintColors};
 use gpui::{
-    App, Bounds, ContentMask, CursorStyle, DispatchPhase, Element, ElementId, ElementInputHandler,
-    Entity, FocusHandle, Focusable, GlobalElementId, Hitbox, HitboxBehavior, Hsla,
-    InspectorElementId, LayoutId, Length, MouseButton, MouseDownEvent, MouseMoveEvent,
+    Along, App, Bounds, ContentMask, CursorStyle, DispatchPhase, Element, ElementId,
+    ElementInputHandler, Entity, FocusHandle, Focusable, GlobalElementId, Hitbox, HitboxBehavior,
+    Hsla, InspectorElementId, LayoutId, Length, MouseButton, MouseDownEvent, MouseMoveEvent,
     MouseUpEvent, Pixels, Point, ScrollWheelEvent, SharedString, TextAlign, TextRun, TextStyle,
     Window, WrappedLine, fill, point, px, relative, size,
 };
@@ -39,7 +39,6 @@ impl Element for Input {
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
         let mut resolved_text_style = None;
-        let multiline = self.multiline;
 
         let layout_id = self.interactivity.request_layout(
             global_id,
@@ -47,11 +46,12 @@ impl Element for Input {
             window,
             cx,
             |element_style, window, cx| {
+                let layout = self.input.read(cx).get_layout();
                 window.with_text_style(element_style.text_style().cloned(), |window| {
                     resolved_text_style = Some(window.text_style());
 
                     let mut layout_style = element_style.clone();
-                    if multiline {
+                    if matches!(layout, super::InputLayout::MultiLine) {
                         if let Length::Auto = layout_style.size.width {
                             layout_style.size.width = relative(1.).into();
                         }
@@ -85,10 +85,9 @@ impl Element for Input {
             .text_style
             .line_height_in_pixels(window.rem_size());
 
-        let wrap_width = if self.multiline {
-            bounds.size.width
-        } else {
-            px(100000.)
+        let wrap_width = match self.input.read(cx).get_layout() {
+            super::InputLayout::SingleLine => px(100000.),
+            super::InputLayout::MultiLine => bounds.size.width,
         };
 
         self.input.update(cx, |input, _cx| {
@@ -137,7 +136,7 @@ impl Element for Input {
         let input = self.input.clone();
         let placeholder = self.placeholder.clone();
         let text_style = layout_state.text_style.clone();
-        let multiline = self.multiline;
+        let layout = input.read(cx).get_layout();
         let is_focused = focus_handle.is_focused(window);
         let cursor_visible = self
             .input
@@ -152,34 +151,31 @@ impl Element for Input {
             window,
             cx,
             |_style, window, cx| {
-                handle_mouse(&input, bounds, multiline, window, cx);
+                handle_mouse(&input, bounds, layout.axis(), window, cx);
 
-                window.with_content_mask(Some(ContentMask { bounds }), |window| {
-                    if multiline {
-                        paint_multiline(
-                            &input,
-                            &focus_handle,
-                            bounds,
-                            &text_style,
-                            placeholder.as_ref(),
-                            &colors,
-                            cursor_visible,
-                            window,
-                            cx,
-                        );
-                    } else {
-                        paint_singleline(
-                            &input,
-                            &focus_handle,
-                            bounds,
-                            &text_style,
-                            placeholder.as_ref(),
-                            &colors,
-                            cursor_visible,
-                            window,
-                            cx,
-                        );
-                    }
+                window.with_content_mask(Some(ContentMask { bounds }), |window| match layout {
+                    super::InputLayout::SingleLine => paint_singleline(
+                        &input,
+                        &focus_handle,
+                        bounds,
+                        &text_style,
+                        placeholder.as_ref(),
+                        &colors,
+                        cursor_visible,
+                        window,
+                        cx,
+                    ),
+                    super::InputLayout::MultiLine => paint_multiline(
+                        &input,
+                        &focus_handle,
+                        bounds,
+                        &text_style,
+                        placeholder.as_ref(),
+                        &colors,
+                        cursor_visible,
+                        window,
+                        cx,
+                    ),
                 });
             },
         );
@@ -190,20 +186,20 @@ impl Element for Input {
 fn handle_mouse(
     input: &Entity<InputState>,
     bounds: Bounds<Pixels>,
-    multiline: bool,
+    axis: gpui::Axis,
     window: &mut Window,
     cx: &App,
 ) {
-    mouse_down(input.clone(), bounds, multiline, window);
+    mouse_down(input.clone(), bounds, axis, window);
     mouse_up(input.clone(), window);
-    mouse_move(input.clone(), bounds, multiline, window);
-    handle_scroll(input.clone(), bounds, multiline, window, cx);
+    mouse_move(input.clone(), bounds, axis, window);
+    handle_scroll(input.clone(), bounds, axis, window, cx);
 }
 
 fn mouse_down(
     input: Entity<InputState>,
     bounds: Bounds<Pixels>,
-    multiline: bool,
+    axis: gpui::Axis,
     window: &mut Window,
 ) {
     window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
@@ -219,7 +215,7 @@ fn mouse_down(
 
         input.update(cx, |input, cx| {
             let text_position =
-                screen_to_text_position(event.position, bounds, input.scroll_offset, multiline);
+                screen_to_text_position(event.position, bounds, input.scroll_offset, axis);
             input.on_mouse_down(
                 text_position,
                 event.click_count,
@@ -249,7 +245,7 @@ fn mouse_up(input: Entity<InputState>, window: &mut Window) {
 fn mouse_move(
     input: Entity<InputState>,
     bounds: Bounds<Pixels>,
-    multiline: bool,
+    axis: gpui::Axis,
     window: &mut Window,
 ) {
     window.on_mouse_event(move |event: &MouseMoveEvent, phase, _window, cx| {
@@ -259,7 +255,7 @@ fn mouse_move(
 
         input.update(cx, |input, cx| {
             let text_position =
-                screen_to_text_position(event.position, bounds, input.scroll_offset, multiline);
+                screen_to_text_position(event.position, bounds, input.scroll_offset, axis);
             input.on_mouse_move(text_position, cx);
         });
     });
@@ -268,23 +264,20 @@ fn mouse_move(
 fn handle_scroll(
     input: Entity<InputState>,
     bounds: Bounds<Pixels>,
-    multiline: bool,
+    axis: gpui::Axis,
     window: &mut Window,
     cx: &App,
 ) {
-    let max_scroll = if multiline {
-        let total_height = input.read(cx).total_content_height();
-        (total_height - bounds.size.height).max(px(0.))
-    } else {
-        let text_width = input
-            .read(cx)
-            .line_layouts
-            .first()
-            .and_then(|l| l.wrapped_line.as_ref())
-            .map(|w| w.width())
-            .unwrap_or(px(0.));
-        (text_width - bounds.size.width).max(px(0.))
+    let content_size = match axis {
+        gpui::Axis::Horizontal => {
+            let state = input.read(cx);
+            let line = state.line_layouts.first();
+            let line = line.and_then(|l| l.wrapped_line.as_ref());
+            line.map(|w| w.width()).unwrap_or(px(0.))
+        }
+        gpui::Axis::Vertical => input.read(cx).total_content_height(),
     };
+    let max_scroll = (content_size - bounds.size.along(axis)).max(px(0.));
 
     window.on_mouse_event(move |event: &ScrollWheelEvent, phase, _window, cx| {
         if phase != DispatchPhase::Bubble {
@@ -296,17 +289,17 @@ fn handle_scroll(
 
         let pixel_delta = event.delta.pixel_delta(px(20.));
         input.update(cx, |input, cx| {
-            if multiline {
-                input.scroll_offset =
-                    (input.scroll_offset - pixel_delta.y).clamp(px(0.), max_scroll);
-            } else {
-                let delta = if pixel_delta.x.abs() > pixel_delta.y.abs() {
-                    pixel_delta.x
-                } else {
-                    pixel_delta.y
-                };
-                input.scroll_offset = (input.scroll_offset - delta).clamp(px(0.), max_scroll);
-            }
+            let delta = match axis {
+                gpui::Axis::Horizontal => pixel_delta.y,
+                gpui::Axis::Vertical => {
+                    if pixel_delta.x.abs() > pixel_delta.y.abs() {
+                        pixel_delta.x
+                    } else {
+                        pixel_delta.y
+                    }
+                }
+            };
+            input.scroll_offset = (input.scroll_offset - delta).clamp(px(0.), max_scroll);
             cx.notify();
         });
     });
@@ -318,19 +311,10 @@ fn screen_to_text_position(
     screen_position: Point<Pixels>,
     bounds: Bounds<Pixels>,
     scroll_offset: Pixels,
-    multiline: bool,
+    axis: gpui::Axis,
 ) -> Point<Pixels> {
-    if multiline {
-        point(
-            screen_position.x - bounds.origin.x,
-            screen_position.y - bounds.origin.y + scroll_offset,
-        )
-    } else {
-        point(
-            screen_position.x - bounds.origin.x + scroll_offset,
-            screen_position.y - bounds.origin.y,
-        )
-    }
+    let point = screen_position - bounds.origin;
+    point.apply_along(axis, |pos| pos + scroll_offset)
 }
 
 fn paint_multiline(

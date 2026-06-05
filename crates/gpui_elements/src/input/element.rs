@@ -15,7 +15,6 @@ pub struct Input {
     pub(super) interactivity: Interactivity,
     pub(super) placeholder: Option<SharedString>,
     pub(super) colors: PaintColors,
-    pub(super) multiline: bool,
 }
 
 impl Input {
@@ -27,7 +26,6 @@ impl Input {
             interactivity: Interactivity::new(),
             placeholder: None,
             colors: PaintColors::default(),
-            multiline: false,
         };
         input.register_actions();
         input

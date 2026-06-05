@@ -59,14 +59,7 @@ impl EntityInputHandler for super::InputState {
 
         let range = range.start.min(self.content().len())..range.end.min(self.content().len());
 
-        // Strip newlines for single-line input
-        let sanitized_text;
-        let text_to_insert = if self.multiline {
-            new_text
-        } else {
-            sanitized_text = new_text.replace('\n', " ").replace('\r', "");
-            &sanitized_text
-        };
+        let text_to_insert = self.layout.sanitize_content(new_text);
 
         // Record patch for undo before modifying content
         self.push_undo_patch(range.clone(), text_to_insert.len());
@@ -82,7 +75,7 @@ impl EntityInputHandler for super::InputState {
         }
 
         self.content_mut()
-            .replace_range(range.clone(), text_to_insert);
+            .replace_range(range.clone(), &text_to_insert);
         self.selected_range =
             range.start + text_to_insert.len()..range.start + text_to_insert.len();
         self.marked_range.take();
@@ -108,14 +101,7 @@ impl EntityInputHandler for super::InputState {
 
         let range = range.start.min(self.content().len())..range.end.min(self.content().len());
 
-        // Strip newlines for single-line input
-        let sanitized_text;
-        let text_to_insert = if self.multiline {
-            new_text
-        } else {
-            sanitized_text = new_text.replace('\n', " ").replace('\r', "");
-            &sanitized_text
-        };
+        let text_to_insert = self.layout.sanitize_content(new_text);
 
         // Update cached UTF-16 length incrementally if available
         if let Some(cached_len) = self.cached_utf16_len {
@@ -128,7 +114,7 @@ impl EntityInputHandler for super::InputState {
         }
 
         self.content_mut()
-            .replace_range(range.clone(), text_to_insert);
+            .replace_range(range.clone(), &text_to_insert);
 
         if !text_to_insert.is_empty() {
             self.marked_range = Some(range.start..range.start + text_to_insert.len());
