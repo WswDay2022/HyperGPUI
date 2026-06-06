@@ -67,19 +67,3 @@ pub trait UnicodeString {
         self.utf_offset_16to8(range_utf16.start)..self.utf_offset_16to8(range_utf16.end)
     }
 }
-impl UnicodeString for super::InputState {
-    fn len_utf16_cached(&self) -> Option<usize> {
-        self.cached_utf16_len
-    }
-
-    fn content_utf8(&self) -> &str {
-        self.content()
-    }
-
-    fn len_utf16(&self) -> usize {
-        if let Some(len) = self.cached_utf16_len {
-            return len;
-        }
-        self.content_utf8().chars().map(|c| c.len_utf16()).sum()
-    }
-}

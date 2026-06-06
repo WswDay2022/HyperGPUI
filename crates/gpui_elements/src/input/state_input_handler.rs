@@ -59,30 +59,21 @@ impl EntityInputHandler for super::InputState {
             .map(|range_utf16| self.utf_range_16to8(range_utf16))
             .or(self.marked_range.clone())
             .unwrap_or(self.selected_range.clone());
-
         let range = range.start.min(self.content().len())..range.end.min(self.content().len());
 
         let text_to_insert = self.layout_style.sanitize_content(new_text);
 
         // Record patch for undo before modifying content
         self.push_undo_patch(range.clone(), text_to_insert.len());
-
-        // Update cached UTF-16 length incrementally if available
-        if let Some(cached_len) = self.cached_utf16_len {
-            let removed_utf16_len: usize = self.content()[range.clone()]
-                .chars()
-                .map(|c| c.len_utf16())
-                .sum();
-            let added_utf16_len: usize = text_to_insert.chars().map(|c| c.len_utf16()).sum();
-            self.cached_utf16_len = Some(cached_len - removed_utf16_len + added_utf16_len);
-        }
-
+        self.push_undo_patch(range.clone(), text_to_insert.len());
+        self.update_utf16_len(range.clone(), &text_to_insert);
         self.replace_range(range.clone(), &text_to_insert);
 
         self.selected_range =
             range.start + text_to_insert.len()..range.start + text_to_insert.len();
         self.marked_range.take();
         self.layout_data.dirty = true;
+
         self.pause_cursor_blink(cx);
         cx.emit(InputStateEvent::TextChanged);
         cx.notify();
@@ -101,21 +92,11 @@ impl EntityInputHandler for super::InputState {
             .map(|range_utf16| self.utf_range_16to8(range_utf16))
             .or(self.marked_range.clone())
             .unwrap_or(self.selected_range.clone());
-
         let range = range.start.min(self.content().len())..range.end.min(self.content().len());
 
         let text_to_insert = self.layout_style.sanitize_content(new_text);
 
-        // Update cached UTF-16 length incrementally if available
-        if let Some(cached_len) = self.cached_utf16_len {
-            let removed_utf16_len: usize = self.content()[range.clone()]
-                .chars()
-                .map(|c| c.len_utf16())
-                .sum();
-            let added_utf16_len: usize = text_to_insert.chars().map(|c| c.len_utf16()).sum();
-            self.cached_utf16_len = Some(cached_len - removed_utf16_len + added_utf16_len);
-        }
-
+        self.update_utf16_len(range.clone(), &text_to_insert);
         self.replace_range(range.clone(), &text_to_insert);
 
         if !text_to_insert.is_empty() {

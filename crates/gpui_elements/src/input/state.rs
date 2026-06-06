@@ -41,7 +41,7 @@ pub struct InputState {
     /// The true internal text
     content: String,
     /// Cached UTF-16 length of content for faster IME operations. Lazily computed when queried.
-    pub(super) cached_utf16_len: Option<usize>,
+    cached_utf16_len: Option<usize>,
 
     /// The style of layout (single or multiline).
     pub(super) layout_style: InputLayoutStyle,
@@ -120,6 +120,23 @@ pub(super) struct InputLogicalLine {
 impl Focusable for InputState {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus_handle.clone()
+    }
+}
+
+impl super::unicode::UnicodeString for InputState {
+    fn len_utf16_cached(&self) -> Option<usize> {
+        self.cached_utf16_len
+    }
+
+    fn content_utf8(&self) -> &str {
+        &self.content
+    }
+
+    fn len_utf16(&self) -> usize {
+        if let Some(len) = self.cached_utf16_len {
+            return len;
+        }
+        self.content.chars().map(|c| c.len_utf16()).sum()
     }
 }
 
@@ -820,6 +837,16 @@ impl InputState {
     /// Replaces the provided utf-8 character range with the provided text
     pub(super) fn replace_range(&mut self, range: Range<usize>, text: &str) {
         self.content.replace_range(range, &text);
+    }
+
+    // Update cached UTF-16 length incrementally if available
+    pub(super) fn update_utf16_len(&mut self, range: Range<usize>, text_to_insert: &str) {
+        let Some(cached_len) = self.cached_utf16_len else {
+            return;
+        };
+        let removed_utf16_len: usize = self.content[range].chars().map(|c| c.len_utf16()).sum();
+        let added_utf16_len: usize = text_to_insert.chars().map(|c| c.len_utf16()).sum();
+        self.cached_utf16_len = Some(cached_len - removed_utf16_len + added_utf16_len);
     }
 
     /// Pauses cursor blinking temporarily (e.g., during typing).
