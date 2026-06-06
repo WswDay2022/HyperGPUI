@@ -1047,10 +1047,22 @@ impl InputState {
         }
     }
 
+    pub(super) fn apply_layout_update(&mut self, layout_data: InputLayoutData, window: &Window) {
+        let dirty = self.layout_data.dirty
+            || self.layout_data.wrap_width != layout_data.wrap_width
+            || self.layout_data.text_style != layout_data.text_style;
+        self.layout_data = layout_data;
+        if dirty {
+            self.logical_lines =
+                InputState::build_logical_lines(&self.content, window, &self.layout_data);
+            self.scroll_to_cursor();
+        }
+    }
+
     /// Called internally during window prepaint to layout the content into logical lines based on viewport bounds wrapping.
     pub(super) fn build_logical_lines(
         content: &str,
-        window: &mut Window,
+        window: &Window,
         layout_data: &InputLayoutData,
     ) -> Vec<InputLogicalLine> {
         let text_style = &layout_data.text_style;

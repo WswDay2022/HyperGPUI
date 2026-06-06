@@ -89,9 +89,6 @@ impl Element for Input {
         };
 
         self.input.update(cx, |input, _cx| {
-            let dirty = input.layout_data.dirty
-                || input.layout_data.wrap_width != wrap_width
-                || input.layout_data.text_style != layout_state.text_style;
             let layout_data = InputLayoutData {
                 text_style: layout_state.text_style.clone(),
                 line_height,
@@ -99,12 +96,7 @@ impl Element for Input {
                 available_size: bounds.size,
                 dirty: false,
             };
-            input.layout_data = layout_data;
-            if dirty {
-                input.logical_lines =
-                    InputState::build_logical_lines(input.content(), window, &input.layout_data);
-                input.scroll_to_cursor();
-            }
+            input.apply_layout_update(layout_data, window);
         });
 
         let hitbox = self.interactivity.prepaint(
