@@ -4,11 +4,24 @@ use std::time::Duration;
 /// Default interval for cursor blinking.
 pub const DEFAULT_BLINK_INTERVAL: Duration = Duration::from_millis(500);
 
+/// Configuration for cursor blinking, to be provided to InputState.
+pub enum CursorBlinkType<'app> {
+    /// The cursor will not blink.
+    Disabled,
+    /// The cursor will blink at some interval.
+    Enabled {
+        /// Provide the app so that the internal state to track cursor blinking can be created.
+        app: &'app mut gpui::App,
+        /// The interval to blink at. If none, the default value of 500ms is used (defined by `DEFAULT_BLINK_INTERVAL`).
+        interval: Option<Duration>,
+    },
+}
+
 /// Manages the blinking state of a text cursor.
 ///
 /// The cursor blinks at a configurable interval when enabled. Blinking can be
 /// temporarily paused (e.g., during typing) to provide immediate visual feedback.
-pub struct CursorBlink {
+pub(super) struct CursorBlink {
     interval: Duration,
     generation: usize,
     visible: bool,

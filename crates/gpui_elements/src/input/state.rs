@@ -1,5 +1,5 @@
 use super::actions::*;
-use crate::input::InputLayoutStyle;
+use crate::input::{CursorBlinkType, InputLayoutStyle};
 use gpui::{
     App, AppContext, ClipboardItem, Context, Entity, EntityId, EntityInputHandler, EventEmitter,
     FocusHandle, Focusable, NavigationDirection, Pixels, Point, SharedString, Size, Subscription,
@@ -35,33 +35,50 @@ impl EventEmitter<InputStateEvent> for InputState {}
 /// - Keyboard navigation and editing actions
 /// - IME (Input Method Editor) support via `EntityInputHandler`
 pub struct InputState {
+    /// The id of this entity (for app notifies when self context is unavailable)
     entity_id: EntityId,
     focus_handle: FocusHandle,
+    /// The true internal text
     content: String,
+    /// Cached UTF-16 length of content for faster IME operations. Lazily computed when queried.
+    pub(super) cached_utf16_len: Option<usize>,
+
+    /// The style of layout (single or multiline).
+    pub(super) layout_style: InputLayoutStyle,
+    /// The utf-8 character range that is currently selected by the user.
+    /// NOTE: because each input has its own selection state, its trivial for users to have multiple selections active across multiple inputs at the same time.
+    ///   This could be considered undesirable behavior, and doing so would prompt the question of should there be a mechanism to clear selection when focus is lost.
     pub(super) selected_range: Range<usize>,
+    /// The direction of the selection_range. Forward means providing in iteration order along `content`. Back means reverse iteration order.
     pub(super) selection_direction: NavigationDirection,
+    /// The utf-8 character range of `content` that is currently marked/highlighted.
     pub(super) marked_range: Option<Range<usize>>,
-    pub(super) logical_lines: Vec<InputLogicalLine>,
+
     // refreshed each update by the element, for conveinent access in mutations and painting
     pub(super) layout_data: InputLayoutData,
-    is_selecting: bool,
-    last_click_position: Option<Point<Pixels>>,
-    click_count: usize,
-    /// Scroll offset - vertical for multiline, horizontal for single-line
-    pub(super) scroll_offset: Pixels,
-    pub(super) layout_style: InputLayoutStyle,
-    history_grouping_interval: Duration,
-    /// Stack of previous states for undo.
-    undo_stack: Vec<super::HistoryEntry>,
-    /// Stack of undone states for redo.
-    redo_stack: Vec<super::HistoryEntry>,
-    /// Optional entity and subscription tracking the blinking of the text cursor.
-    cursor_blink: Option<(Entity<super::CursorBlink>, Subscription)>,
+    /// A reinterpretation of `content` as wrapped lines with layout information. Regenerated when content changes or the layout changes during element painting.
+    pub(super) logical_lines: Vec<InputLogicalLine>,
     /// Tracks whether we were focused on the last update.
     was_focused: bool,
-    /// Cached UTF-16 length of content for faster IME operations.
-    /// Lazily computed when None.
-    pub(super) cached_utf16_len: Option<usize>,
+
+    /// True while the user is in the act of highlighting a section of the text (e.g. during mouse pressed & dragging).
+    is_selecting: bool,
+    /// The last ui location relative to the element that the user clicked. Used to filter when a user clicks multiple times in the same area.
+    last_click_position: Option<Point<Pixels>>,
+    /// The number of times the user has clicked `last_click_position`. Used to determine which click behavior to trigger, depending on single, double, or triple clicks.
+    click_count: usize,
+    /// The distance in pixels from the start of the text a user has scrolled along the layout_style axis (singleline is horizontal, multiline is vertical).
+    pub(super) scroll_offset: Pixels,
+
+    /// The maximum duration between changes to `content` that can be grouped together as a single entry in the history log.
+    history_grouping_interval: Duration,
+    /// Stack of previous states for undo.
+    history_undo_stack: Vec<super::HistoryEntry>,
+    /// Stack of undone states for redo.
+    history_redo_stack: Vec<super::HistoryEntry>,
+
+    /// Optional entity and subscription tracking the blinking of the text cursor.
+    cursor_blink: Option<(Entity<super::CursorBlink>, Subscription)>,
 }
 
 /// Data built during element prepaint that is stored in InputState for conveinence
@@ -100,14 +117,6 @@ pub(super) struct InputLogicalLine {
     pub visual_line_count: usize,
 }
 
-pub enum CursorBlinkType<'app> {
-    Disabled,
-    Enabled {
-        app: &'app mut App,
-        interval: Option<Duration>,
-    },
-}
-
 impl Focusable for InputState {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -123,23 +132,29 @@ impl InputState {
             entity_id: cx.entity_id(),
             focus_handle: cx.focus_handle(),
             content: String::default(),
+            cached_utf16_len: None,
+
+            layout_style: InputLayoutStyle::SingleLine,
             selected_range: 0..0,
             selection_direction: NavigationDirection::Forward,
             marked_range: None,
+
             layout_data: InputLayoutData::default(),
             logical_lines: Vec::new(),
+            was_focused: false,
+
             is_selecting: false,
             last_click_position: None,
             click_count: 0,
             scroll_offset: px(0.),
-            layout_style: InputLayoutStyle::SingleLine,
+
             history_grouping_interval: super::DEFAULT_GROUP_INTERVAL,
-            undo_stack: Vec::new(),
-            cached_utf16_len: None,
-            redo_stack: Vec::new(),
+            history_undo_stack: Vec::new(),
+            history_redo_stack: Vec::new(),
+
             cursor_blink: None,
-            was_focused: false,
         };
+        // TODO: This is unoptimal for non-blinking cases, since the entity is generated and then discarded.
         this = this.cursor_blink(CursorBlinkType::Enabled {
             app: cx,
             interval: None,
@@ -176,8 +191,8 @@ impl InputState {
         self.selection_direction = NavigationDirection::Forward;
         self.marked_range = None;
         self.layout_data.dirty = true;
-        self.undo_stack.clear();
-        self.redo_stack.clear();
+        self.history_undo_stack.clear();
+        self.history_redo_stack.clear();
         self.cached_utf16_len = None;
         self.pause_cursor_blink(cx);
         cx.emit(InputStateEvent::TextChanged);
@@ -283,12 +298,12 @@ impl InputState {
 
     /// Returns whether undo is available based on the recorded states.
     pub fn is_undo_available(&self) -> bool {
-        !self.undo_stack.is_empty()
+        !self.history_undo_stack.is_empty()
     }
 
     /// Returns whether redo is currently available based on the recorded states.
     pub fn is_redo_available(&self) -> bool {
-        !self.redo_stack.is_empty()
+        !self.history_redo_stack.is_empty()
     }
 
     /// Inserts text at the current cursor position, replacing any content that is currently selected (i.e. `selection_range` is non-empty).
@@ -336,12 +351,12 @@ impl InputState {
 
     /// Reverts the last edit.
     pub fn undo_action(&mut self, cx: &mut Context<Self>) {
-        if let Some(entry) = self.undo_stack.pop() {
+        if let Some(entry) = self.history_undo_stack.pop() {
             let selected_range = entry.selected_range.clone();
             let selection_direction = entry.selection_direction;
 
             let redo_entry = entry.apply_undo(&mut self.content);
-            self.redo_stack.push(redo_entry);
+            self.history_redo_stack.push(redo_entry);
 
             self.selected_range = selected_range;
             self.selection_direction = selection_direction;
@@ -355,14 +370,14 @@ impl InputState {
 
     /// Restores the last edit reverted by `undo_action` (or the undo action binding).
     pub fn redo_action(&mut self, cx: &mut Context<Self>) {
-        if let Some(entry) = self.redo_stack.pop() {
+        if let Some(entry) = self.history_redo_stack.pop() {
             let undo_entry = entry.apply_redo(&mut self.content);
 
             let cursor_pos = undo_entry.range.start;
             self.selected_range = cursor_pos..cursor_pos;
             self.selection_direction = NavigationDirection::Forward;
 
-            self.undo_stack.push(undo_entry);
+            self.history_undo_stack.push(undo_entry);
             self.layout_data.dirty = true;
             self.cached_utf16_len = None;
             self.scroll_to_cursor();
@@ -375,14 +390,14 @@ impl InputState {
 // Action implementations
 impl InputState {
     pub(super) fn undo(&mut self, _: &Undo, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some(entry) = self.undo_stack.pop() {
+        if let Some(entry) = self.history_undo_stack.pop() {
             // Remember selection to restore
             let selected_range = entry.selected_range.clone();
             let selection_direction = entry.selection_direction;
 
             // Apply the undo patch and get the redo patch
             let redo_entry = entry.apply_undo(&mut self.content);
-            self.redo_stack.push(redo_entry);
+            self.history_redo_stack.push(redo_entry);
 
             // Restore selection state
             self.selected_range = selected_range;
@@ -396,7 +411,7 @@ impl InputState {
     }
 
     pub(super) fn redo(&mut self, _: &Redo, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some(entry) = self.redo_stack.pop() {
+        if let Some(entry) = self.history_redo_stack.pop() {
             // Apply the redo patch and get the undo patch
             let undo_entry = entry.apply_redo(&mut self.content);
 
@@ -406,7 +421,7 @@ impl InputState {
             self.selected_range = cursor_pos..cursor_pos;
             self.selection_direction = NavigationDirection::Forward;
 
-            self.undo_stack.push(undo_entry);
+            self.history_undo_stack.push(undo_entry);
             self.layout_data.dirty = true;
             self.cached_utf16_len = None;
             self.scroll_to_cursor();
@@ -825,7 +840,7 @@ impl InputState {
         let now = Instant::now();
 
         // Check if we should group with the last entry
-        if let Some(last) = self.undo_stack.last() {
+        if let Some(last) = self.history_undo_stack.last() {
             if now.duration_since(last.timestamp) < self.history_grouping_interval {
                 // Within group interval - extend the existing patch
                 // We need to merge this edit with the previous one
@@ -836,7 +851,7 @@ impl InputState {
         // Capture the text that will be replaced
         let old_text = self.content[range.clone()].to_string();
 
-        self.undo_stack.push(super::HistoryEntry {
+        self.history_undo_stack.push(super::HistoryEntry {
             range: range.start..range.start + new_text_len,
             old_text,
             new_text_len,
@@ -846,12 +861,12 @@ impl InputState {
         });
 
         // Limit history size
-        if self.undo_stack.len() > super::MAX_HISTORY_LEN {
-            self.undo_stack.remove(0);
+        if self.history_undo_stack.len() > super::MAX_HISTORY_LEN {
+            self.history_undo_stack.remove(0);
         }
 
         // New edit invalidates redo stack
-        self.redo_stack.clear();
+        self.history_redo_stack.clear();
     }
 
     /// Returns the utf-8 character position of first character after the first new-line preceeding the character at the provided utf-8 character position.
