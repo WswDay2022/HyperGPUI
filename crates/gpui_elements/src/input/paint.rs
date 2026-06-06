@@ -372,7 +372,7 @@ impl<'app> PaintContext<'app> {
                 for line in &self.snapshot.line_layouts {
                     let line_y = line.y_offset - self.snapshot.scroll_offset;
 
-                    if !self.is_line_visible(line_y, line.visual_line_count) {
+                    if !self.is_line_visible(line) {
                         continue;
                     }
 
@@ -472,7 +472,7 @@ impl<'app> PaintContext<'app> {
                 for line_layout in &self.snapshot.line_layouts {
                     let line_y = line_layout.y_offset - self.snapshot.scroll_offset;
 
-                    if !self.is_line_visible(line_y, line_layout.visual_line_count) {
+                    if !self.is_line_visible(line_layout) {
                         continue;
                     }
 
@@ -529,9 +529,7 @@ impl<'app> PaintContext<'app> {
                 let underline_offset = self.snapshot.line_height - underline_thickness;
 
                 for line in &self.snapshot.line_layouts {
-                    let line_y = line.y_offset - self.snapshot.scroll_offset;
-
-                    if !self.is_line_visible(line_y, line.visual_line_count) {
+                    if !self.is_line_visible(line) {
                         continue;
                     }
 
@@ -588,7 +586,7 @@ impl<'app> PaintContext<'app> {
         for line in &self.snapshot.line_layouts {
             let line_y = line.y_offset - self.snapshot.scroll_offset;
 
-            if !self.is_line_visible(line_y, line.visual_line_count) {
+            if !self.is_line_visible(line) {
                 continue;
             }
 
@@ -649,8 +647,9 @@ impl<'app> PaintContext<'app> {
         ));
     }
 
-    fn is_line_visible(&self, line_y: Pixels, visual_line_count: usize) -> bool {
-        let line_bottom = line_y + self.snapshot.line_height * visual_line_count as f32;
+    fn is_line_visible(&self, line: &InputLineLayout) -> bool {
+        let line_y = line.y_offset - self.snapshot.scroll_offset;
+        let line_bottom = line_y + self.snapshot.line_height * line.visual_line_count as f32;
         line_bottom >= px(0.) && line_y <= self.bounds.size.height
     }
 
