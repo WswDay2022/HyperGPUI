@@ -1,6 +1,6 @@
 use crate::input::{Input, InputLayoutData, InputLogicalLine, InputState, PaintColors};
 use gpui::{
-    Along, App, Bounds, ContentMask, CursorStyle, DispatchPhase, Element, ElementId,
+    Along, App, Axis, Bounds, ContentMask, CursorStyle, DispatchPhase, Element, ElementId,
     ElementInputHandler, Entity, Focusable, GlobalElementId, Hitbox, HitboxBehavior, Hsla,
     InspectorElementId, LayoutId, Length, MouseButton, MouseDownEvent, MouseMoveEvent,
     MouseUpEvent, Pixels, Point, ScrollWheelEvent, SharedString, Style, TextAlign, TextRun,
@@ -181,12 +181,15 @@ impl Element for Input {
     }
 }
 
+/// A minimal copy of InputState that is used during paint operations without needing to read from the entity in App multiple times in a single paint.
+/// Ideally this struct is quite small.
 struct InputStateSnapshot {
-    layout: super::InputLayoutStyle,
-    content: SharedString,
+    layout_axis: Axis,
+    should_center_placeholder: bool,
+    show_placeholder: bool,
     selected_range: Range<usize>,
     marked_range: Option<Range<usize>>,
-    cursor_offset: usize,
+    cursor_position: usize,
     logical_lines: Vec<InputLogicalLine>,
     scroll_offset: Pixels,
     line_height: Pixels,
@@ -196,16 +199,22 @@ impl InputStateSnapshot {
         let input_state = entity.read(cx);
         let selected_range = input_state.selected_range().clone();
         let marked_range = input_state.marked_range().cloned();
-        let cursor_offset = input_state.cursor_position();
+        let cursor_position = input_state.cursor_position();
         let logical_lines = input_state.logical_lines.clone();
         let scroll_offset = input_state.scroll_offset;
         let line_height = input_state.line_height();
+        let layout_axis = input_state.layout_style().axis();
+        let should_center_placeholder = matches!(
+            input_state.layout_style(),
+            super::InputLayoutStyle::SingleLine
+        );
         Self {
-            layout: input_state.layout_style(),
-            content: input_state.content().clone(),
+            layout_axis,
+            should_center_placeholder,
+            show_placeholder: input_state.content().is_empty(),
             selected_range,
             marked_range,
-            cursor_offset,
+            cursor_position,
             logical_lines,
             scroll_offset,
             line_height,
@@ -230,7 +239,7 @@ impl<'app> PaintContext<'app> {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let axis = self.snapshot.layout.axis();
+        let axis = self.snapshot.layout_axis;
         let bounds = self.bounds;
         window.on_mouse_event({
             let input = entity.clone();
@@ -347,7 +356,7 @@ impl<'app> PaintContext<'app> {
             self.paint_selection(window);
         }
 
-        if self.snapshot.content.is_empty() {
+        if self.snapshot.show_placeholder {
             self.paint_placeholder(window, cx);
         } else {
             self.paint_text(window, cx);
@@ -423,7 +432,7 @@ impl<'app> PaintContext<'app> {
         let line_height = self.text_style.line_height_in_pixels(window.rem_size());
 
         let mut paint_origin = self.bounds.origin;
-        if matches!(self.snapshot.layout, super::InputLayoutStyle::SingleLine) {
+        if self.snapshot.should_center_placeholder {
             let y_offset = (self.bounds.size.height - line_height).max(px(0.)) / 2.0;
             paint_origin.y += y_offset;
         }
@@ -498,10 +507,10 @@ impl<'app> PaintContext<'app> {
 
             // Since range is non-inclusive of the end value we need to check for it explicitly
             let is_cursor_in_line = if line.text_range.is_empty() {
-                self.snapshot.cursor_offset == line.text_range.start
+                self.snapshot.cursor_position == line.text_range.start
             } else {
-                line.text_range.contains(&self.snapshot.cursor_offset)
-                    || self.snapshot.cursor_offset == line.text_range.end
+                line.text_range.contains(&self.snapshot.cursor_position)
+                    || self.snapshot.cursor_position == line.text_range.end
             };
 
             if !is_cursor_in_line {
@@ -513,7 +522,7 @@ impl<'app> PaintContext<'app> {
             };
             let local_offset = self
                 .snapshot
-                .cursor_offset
+                .cursor_position
                 .saturating_sub(line.text_range.start);
             let cursor_pos = wrapped
                 .position_for_index(local_offset, self.snapshot.line_height)
