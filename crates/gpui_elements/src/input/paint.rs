@@ -523,11 +523,11 @@ impl<'app> PaintContext<'app> {
         if marked_range.is_empty() {
             return;
         }
+
+        let underline_thickness = px(MARKED_TEXT_UNDERLINE_THICKNESS);
+        let underline_offset = self.snapshot.line_height - underline_thickness;
         match self.snapshot.layout {
             super::InputLayout::MultiLine => {
-                let underline_thickness = px(MARKED_TEXT_UNDERLINE_THICKNESS);
-                let underline_offset = self.snapshot.line_height - underline_thickness;
-
                 for line in &self.snapshot.line_layouts {
                     if !self.is_line_visible(line) {
                         continue;
@@ -567,16 +567,14 @@ impl<'app> PaintContext<'app> {
                     &precomputed.text_width,
                 ) - self.snapshot.scroll_offset;
 
-                let underline_thickness = px(MARKED_TEXT_UNDERLINE_THICKNESS);
                 let y_offset =
                     (self.bounds.size.height - self.snapshot.line_height).max(px(0.)) / 2.0;
-                let underline_y = y_offset + self.snapshot.line_height - underline_thickness;
 
                 self.paint_bounds_quad(
                     window,
                     self.colors.cursor,
-                    point(start_x, underline_y),
-                    point(end_x, underline_y + underline_thickness),
+                    point(start_x, y_offset + underline_offset),
+                    point(end_x, y_offset + self.snapshot.line_height),
                 );
             }
         }
