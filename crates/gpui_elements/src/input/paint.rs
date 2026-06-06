@@ -1,4 +1,4 @@
-use crate::input::{Input, InputLineLayout, InputState, PaintColors};
+use crate::input::{Input, InputLogicalLine, InputState, PaintColors};
 use gpui::{
     Along, App, Bounds, ContentMask, CursorStyle, DispatchPhase, Element, ElementId,
     ElementInputHandler, Entity, Focusable, GlobalElementId, Hitbox, HitboxBehavior, Hsla,
@@ -86,14 +86,16 @@ impl Element for Input {
             .line_height_in_pixels(window.rem_size());
 
         let wrap_width = match self.input.read(cx).get_layout() {
-            super::InputLayout::SingleLine => px(100000.),
-            super::InputLayout::MultiLine => bounds.size.width,
+            super::InputLayout::SingleLine => None,
+            super::InputLayout::MultiLine => Some(bounds.size.width),
         };
 
         self.input.update(cx, |input, _cx| {
             input.available_height = bounds.size.height;
             input.available_width = bounds.size.width;
-            input.update_line_layouts(wrap_width, line_height, &layout_state.text_style, window);
+            input.line_height = line_height;
+            input.set_text_style(&layout_state.text_style);
+            input.update_line_layouts(wrap_width, window);
         });
 
         let hitbox = self.interactivity.prepaint(
@@ -147,7 +149,7 @@ impl Element for Input {
             let precomputed_first_line = match (snapshot.layout, snapshot.line_layouts.first()) {
                 (
                     super::InputLayout::SingleLine,
-                    Some(InputLineLayout {
+                    Some(InputLogicalLine {
                         wrapped_line: Some(wrapped_line),
                         ..
                     }),
@@ -191,7 +193,7 @@ struct InputStateSnapshot {
     selected_range: Range<usize>,
     marked_range: Option<Range<usize>>,
     cursor_offset: usize,
-    line_layouts: Vec<InputLineLayout>,
+    line_layouts: Vec<InputLogicalLine>,
     scroll_offset: Pixels,
     line_height: Pixels,
 }
@@ -201,7 +203,7 @@ impl InputStateSnapshot {
         let selected_range = input_state.selected_range().clone();
         let marked_range = input_state.marked_range().cloned();
         let cursor_offset = input_state.cursor_offset();
-        let line_layouts = input_state.line_layouts.clone();
+        let line_layouts = input_state.logical_lines.clone();
         let scroll_offset = input_state.scroll_offset;
         let line_height = input_state.line_height;
         Self {
@@ -299,7 +301,7 @@ impl<'app> PaintContext<'app> {
             let content_size = match axis {
                 gpui::Axis::Horizontal => {
                     let state = input.read(cx);
-                    let line = state.line_layouts.first();
+                    let line = state.logical_lines.first();
                     let line = line.and_then(|l| l.wrapped_line.as_ref());
                     line.map(|w| w.width()).unwrap_or(px(0.))
                 }
@@ -644,7 +646,7 @@ impl<'app> PaintContext<'app> {
         ));
     }
 
-    fn is_line_visible(&self, line: &InputLineLayout) -> bool {
+    fn is_line_visible(&self, line: &InputLogicalLine) -> bool {
         let line_y = line.y_offset - self.snapshot.scroll_offset;
         let line_bottom = line_y + self.snapshot.line_height * line.visual_line_count as f32;
         line_bottom >= px(0.) && line_y <= self.bounds.size.height
@@ -657,7 +659,7 @@ impl<'app> PaintContext<'app> {
     fn paint_line_range(
         &self,
         window: &mut Window,
-        line: &InputLineLayout,
+        line: &InputLogicalLine,
         subrange: &Range<usize>,
         color: Hsla,
         quad_offset_y: Pixels,

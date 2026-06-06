@@ -43,7 +43,7 @@ pub struct InputState {
     pub(super) selection_reversed: bool,
     pub(super) marked_range: Option<Range<usize>>,
     pub(super) line_height: Pixels,
-    pub(super) line_layouts: Vec<InputLineLayout>,
+    pub(super) logical_lines: Vec<InputLogicalLine>,
     pub(super) wrap_width: Option<Pixels>,
     pub(super) text_style: Option<TextStyle>,
     pub(super) needs_layout: bool,
@@ -74,7 +74,7 @@ pub struct InputState {
 /// A logical line corresponds to content between newlines in the input text.
 /// When text wrapping is enabled, a logical line may span multiple visual lines.
 #[derive(Clone, Debug)]
-pub(super) struct InputLineLayout {
+pub(super) struct InputLogicalLine {
     /// The utf8 byte range in the content string that this line covers.
     pub text_range: Range<usize>,
     /// The shaped and wrapped text for this line, if available.
@@ -112,7 +112,7 @@ impl InputState {
             selection_reversed: false,
             marked_range: None,
             line_height: px(0.),
-            line_layouts: Vec::new(),
+            logical_lines: Vec::new(),
             wrap_width: None,
             text_style: None,
             needs_layout: true,
@@ -188,13 +188,8 @@ impl InputState {
     }
 
     /// Sets the text style used for layout. Marks layout as dirty if the style changed.
-    pub(crate) fn set_text_style(&mut self, style: &TextStyle) {
-        let changed = self
-            .text_style
-            .as_ref()
-            .map_or(true, |current| current != style);
-
-        if changed {
+    pub(super) fn set_text_style(&mut self, style: &TextStyle) {
+        if self.text_style.as_ref() != Some(style) {
             self.text_style = Some(style.clone());
             self.needs_layout = true;
         }
@@ -896,7 +891,7 @@ impl InputState {
         let target_visual_line_idx = (visual_line_idx as i32 + direction).max(0) as usize;
 
         let mut current_visual_line = 0;
-        for layout in self.line_layouts.iter() {
+        for layout in self.logical_lines.iter() {
             let visual_lines_in_layout = layout.visual_line_count;
 
             if target_visual_line_idx < current_visual_line + visual_lines_in_layout {
@@ -934,13 +929,13 @@ impl InputState {
     }
 
     fn find_visual_line_and_x_offset(&self, offset: usize) -> (usize, f32) {
-        if self.line_layouts.is_empty() {
+        if self.logical_lines.is_empty() {
             return (0, 0.0);
         }
 
         let mut visual_line_idx = 0;
 
-        for line in &self.line_layouts {
+        for line in &self.logical_lines {
             if line.text_range.is_empty() {
                 if offset == line.text_range.start {
                     return (visual_line_idx, 0.0);
@@ -968,7 +963,7 @@ impl InputState {
             return 0;
         }
 
-        for line in self.line_layouts.iter() {
+        for line in self.logical_lines.iter() {
             let line_height_total = self.line_height * line.visual_line_count as f32;
 
             if position.y >= line.y_offset && position.y < line.y_offset + line_height_total {
@@ -995,7 +990,7 @@ impl InputState {
     }
 
     pub(crate) fn scroll_to_cursor(&mut self) {
-        if self.line_layouts.is_empty() {
+        if self.logical_lines.is_empty() {
             return;
         }
 
@@ -1013,7 +1008,7 @@ impl InputState {
 
         let line_height = self.line_height;
 
-        for line in &self.line_layouts {
+        for line in &self.logical_lines {
             let is_cursor_in_line = if line.text_range.is_empty() {
                 cursor_offset == line.text_range.start
             } else {
@@ -1056,7 +1051,7 @@ impl InputState {
         }
 
         // For single-line input, get cursor x position from the first (only) line
-        let Some(line) = self.line_layouts.first() else {
+        let Some(line) = self.logical_lines.first() else {
             return;
         };
 
@@ -1085,28 +1080,23 @@ impl InputState {
         self.scroll_offset = self.scroll_offset.max(px(0.));
     }
 
-    pub(crate) fn update_line_layouts(
-        &mut self,
-        width: Pixels,
-        line_height: Pixels,
-        text_style: &TextStyle,
-        window: &mut Window,
-    ) {
-        self.line_height = line_height;
-        self.set_text_style(text_style);
-
-        if !self.needs_layout && self.wrap_width == Some(width) {
+    /// Called internally during prepaint to layout the content into logical lines based on viewport bounds wrapping.
+    pub(crate) fn update_line_layouts(&mut self, wrap_width: Option<Pixels>, window: &mut Window) {
+        if !self.needs_layout && self.wrap_width == wrap_width {
             return;
         }
+        let Some(text_style) = &self.text_style else {
+            return;
+        };
 
-        self.line_layouts.clear();
-        self.wrap_width = Some(width);
+        self.logical_lines.clear();
+        self.wrap_width = wrap_width;
 
         let text_color = text_style.color;
         let font_size = text_style.font_size.to_pixels(window.rem_size());
 
         if self.content.is_empty() {
-            self.line_layouts.push(InputLineLayout {
+            self.logical_lines.push(InputLogicalLine {
                 text_range: 0..0,
                 wrapped_line: None,
                 y_offset: px(0.),
@@ -1125,19 +1115,19 @@ impl InputState {
                 .map(|pos| current_pos + pos)
                 .unwrap_or(self.content.len());
 
-            let line_text = &self.content[current_pos..line_end];
+            let line_slice = &self.content[current_pos..line_end];
 
-            if line_text.is_empty() {
-                self.line_layouts.push(InputLineLayout {
+            if line_slice.is_empty() {
+                self.logical_lines.push(InputLogicalLine {
                     text_range: current_pos..current_pos,
                     wrapped_line: None,
                     y_offset,
                     visual_line_count: 1,
                 });
-                y_offset += line_height;
+                y_offset += self.line_height;
             } else {
                 let run = TextRun {
-                    len: line_text.len(),
+                    len: line_slice.len(),
                     font: text_style.font(),
                     color: text_color,
                     background_color: None,
@@ -1148,19 +1138,19 @@ impl InputState {
                 let wrapped_lines = window
                     .text_system()
                     .shape_text(
-                        SharedString::from(line_text.to_string()),
+                        SharedString::from(line_slice.to_string()),
                         font_size,
                         &[run],
-                        Some(width),
+                        wrap_width,
                         None,
                     )
                     .unwrap_or_default();
 
                 for wrapped in wrapped_lines {
                     let visual_line_count = wrapped.wrap_boundaries().len() + 1;
-                    let line_height_total = line_height * visual_line_count as f32;
+                    let line_height_total = self.line_height * visual_line_count as f32;
 
-                    self.line_layouts.push(InputLineLayout {
+                    self.logical_lines.push(InputLogicalLine {
                         text_range: current_pos..line_end,
                         wrapped_line: Some(Arc::new(wrapped)),
                         y_offset,
@@ -1179,7 +1169,7 @@ impl InputState {
         }
 
         if self.content.ends_with('\n') {
-            self.line_layouts.push(InputLineLayout {
+            self.logical_lines.push(InputLogicalLine {
                 text_range: self.content.len()..self.content.len(),
                 wrapped_line: None,
                 y_offset,
@@ -1192,7 +1182,7 @@ impl InputState {
     }
 
     pub(crate) fn total_content_height(&self) -> Pixels {
-        self.line_layouts
+        self.logical_lines
             .last()
             .map(|last| last.y_offset + self.line_height * last.visual_line_count as f32)
             .unwrap_or(px(0.))
@@ -1373,7 +1363,9 @@ mod tests {
                 let mut input = InputState::new(cx).layout(InputLayout::MultiLine);
                 input.content = content.to_string().into();
                 input.selected_range = range;
-                input.update_line_layouts(px(500.), px(20.), &TextStyle::default(), window);
+                input.line_height = px(20.);
+                input.set_text_style(&TextStyle::default());
+                input.update_line_layouts(Some(px(500.)), window);
                 input
             });
             TestView { input }

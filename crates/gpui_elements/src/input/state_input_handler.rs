@@ -142,7 +142,7 @@ impl EntityInputHandler for super::InputState {
     ) -> Option<Bounds<Pixels>> {
         let range = self.utf_range_16to8(&range_utf16);
 
-        for line in &self.line_layouts {
+        for line in &self.logical_lines {
             if line.text_range.is_empty() {
                 if range.start == line.text_range.start {
                     return Some(Bounds::from_corners(
