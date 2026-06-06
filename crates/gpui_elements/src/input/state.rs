@@ -1,9 +1,9 @@
 use super::actions::*;
-use crate::input::{CursorBlink, InputLayout, unicode::UnicodeString};
+use crate::input::{InputLayout, unicode::UnicodeString};
 use gpui::{
     App, AppContext, ClipboardItem, Context, Entity, EntityId, EntityInputHandler, EventEmitter,
-    FocusHandle, Focusable, Pixels, Point, SharedString, Subscription, TextRun, TextStyle, Window,
-    WrappedLine, point, px,
+    FocusHandle, Focusable, Pixels, Point, SharedString, Size, Subscription, TextRun, TextStyle,
+    Window, WrappedLine, point, px,
 };
 use std::{
     ops::Range,
@@ -42,18 +42,14 @@ pub struct InputState {
     pub(super) selected_range: Range<usize>,
     pub(super) selection_reversed: bool,
     pub(super) marked_range: Option<Range<usize>>,
-    pub(super) line_height: Pixels,
     pub(super) logical_lines: Vec<InputLogicalLine>,
-    pub(super) wrap_width: Option<Pixels>,
-    pub(super) text_style: Option<TextStyle>,
-    pub(super) needs_layout: bool,
+    // refreshed each update by the element, for conveinent access in mutations and painting
+    pub(super) layout_data: InputLayoutData,
     is_selecting: bool,
     last_click_position: Option<Point<Pixels>>,
     click_count: usize,
     /// Scroll offset - vertical for multiline, horizontal for single-line
     pub(super) scroll_offset: Pixels,
-    pub(super) available_height: Pixels,
-    pub(super) available_width: Pixels,
     pub(super) layout: InputLayout,
     history_grouping_interval: Duration,
     /// Stack of previous states for undo.
@@ -67,6 +63,26 @@ pub struct InputState {
     /// Cached UTF-16 length of content for faster IME operations.
     /// Lazily computed when None.
     pub(super) cached_utf16_len: Option<usize>,
+}
+
+/// Data built during element prepaint that is stored in InputState for conveinence
+pub(super) struct InputLayoutData {
+    pub text_style: TextStyle,
+    pub wrap_width: Option<Pixels>,
+    pub available_size: Size<Pixels>,
+    pub line_height: Pixels,
+    pub dirty: bool,
+}
+impl Default for InputLayoutData {
+    fn default() -> Self {
+        Self {
+            text_style: Default::default(),
+            wrap_width: Default::default(),
+            available_size: Default::default(),
+            line_height: Default::default(),
+            dirty: true,
+        }
+    }
 }
 
 /// Layout information for a single logical line of text in an input.
@@ -111,17 +127,12 @@ impl InputState {
             selected_range: 0..0,
             selection_reversed: false,
             marked_range: None,
-            line_height: px(0.),
+            layout_data: InputLayoutData::default(),
             logical_lines: Vec::new(),
-            wrap_width: None,
-            text_style: None,
-            needs_layout: true,
             is_selecting: false,
             last_click_position: None,
             click_count: 0,
             scroll_offset: px(0.),
-            available_height: px(0.),
-            available_width: px(0.),
             layout: InputLayout::SingleLine,
             history_grouping_interval: super::DEFAULT_GROUP_INTERVAL,
             undo_stack: Vec::new(),
@@ -187,17 +198,26 @@ impl InputState {
         }
     }
 
-    /// Sets the text style used for layout. Marks layout as dirty if the style changed.
-    pub(super) fn set_text_style(&mut self, style: &TextStyle) {
-        if self.text_style.as_ref() != Some(style) {
-            self.text_style = Some(style.clone());
-            self.needs_layout = true;
-        }
-    }
-
     /// Returns the current text content.
     pub fn content(&self) -> &SharedString {
         &self.content
+    }
+
+    /// Sets the text content, resetting selection to the beginning.
+    /// This clears the undo/redo history.
+    pub fn set_content(&mut self, content: impl AsRef<str>, cx: &mut Context<Self>) {
+        let content = self.layout.sanitize_content(content.as_ref());
+        self.content = content.to_string().into();
+        self.selected_range = 0..0;
+        self.selection_reversed = false;
+        self.marked_range = None;
+        self.layout_data.dirty = true;
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+        self.cached_utf16_len = None;
+        self.pause_cursor_blink(cx);
+        cx.emit(InputStateEvent::TextChanged);
+        cx.notify();
     }
 
     pub fn layout(mut self, layout: InputLayout) -> Self {
@@ -209,21 +229,8 @@ impl InputState {
         self.layout
     }
 
-    /// Sets the text content, resetting selection to the beginning.
-    /// This clears the undo/redo history.
-    pub fn set_content(&mut self, content: impl AsRef<str>, cx: &mut Context<Self>) {
-        let content = self.layout.sanitize_content(content.as_ref());
-        self.content = content.to_string().into();
-        self.selected_range = 0..0;
-        self.selection_reversed = false;
-        self.marked_range = None;
-        self.needs_layout = true;
-        self.undo_stack.clear();
-        self.redo_stack.clear();
-        self.cached_utf16_len = None;
-        self.pause_cursor_blink(cx);
-        cx.emit(InputStateEvent::TextChanged);
-        cx.notify();
+    pub fn line_height(&self) -> Pixels {
+        self.layout_data.line_height
     }
 
     pub fn set_history_group_interval(&mut self, interval: Duration) {
@@ -278,49 +285,6 @@ impl InputState {
 
         // New edit invalidates redo stack
         self.redo_stack.clear();
-    }
-
-    /// Undoes the last edit by applying the reverse patch.
-    pub(crate) fn undo(&mut self, _: &Undo, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some(entry) = self.undo_stack.pop() {
-            // Remember selection to restore
-            let selected_range = entry.selected_range.clone();
-            let selection_reversed = entry.selection_reversed;
-
-            // Apply the undo patch and get the redo patch
-            let redo_entry = entry.apply_undo(&mut self.content);
-            self.redo_stack.push(redo_entry);
-
-            // Restore selection state
-            self.selected_range = selected_range;
-            self.selection_reversed = selection_reversed;
-            self.needs_layout = true;
-            self.cached_utf16_len = None;
-            self.scroll_to_cursor();
-            cx.emit(InputStateEvent::Undo);
-            cx.notify();
-        }
-    }
-
-    /// Redoes the last undone edit by applying the forward patch.
-    pub(crate) fn redo(&mut self, _: &Redo, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some(entry) = self.redo_stack.pop() {
-            // Apply the redo patch and get the undo patch
-            let undo_entry = entry.apply_redo(&mut self.content);
-
-            // The undo entry contains the selection state after the original edit
-            // We need to restore cursor to end of inserted text
-            let cursor_pos = undo_entry.range.start;
-            self.selected_range = cursor_pos..cursor_pos;
-            self.selection_reversed = false;
-
-            self.undo_stack.push(undo_entry);
-            self.needs_layout = true;
-            self.cached_utf16_len = None;
-            self.scroll_to_cursor();
-            cx.emit(InputStateEvent::Redo);
-            cx.notify();
-        }
     }
 
     /// Returns the placeholder text shown when content is empty.
@@ -401,7 +365,7 @@ impl InputState {
         self.selected_range =
             range.start + text_to_insert.len()..range.start + text_to_insert.len();
         self.marked_range.take();
-        self.needs_layout = true;
+        self.layout_data.dirty = true;
         self.pause_cursor_blink(cx);
         cx.emit(InputStateEvent::TextChanged);
         cx.notify();
@@ -426,7 +390,7 @@ impl InputState {
 
             self.selected_range = selected_range;
             self.selection_reversed = selection_reversed;
-            self.needs_layout = true;
+            self.layout_data.dirty = true;
             self.cached_utf16_len = None;
             self.scroll_to_cursor();
             cx.emit(InputStateEvent::Undo);
@@ -444,7 +408,53 @@ impl InputState {
             self.selection_reversed = false;
 
             self.undo_stack.push(undo_entry);
-            self.needs_layout = true;
+            self.layout_data.dirty = true;
+            self.cached_utf16_len = None;
+            self.scroll_to_cursor();
+            cx.emit(InputStateEvent::Redo);
+            cx.notify();
+        }
+    }
+}
+
+// Action implementations
+impl InputState {
+    /// Undoes the last edit by applying the reverse patch.
+    pub(crate) fn undo(&mut self, _: &Undo, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(entry) = self.undo_stack.pop() {
+            // Remember selection to restore
+            let selected_range = entry.selected_range.clone();
+            let selection_reversed = entry.selection_reversed;
+
+            // Apply the undo patch and get the redo patch
+            let redo_entry = entry.apply_undo(&mut self.content);
+            self.redo_stack.push(redo_entry);
+
+            // Restore selection state
+            self.selected_range = selected_range;
+            self.selection_reversed = selection_reversed;
+            self.layout_data.dirty = true;
+            self.cached_utf16_len = None;
+            self.scroll_to_cursor();
+            cx.emit(InputStateEvent::Undo);
+            cx.notify();
+        }
+    }
+
+    /// Redoes the last undone edit by applying the forward patch.
+    pub(crate) fn redo(&mut self, _: &Redo, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(entry) = self.redo_stack.pop() {
+            // Apply the redo patch and get the undo patch
+            let undo_entry = entry.apply_redo(&mut self.content);
+
+            // The undo entry contains the selection state after the original edit
+            // We need to restore cursor to end of inserted text
+            let cursor_pos = undo_entry.range.start;
+            self.selected_range = cursor_pos..cursor_pos;
+            self.selection_reversed = false;
+
+            self.undo_stack.push(undo_entry);
+            self.layout_data.dirty = true;
             self.cached_utf16_len = None;
             self.scroll_to_cursor();
             cx.emit(InputStateEvent::Redo);
@@ -872,20 +882,6 @@ impl InputState {
         cx.notify();
     }
 
-    pub(crate) fn find_line_start(&self, offset: usize) -> usize {
-        self.content[..offset.min(self.content.len())]
-            .rfind('\n')
-            .map(|pos| pos + 1)
-            .unwrap_or(0)
-    }
-
-    pub(crate) fn find_line_end(&self, offset: usize) -> usize {
-        self.content[offset.min(self.content.len())..]
-            .find('\n')
-            .map(|pos| offset + pos)
-            .unwrap_or(self.content.len())
-    }
-
     fn move_vertically(&self, offset: usize, direction: i32) -> Option<usize> {
         let (visual_line_idx, x_pixels) = self.find_visual_line_and_x_offset(offset);
         let target_visual_line_idx = (visual_line_idx as i32 + direction).max(0) as usize;
@@ -902,11 +898,11 @@ impl InputState {
                 }
 
                 if let Some(wrapped) = &layout.wrapped_line {
-                    let y_within_wrapped = self.line_height * visual_line_within_layout as f32;
+                    let y_within_wrapped = self.line_height() * visual_line_within_layout as f32;
                     let target_point = point(px(x_pixels), y_within_wrapped);
 
                     let closest_result =
-                        wrapped.closest_index_for_position(target_point, self.line_height);
+                        wrapped.closest_index_for_position(target_point, self.line_height());
 
                     let closest_idx = closest_result.unwrap_or_else(|closest| closest);
                     let clamped = closest_idx.min(wrapped.text.len());
@@ -927,6 +923,22 @@ impl InputState {
             None
         }
     }
+}
+
+impl InputState {
+    pub(crate) fn find_line_start(&self, offset: usize) -> usize {
+        self.content[..offset.min(self.content.len())]
+            .rfind('\n')
+            .map(|pos| pos + 1)
+            .unwrap_or(0)
+    }
+
+    pub(crate) fn find_line_end(&self, offset: usize) -> usize {
+        self.content[offset.min(self.content.len())..]
+            .find('\n')
+            .map(|pos| offset + pos)
+            .unwrap_or(self.content.len())
+    }
 
     fn find_visual_line_and_x_offset(&self, offset: usize) -> (usize, f32) {
         if self.logical_lines.is_empty() {
@@ -944,9 +956,9 @@ impl InputState {
                 if let Some(wrapped) = &line.wrapped_line {
                     let local_offset = (offset - line.text_range.start).min(wrapped.text.len());
                     if let Some(position) =
-                        wrapped.position_for_index(local_offset, self.line_height)
+                        wrapped.position_for_index(local_offset, self.line_height())
                     {
-                        let visual_line_within = (position.y / self.line_height).floor() as usize;
+                        let visual_line_within = (position.y / self.line_height()).floor() as usize;
                         return (visual_line_idx + visual_line_within, position.x.into());
                     }
                 }
@@ -964,7 +976,7 @@ impl InputState {
         }
 
         for line in self.logical_lines.iter() {
-            let line_height_total = self.line_height * line.visual_line_count as f32;
+            let line_height_total = self.line_height() * line.visual_line_count as f32;
 
             if position.y >= line.y_offset && position.y < line.y_offset + line_height_total {
                 if line.text_range.is_empty() {
@@ -976,7 +988,7 @@ impl InputState {
                     let relative_point = point(position.x, relative_y);
 
                     let closest_result =
-                        wrapped.closest_index_for_position(relative_point, self.line_height);
+                        wrapped.closest_index_for_position(relative_point, self.line_height());
 
                     let local_idx = closest_result.unwrap_or_else(|closest| closest);
                     let clamped = local_idx.min(wrapped.text.len());
@@ -1002,11 +1014,11 @@ impl InputState {
     }
 
     fn scroll_to_cursor_vertical(&mut self, cursor_offset: usize) {
-        if self.available_height <= px(0.) {
+        if self.layout_data.available_size.height <= px(0.) {
             return;
         }
 
-        let line_height = self.line_height;
+        let line_height = self.line_height();
 
         for line in &self.logical_lines {
             let is_cursor_in_line = if line.text_range.is_empty() {
@@ -1020,7 +1032,7 @@ impl InputState {
                 let cursor_visual_y = if let Some(wrapped) = &line.wrapped_line {
                     let local_offset = cursor_offset.saturating_sub(line.text_range.start);
                     if let Some(position) =
-                        wrapped.position_for_index(local_offset, self.line_height)
+                        wrapped.position_for_index(local_offset, self.line_height())
                     {
                         line.y_offset + position.y
                     } else {
@@ -1031,12 +1043,13 @@ impl InputState {
                 };
 
                 let visible_top = self.scroll_offset;
-                let visible_bottom = self.scroll_offset + self.available_height;
+                let visible_bottom = self.scroll_offset + self.layout_data.available_size.height;
 
                 if cursor_visual_y < visible_top {
                     self.scroll_offset = cursor_visual_y;
                 } else if cursor_visual_y + line_height > visible_bottom {
-                    self.scroll_offset = (cursor_visual_y + line_height) - self.available_height;
+                    self.scroll_offset =
+                        (cursor_visual_y + line_height) - self.layout_data.available_size.height;
                 }
 
                 self.scroll_offset = self.scroll_offset.max(px(0.));
@@ -1046,7 +1059,7 @@ impl InputState {
     }
 
     fn scroll_to_cursor_horizontal(&mut self, cursor_offset: usize) {
-        if self.available_width <= px(0.) {
+        if self.layout_data.available_size.width <= px(0.) {
             return;
         }
 
@@ -1058,7 +1071,7 @@ impl InputState {
         let cursor_x = if let Some(wrapped) = &line.wrapped_line {
             let local_offset = cursor_offset.saturating_sub(line.text_range.start);
             wrapped
-                .position_for_index(local_offset, self.line_height)
+                .position_for_index(local_offset, self.line_height())
                 .map(|p| p.x)
                 .unwrap_or(px(0.))
         } else {
@@ -1066,7 +1079,7 @@ impl InputState {
         };
 
         let visible_left = self.scroll_offset;
-        let visible_right = self.scroll_offset + self.available_width;
+        let visible_right = self.scroll_offset + self.layout_data.available_size.width;
 
         // Add some padding so cursor isn't right at the edge
         let padding = px(2.0);
@@ -1074,57 +1087,53 @@ impl InputState {
         if cursor_x < visible_left + padding {
             self.scroll_offset = (cursor_x - padding).max(px(0.));
         } else if cursor_x > visible_right - padding {
-            self.scroll_offset = cursor_x - self.available_width + padding;
+            self.scroll_offset = cursor_x - self.layout_data.available_size.width + padding;
         }
 
         self.scroll_offset = self.scroll_offset.max(px(0.));
     }
 
     /// Called internally during prepaint to layout the content into logical lines based on viewport bounds wrapping.
-    pub(crate) fn update_line_layouts(&mut self, wrap_width: Option<Pixels>, window: &mut Window) {
-        if !self.needs_layout && self.wrap_width == wrap_width {
-            return;
-        }
-        let Some(text_style) = &self.text_style else {
-            return;
-        };
-
-        self.logical_lines.clear();
-        self.wrap_width = wrap_width;
+    pub(super) fn build_logical_lines(
+        content: &str,
+        window: &mut Window,
+        layout_data: &InputLayoutData,
+    ) -> Vec<InputLogicalLine> {
+        let text_style = &layout_data.text_style;
+        let mut logical_lines = Vec::new();
 
         let text_color = text_style.color;
         let font_size = text_style.font_size.to_pixels(window.rem_size());
 
-        if self.content.is_empty() {
-            self.logical_lines.push(InputLogicalLine {
+        if content.is_empty() {
+            logical_lines.push(InputLogicalLine {
                 text_range: 0..0,
                 wrapped_line: None,
                 y_offset: px(0.),
                 visual_line_count: 1,
             });
-            self.needs_layout = false;
-            return;
+            return logical_lines;
         }
 
         let mut y_offset = px(0.);
         let mut current_pos = 0;
 
-        while current_pos < self.content.len() {
-            let line_end = self.content[current_pos..]
+        while current_pos < content.len() {
+            let line_end = content[current_pos..]
                 .find('\n')
                 .map(|pos| current_pos + pos)
-                .unwrap_or(self.content.len());
+                .unwrap_or(content.len());
 
-            let line_slice = &self.content[current_pos..line_end];
+            let line_slice = &content[current_pos..line_end];
 
             if line_slice.is_empty() {
-                self.logical_lines.push(InputLogicalLine {
+                logical_lines.push(InputLogicalLine {
                     text_range: current_pos..current_pos,
                     wrapped_line: None,
                     y_offset,
                     visual_line_count: 1,
                 });
-                y_offset += self.line_height;
+                y_offset += layout_data.line_height;
             } else {
                 let run = TextRun {
                     len: line_slice.len(),
@@ -1141,16 +1150,16 @@ impl InputState {
                         SharedString::from(line_slice.to_string()),
                         font_size,
                         &[run],
-                        wrap_width,
+                        layout_data.wrap_width,
                         None,
                     )
                     .unwrap_or_default();
 
                 for wrapped in wrapped_lines {
                     let visual_line_count = wrapped.wrap_boundaries().len() + 1;
-                    let line_height_total = self.line_height * visual_line_count as f32;
+                    let line_height_total = layout_data.line_height * visual_line_count as f32;
 
-                    self.logical_lines.push(InputLogicalLine {
+                    logical_lines.push(InputLogicalLine {
                         text_range: current_pos..line_end,
                         wrapped_line: Some(Arc::new(wrapped)),
                         y_offset,
@@ -1161,30 +1170,29 @@ impl InputState {
                 }
             }
 
-            current_pos = if line_end < self.content.len() {
+            current_pos = if line_end < content.len() {
                 line_end + 1
             } else {
-                self.content.len()
+                content.len()
             };
         }
 
-        if self.content.ends_with('\n') {
-            self.logical_lines.push(InputLogicalLine {
-                text_range: self.content.len()..self.content.len(),
+        if content.ends_with('\n') {
+            logical_lines.push(InputLogicalLine {
+                text_range: content.len()..content.len(),
                 wrapped_line: None,
                 y_offset,
                 visual_line_count: 1,
             });
         }
 
-        self.needs_layout = false;
-        self.scroll_to_cursor();
+        logical_lines
     }
 
     pub(crate) fn total_content_height(&self) -> Pixels {
         self.logical_lines
             .last()
-            .map(|last| last.y_offset + self.line_height * last.visual_line_count as f32)
+            .map(|last| last.y_offset + self.line_height() * last.visual_line_count as f32)
             .unwrap_or(px(0.))
     }
 
@@ -1196,7 +1204,7 @@ impl InputState {
     /// Returns true if the scroll position is at the bottom.
     pub fn at_bottom(&self) -> bool {
         let content_height = self.total_content_height();
-        let visible_height = self.available_height;
+        let visible_height = self.layout_data.available_size.height;
 
         if content_height <= visible_height {
             return true;
@@ -1208,7 +1216,7 @@ impl InputState {
     /// Returns the scroll progress as a value from 0.0 (top) to 1.0 (bottom).
     pub fn scroll_progress(&self) -> f32 {
         let content_height = self.total_content_height();
-        let visible_height = self.available_height;
+        let visible_height = self.layout_data.available_size.height;
         let max_scroll = content_height - visible_height;
 
         if max_scroll <= px(0.) {
@@ -1226,7 +1234,7 @@ impl InputState {
     /// Returns how far the content is from the bottom in pixels.
     pub fn distance_from_bottom(&self) -> Pixels {
         let content_height = self.total_content_height();
-        let visible_height = self.available_height;
+        let visible_height = self.layout_data.available_size.height;
         let max_scroll = content_height - visible_height;
 
         if max_scroll <= px(0.) {
@@ -1323,9 +1331,7 @@ impl InputState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::{
-        AppContext, Entity, IntoElement, Render, TestAppContext, TextStyle, WindowHandle, div,
-    };
+    use gpui::{AppContext, Entity, IntoElement, Render, TestAppContext, WindowHandle, div};
 
     struct TestView {
         input: Entity<InputState>,
@@ -1353,6 +1359,7 @@ mod tests {
         })
     }
 
+    #[allow(dead_code)]
     fn create_test_input_with_layout(
         cx: &mut TestAppContext,
         content: &str,
@@ -1363,9 +1370,10 @@ mod tests {
                 let mut input = InputState::new(cx).layout(InputLayout::MultiLine);
                 input.content = content.to_string().into();
                 input.selected_range = range;
-                input.line_height = px(20.);
-                input.set_text_style(&TextStyle::default());
-                input.update_line_layouts(Some(px(500.)), window);
+                input.layout_data.line_height = px(20.);
+                input.layout_data.wrap_width = Some(px(500.));
+                input.logical_lines =
+                    InputState::build_logical_lines(&input.content, window, &input.layout_data);
                 input
             });
             TestView { input }

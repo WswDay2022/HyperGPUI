@@ -78,7 +78,7 @@ impl EntityInputHandler for super::InputState {
         self.selected_range =
             range.start + text_to_insert.len()..range.start + text_to_insert.len();
         self.marked_range.take();
-        self.needs_layout = true;
+        self.layout_data.dirty = true;
         self.pause_cursor_blink(cx);
         cx.emit(InputStateEvent::TextChanged);
         cx.notify();
@@ -128,7 +128,7 @@ impl EntityInputHandler for super::InputState {
                 range.start + text_to_insert.len()..range.start + text_to_insert.len()
             });
 
-        self.needs_layout = true;
+        self.layout_data.dirty = true;
         cx.emit(InputStateEvent::TextChanged);
         cx.notify();
     }
@@ -149,7 +149,7 @@ impl EntityInputHandler for super::InputState {
                         point(bounds.left(), bounds.top() + line.y_offset),
                         point(
                             bounds.left() + px(4.),
-                            bounds.top() + line.y_offset + self.line_height,
+                            bounds.top() + line.y_offset + self.line_height(),
                         ),
                     ));
                 }
@@ -159,18 +159,18 @@ impl EntityInputHandler for super::InputState {
                     let local_end = (range.end - line.text_range.start).min(wrapped.text.len());
 
                     let start_pos = wrapped
-                        .position_for_index(local_start, self.line_height)
+                        .position_for_index(local_start, self.line_height())
                         .unwrap_or(point(px(0.), px(0.)));
                     let end_pos = wrapped
-                        .position_for_index(local_end, self.line_height)
+                        .position_for_index(local_end, self.line_height())
                         .unwrap_or_else(|| {
                             let last_line_y =
-                                self.line_height * (line.visual_line_count - 1) as f32;
+                                self.line_height() * (line.visual_line_count - 1) as f32;
                             point(wrapped.width(), last_line_y)
                         });
 
-                    let start_visual_line = (start_pos.y / self.line_height).floor() as usize;
-                    let end_visual_line = (end_pos.y / self.line_height).floor() as usize;
+                    let start_visual_line = (start_pos.y / self.line_height()).floor() as usize;
+                    let end_visual_line = (end_pos.y / self.line_height()).floor() as usize;
 
                     if start_visual_line == end_visual_line {
                         return Some(Bounds::from_corners(
@@ -180,7 +180,7 @@ impl EntityInputHandler for super::InputState {
                             ),
                             point(
                                 bounds.left() + end_pos.x,
-                                bounds.top() + line.y_offset + start_pos.y + self.line_height,
+                                bounds.top() + line.y_offset + start_pos.y + self.line_height(),
                             ),
                         ));
                     } else {
@@ -191,7 +191,7 @@ impl EntityInputHandler for super::InputState {
                             ),
                             point(
                                 bounds.left() + wrapped.width(),
-                                bounds.top() + line.y_offset + start_pos.y + self.line_height,
+                                bounds.top() + line.y_offset + start_pos.y + self.line_height(),
                             ),
                         ));
                     }

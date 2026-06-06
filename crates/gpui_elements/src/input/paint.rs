@@ -1,4 +1,4 @@
-use crate::input::{Input, InputLogicalLine, InputState, PaintColors};
+use crate::input::{Input, InputLayoutData, InputLogicalLine, InputState, PaintColors};
 use gpui::{
     Along, App, Bounds, ContentMask, CursorStyle, DispatchPhase, Element, ElementId,
     ElementInputHandler, Entity, Focusable, GlobalElementId, Hitbox, HitboxBehavior, Hsla,
@@ -64,12 +64,10 @@ impl Element for Input {
             },
         );
 
-        (
-            layout_id,
-            InputLayoutState {
-                text_style: resolved_text_style.unwrap_or_else(|| window.text_style()),
-            },
-        )
+        let layout_state = InputLayoutState {
+            text_style: resolved_text_style.unwrap_or_else(|| window.text_style()),
+        };
+        (layout_id, layout_state)
     }
 
     fn prepaint(
@@ -91,11 +89,22 @@ impl Element for Input {
         };
 
         self.input.update(cx, |input, _cx| {
-            input.available_height = bounds.size.height;
-            input.available_width = bounds.size.width;
-            input.line_height = line_height;
-            input.set_text_style(&layout_state.text_style);
-            input.update_line_layouts(wrap_width, window);
+            let dirty = input.layout_data.dirty
+                || input.layout_data.wrap_width != wrap_width
+                || input.layout_data.text_style != layout_state.text_style;
+            let layout_data = InputLayoutData {
+                text_style: layout_state.text_style.clone(),
+                line_height,
+                wrap_width,
+                available_size: bounds.size,
+                dirty: false,
+            };
+            input.layout_data = layout_data;
+            if dirty {
+                input.logical_lines =
+                    InputState::build_logical_lines(input.content(), window, &input.layout_data);
+                input.scroll_to_cursor();
+            }
         });
 
         let hitbox = self.interactivity.prepaint(
@@ -146,7 +155,7 @@ impl Element for Input {
         });
 
         let perform_paint = |_style: &Style, window: &mut Window, cx: &mut App| {
-            let precomputed_first_line = match (snapshot.layout, snapshot.line_layouts.first()) {
+            let precomputed_first_line = match (snapshot.layout, snapshot.logical_lines.first()) {
                 (
                     super::InputLayout::SingleLine,
                     Some(InputLogicalLine {
@@ -193,7 +202,7 @@ struct InputStateSnapshot {
     selected_range: Range<usize>,
     marked_range: Option<Range<usize>>,
     cursor_offset: usize,
-    line_layouts: Vec<InputLogicalLine>,
+    logical_lines: Vec<InputLogicalLine>,
     scroll_offset: Pixels,
     line_height: Pixels,
 }
@@ -203,16 +212,16 @@ impl InputStateSnapshot {
         let selected_range = input_state.selected_range().clone();
         let marked_range = input_state.marked_range().cloned();
         let cursor_offset = input_state.cursor_offset();
-        let line_layouts = input_state.logical_lines.clone();
+        let logical_lines = input_state.logical_lines.clone();
         let scroll_offset = input_state.scroll_offset;
-        let line_height = input_state.line_height;
+        let line_height = input_state.line_height();
         Self {
             layout: input_state.get_layout(),
             content: input_state.content().clone(),
             selected_range,
             marked_range,
             cursor_offset,
-            line_layouts,
+            logical_lines,
             scroll_offset,
             line_height,
         }
@@ -370,7 +379,7 @@ impl<'app> PaintContext<'app> {
     fn paint_selection(&self, window: &mut Window) {
         match self.snapshot.layout {
             super::InputLayout::MultiLine => {
-                for line in &self.snapshot.line_layouts {
+                for line in &self.snapshot.logical_lines {
                     let line_y = line.y_offset - self.snapshot.scroll_offset;
 
                     if !self.is_line_visible(line) {
@@ -470,7 +479,7 @@ impl<'app> PaintContext<'app> {
     fn paint_text(&self, window: &mut Window, cx: &mut App) {
         match self.snapshot.layout {
             super::InputLayout::MultiLine => {
-                for line_layout in &self.snapshot.line_layouts {
+                for line_layout in &self.snapshot.logical_lines {
                     let line_y = line_layout.y_offset - self.snapshot.scroll_offset;
 
                     if !self.is_line_visible(line_layout) {
@@ -491,7 +500,7 @@ impl<'app> PaintContext<'app> {
                 }
             }
             super::InputLayout::SingleLine => {
-                let Some(line_layout) = self.snapshot.line_layouts.first() else {
+                let Some(line_layout) = self.snapshot.logical_lines.first() else {
                     return;
                 };
                 let Some(wrapped_line) = &line_layout.wrapped_line else {
@@ -529,7 +538,7 @@ impl<'app> PaintContext<'app> {
         let underline_offset = self.snapshot.line_height - underline_thickness;
         match self.snapshot.layout {
             super::InputLayout::MultiLine => {
-                for line in &self.snapshot.line_layouts {
+                for line in &self.snapshot.logical_lines {
                     if !self.is_line_visible(line) {
                         continue;
                     }
@@ -582,7 +591,7 @@ impl<'app> PaintContext<'app> {
     }
 
     fn find_cursor_position_in_layouts(&self) -> Point<Pixels> {
-        for line in &self.snapshot.line_layouts {
+        for line in &self.snapshot.logical_lines {
             let line_y = line.y_offset - self.snapshot.scroll_offset;
 
             if !self.is_line_visible(line) {
