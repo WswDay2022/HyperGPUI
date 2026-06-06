@@ -192,7 +192,7 @@ impl InputStateSnapshot {
         let selected_range = input_state.selected_range().clone();
         let marked_range = input_state.marked_range().cloned();
         let cursor_position = input_state.cursor_position();
-        let logical_lines = input_state.logical_lines.clone();
+        let logical_lines = input_state.lines().clone();
         let scroll_distance = input_state.distance_from_top();
         let line_height = input_state.line_height();
         let layout_axis = input_state.layout_style().axis();
@@ -296,7 +296,7 @@ impl<'app> PaintContext<'app> {
             let content_size = match axis {
                 gpui::Axis::Horizontal => {
                     let state = input.read(cx);
-                    let line = state.logical_lines.first();
+                    let line = state.lines().first();
                     let line = line.and_then(|l| l.wrapped_line.as_ref());
                     line.map(|w| w.width()).unwrap_or(px(0.))
                 }

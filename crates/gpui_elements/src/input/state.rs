@@ -55,9 +55,9 @@ pub struct InputState {
     marked_range: Option<Range<usize>>,
 
     // refreshed each update by the element, for conveinent access in mutations and painting
-    pub(super) layout_data: InputLayoutData,
+    layout_data: InputLayoutData,
     /// A reinterpretation of `content` as wrapped lines with layout information. Regenerated when content changes or the layout changes during element painting.
-    pub(super) logical_lines: Vec<InputLogicalLine>,
+    logical_lines: Vec<InputLogicalLine>,
     /// Tracks whether we were focused on the last update.
     was_focused: bool,
 
@@ -204,13 +204,13 @@ impl InputState {
     pub fn set_content(&mut self, content: impl AsRef<str>, cx: &mut Context<Self>) {
         let content = self.layout_style.sanitize_content(content.as_ref());
         self.content = content.to_string().into();
+        self.cached_utf16_len = None;
         self.selected_range = 0..0;
         self.selection_direction = NavigationDirection::Forward;
         self.marked_range = None;
-        self.layout_data.dirty = true;
         self.history_undo_stack.clear();
         self.history_redo_stack.clear();
-        self.cached_utf16_len = None;
+        self.mark_layout_dirty();
         self.pause_cursor_blink(cx);
         cx.emit(InputStateEvent::TextChanged);
         cx.notify();
@@ -356,7 +356,8 @@ impl InputState {
         self.selected_range =
             range.start + text_to_insert.len()..range.start + text_to_insert.len();
         self.marked_range.take();
-        self.layout_data.dirty = true;
+        self.mark_layout_dirty();
+
         self.pause_cursor_blink(cx);
         cx.emit(InputStateEvent::TextChanged);
         cx.notify();
@@ -379,10 +380,11 @@ impl InputState {
             let redo_entry = entry.apply_undo(&mut self.content);
             self.history_redo_stack.push(redo_entry);
 
+            self.cached_utf16_len = None;
             self.selected_range = selected_range;
             self.selection_direction = selection_direction;
-            self.layout_data.dirty = true;
-            self.cached_utf16_len = None;
+            self.mark_layout_dirty();
+
             self.scroll_to_cursor();
             cx.emit(InputStateEvent::Undo);
             cx.notify();
@@ -399,8 +401,10 @@ impl InputState {
             self.selection_direction = NavigationDirection::Forward;
 
             self.history_undo_stack.push(undo_entry);
-            self.layout_data.dirty = true;
+
             self.cached_utf16_len = None;
+            self.mark_layout_dirty();
+
             self.scroll_to_cursor();
             cx.emit(InputStateEvent::Redo);
             cx.notify();
@@ -423,8 +427,9 @@ impl InputState {
             // Restore selection state
             self.selected_range = selected_range;
             self.selection_direction = selection_direction;
-            self.layout_data.dirty = true;
             self.cached_utf16_len = None;
+            self.mark_layout_dirty();
+
             self.scroll_to_cursor();
             cx.emit(InputStateEvent::Undo);
             cx.notify();
@@ -443,8 +448,9 @@ impl InputState {
             self.selection_direction = NavigationDirection::Forward;
 
             self.history_undo_stack.push(undo_entry);
-            self.layout_data.dirty = true;
             self.cached_utf16_len = None;
+            self.mark_layout_dirty();
+
             self.scroll_to_cursor();
             cx.emit(InputStateEvent::Redo);
             cx.notify();
@@ -838,6 +844,10 @@ impl InputState {
         self.layout_data.line_height
     }
 
+    pub(super) fn lines(&self) -> &Vec<InputLogicalLine> {
+        &self.logical_lines
+    }
+
     pub(super) fn set_marked_range(&mut self, range: Option<Range<usize>>) {
         self.marked_range = range;
     }
@@ -1045,6 +1055,10 @@ impl InputState {
                 }
             }
         }
+    }
+
+    pub(super) fn mark_layout_dirty(&mut self) {
+        self.layout_data.dirty = true;
     }
 
     pub(super) fn apply_layout_update(&mut self, layout_data: InputLayoutData, window: &Window) {

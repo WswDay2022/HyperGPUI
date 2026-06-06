@@ -72,7 +72,7 @@ impl EntityInputHandler for super::InputState {
             range.start + text_to_insert.len()..range.start + text_to_insert.len(),
         );
         self.set_marked_range(None);
-        self.layout_data.dirty = true;
+        self.mark_layout_dirty();
 
         self.pause_cursor_blink(cx);
         cx.emit(InputStateEvent::TextChanged);
@@ -111,8 +111,8 @@ impl EntityInputHandler for super::InputState {
                 range.start + text_to_insert.len()..range.start + text_to_insert.len()
             })
         });
+        self.mark_layout_dirty();
 
-        self.layout_data.dirty = true;
         cx.emit(InputStateEvent::TextChanged);
         cx.notify();
     }
@@ -126,7 +126,7 @@ impl EntityInputHandler for super::InputState {
     ) -> Option<Bounds<Pixels>> {
         let range = self.utf_range_16to8(&range_utf16);
 
-        for line in &self.logical_lines {
+        for line in self.lines() {
             if line.text_range.is_empty() {
                 if range.start == line.text_range.start {
                     return Some(Bounds::from_corners(
