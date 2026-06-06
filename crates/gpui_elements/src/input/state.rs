@@ -1,5 +1,5 @@
 use super::actions::*;
-use crate::input::{InputLayout, unicode::UnicodeString};
+use crate::input::{CursorBlink, InputLayout, unicode::UnicodeString};
 use gpui::{
     App, AppContext, ClipboardItem, Context, Entity, EntityId, EntityInputHandler, EventEmitter,
     FocusHandle, Focusable, Pixels, Point, SharedString, Subscription, TextRun, TextStyle, Window,
@@ -151,27 +151,33 @@ impl InputState {
         self
     }
 
-    /// Returns whether the cursor should be visible (for blinking).
-    ///
-    /// If blinking is not enabled, always returns `true`.
-    /// This method also updates the blink manager's enabled state based on focus.
-    pub fn cursor_visible(&mut self, is_focused: bool, cx: &mut Context<Self>) -> bool {
+    /// Processes a focus-flag update during window paint, returning whether the cursor should be visible in this frame.
+    /// Returns false if the cursor is blinking and not currently visible.
+    pub(super) fn toggle_cursor_on_focus_change(
+        &mut self,
+        is_focused: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
         // Update cursor blink based on focus changes
-        if let Some((cursor_blink, _)) = &self.cursor_blink {
-            if is_focused && !self.was_focused {
-                cursor_blink.update(cx, |cb, cx| cb.enable(cx));
-                cx.emit(InputStateEvent::Focus);
-            } else if !is_focused && self.was_focused {
-                cursor_blink.update(cx, |cb, cx| cb.disable(cx));
-                cx.emit(InputStateEvent::Blur);
-            }
-        }
+        let was_focused = self.was_focused;
         self.was_focused = is_focused;
 
-        self.cursor_blink
-            .as_ref()
-            .map(|(cb, _)| cb.read(cx).visible())
-            .unwrap_or(true)
+        match &self.cursor_blink {
+            None => true,
+            Some((cursor_blink, _)) => match (is_focused, was_focused) {
+                (true, false) => {
+                    cursor_blink.update(cx, |cursor, cx| cursor.enable(cx));
+                    cx.emit(InputStateEvent::Focus);
+                    true
+                }
+                (false, true) => {
+                    cursor_blink.update(cx, |cursor, cx| cursor.disable(cx));
+                    cx.emit(InputStateEvent::Blur);
+                    false
+                }
+                _ => cursor_blink.read(cx).visible(),
+            },
+        }
     }
 
     /// Pauses cursor blinking temporarily (e.g., during typing).

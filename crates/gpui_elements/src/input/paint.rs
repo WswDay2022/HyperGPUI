@@ -139,10 +139,9 @@ impl Element for Input {
         let is_focused = focus_handle.is_focused(window);
         let colors = self.colors;
 
-        // TODO: refactor cursor_visible so it is clear that it is called on_paint
-        let cursor_visible = self
-            .input
-            .update(cx, |input, cx| input.cursor_visible(is_focused, cx));
+        let is_cursor_visible = self.input.update(cx, |input, cx| {
+            input.toggle_cursor_on_focus_change(is_focused, cx)
+        });
 
         let perform_paint = |_style: &Style, window: &mut Window, cx: &mut App| {
             let precomputed_first_line = match (snapshot.layout, snapshot.line_layouts.first()) {
@@ -166,7 +165,7 @@ impl Element for Input {
                 text_style: &text_style,
                 placeholder: placeholder.as_ref(),
                 colors: &colors,
-                cursor_visible,
+                cursor_visible: is_cursor_visible,
                 precomputed_first_line,
             };
             context.process_mouse_events(&self.input, window, cx);
