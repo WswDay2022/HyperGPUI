@@ -185,7 +185,7 @@ impl InputState {
             CursorBlinkType::Disabled => None,
             CursorBlinkType::Enabled { app: cx, interval } => {
                 let interval = interval.unwrap_or(super::DEFAULT_BLINK_INTERVAL);
-                let cursor_blink = cx.new(|cx| super::CursorBlink::new(interval, cx));
+                let cursor_blink = cx.new(|_cx| super::CursorBlink::new(interval));
                 let entity_id = self.entity_id;
                 let subscription = cx.observe(&cursor_blink, move |_, cx| cx.notify(entity_id));
                 Some((cursor_blink, subscription))
@@ -867,7 +867,7 @@ impl InputState {
         self.cached_utf16_len = Some(cached_len - removed_utf16_len + added_utf16_len);
     }
 
-    /// Pauses cursor blinking temporarily (e.g., during typing).
+    /// Temporarily pauses blinking and leaves the cursor visible. Blinking will resume after the pre-established interval elapses from the time this is called.
     pub(super) fn pause_cursor_blink(&self, cx: &mut Context<Self>) {
         if let Some((cursor_blink, _)) = &self.cursor_blink {
             cursor_blink.update(cx, |cb, cx| cb.pause_blinking(cx));

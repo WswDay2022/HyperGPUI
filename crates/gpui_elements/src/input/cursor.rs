@@ -17,10 +17,8 @@ pub enum CursorBlinkType<'app> {
     },
 }
 
-/// Manages the blinking state of a text cursor.
-///
-/// The cursor blinks at a configurable interval when enabled. Blinking can be
-/// temporarily paused (e.g., during typing) to provide immediate visual feedback.
+/// The state of an input's cursor blinking. While active, the cursor's visibility changes at some interval.
+/// This blinking can be temporarily paused (e.g. during typing).
 pub(super) struct CursorBlink {
     interval: Duration,
     generation: usize,
@@ -30,10 +28,9 @@ pub(super) struct CursorBlink {
 }
 
 impl CursorBlink {
-    /// Creates a new cursor blink manager with the given interval.
-    ///
-    /// The cursor starts in a disabled state with visibility set to true.
-    pub fn new(interval: Duration, _cx: &mut Context<Self>) -> Self {
+    /// Initializes the cursor blinking with the cursor already being visible.
+    #[track_caller]
+    pub fn new(interval: Duration) -> Self {
         Self {
             interval,
             generation: 0,
@@ -50,8 +47,7 @@ impl CursorBlink {
 
     /// Activates cursor blinking.
     ///
-    /// When activated, the cursor will alternate between visible and hidden
-    /// states at the configured interval. Has no effect if already active.
+    /// While active, the cursor will alternate between visible and hidden states at the configured interval. Has no effect if already active.
     pub fn enable(&mut self, cx: &mut Context<Self>) {
         if self.active {
             return;
@@ -60,14 +56,13 @@ impl CursorBlink {
         self.active = true;
         self.visible = false;
         self.paused = false;
-        self.tick(cx);
+        self.spawn_ticker(cx);
     }
 
     /// Deactivates cursor blinking.
     ///
-    /// The cursor visibility is set to false when disabled. Call
-    /// `pause_blinking` instead if you want to temporarily stop blinking
-    /// while keeping the cursor visible.
+    /// Marks the cursor as invisible and pauses blinking indefinitely. `enable` must be called explicitly to resume visibility and blinking.
+    /// Call `pause_blinking` instead if you want to temporarily stop blinking while keeping the cursor visible.
     pub fn disable(&mut self, cx: &mut Context<Self>) {
         self.active = false;
         self.visible = false;
@@ -75,10 +70,7 @@ impl CursorBlink {
         cx.notify();
     }
 
-    /// Temporarily pauses blinking and shows the cursor.
-    ///
-    /// This is useful during user input to provide immediate feedback.
-    /// Blinking resumes automatically after the blink interval elapses.
+    /// Temporarily pauses blinking and leaves the cursor visible. Blinking will resume after the pre-established interval elapses from the time this is called.
     pub fn pause_blinking(&mut self, cx: &mut Context<Self>) {
         if !self.visible {
             self.visible = true;
@@ -96,14 +88,14 @@ impl CursorBlink {
             this.update(cx, |this, cx| {
                 if this.generation == generation {
                     this.paused = false;
-                    this.tick(cx);
+                    this.spawn_ticker(cx);
                 }
             })
         })
         .detach();
     }
 
-    fn tick(&mut self, cx: &mut Context<Self>) {
+    fn spawn_ticker(&mut self, cx: &mut Context<Self>) {
         if !self.active || self.paused {
             return;
         }
@@ -120,7 +112,7 @@ impl CursorBlink {
             if let Some(this) = this.upgrade() {
                 this.update(cx, |this, cx| {
                     if this.generation == generation {
-                        this.tick(cx);
+                        this.spawn_ticker(cx);
                     }
                 });
             }
