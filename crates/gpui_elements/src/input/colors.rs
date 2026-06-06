@@ -1,9 +1,13 @@
 use gpui::Hsla;
 
+/// Style colors applied to the Input element
 #[derive(Clone, Copy, Debug)]
 pub struct InputColors {
+    /// This is the background color applied to the range of text that is currently selected by the user.
     pub selection: Hsla,
+    /// This is the color of the user's text cursor.
     pub cursor: Hsla,
+    /// This is the color of the placeholder string, when one is assigned and the text field is empty.
     pub placeholder: Hsla,
     pub marked: Hsla,
 }
