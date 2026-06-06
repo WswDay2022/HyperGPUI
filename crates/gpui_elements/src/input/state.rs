@@ -44,15 +44,15 @@ pub struct InputState {
     cached_utf16_len: Option<usize>,
 
     /// The style of layout (single or multiline).
-    pub(super) layout_style: InputLayoutStyle,
+    layout_style: InputLayoutStyle,
     /// The utf-8 character range that is currently selected by the user.
     /// NOTE: because each input has its own selection state, its trivial for users to have multiple selections active across multiple inputs at the same time.
     ///   This could be considered undesirable behavior, and doing so would prompt the question of should there be a mechanism to clear selection when focus is lost.
-    pub(super) selected_range: Range<usize>,
+    selected_range: Range<usize>,
     /// The direction of the selection_range. Forward means providing in iteration order along `content`. Back means reverse iteration order.
-    pub(super) selection_direction: NavigationDirection,
+    selection_direction: NavigationDirection,
     /// The utf-8 character range of `content` that is currently marked/highlighted.
-    pub(super) marked_range: Option<Range<usize>>,
+    marked_range: Option<Range<usize>>,
 
     // refreshed each update by the element, for conveinent access in mutations and painting
     pub(super) layout_data: InputLayoutData,
@@ -68,7 +68,7 @@ pub struct InputState {
     /// The number of times the user has clicked `last_click_position`. Used to determine which click behavior to trigger, depending on single, double, or triple clicks.
     click_count: usize,
     /// The distance in pixels from the start of the text a user has scrolled along the layout_style axis (singleline is horizontal, multiline is vertical).
-    pub(super) scroll_offset: Pixels,
+    scroll_distance: Pixels,
 
     /// The maximum duration between changes to `content` that can be grouped together as a single entry in the history log.
     history_grouping_interval: Duration,
@@ -163,7 +163,7 @@ impl InputState {
             is_selecting: false,
             last_click_position: None,
             click_count: 0,
-            scroll_offset: px(0.),
+            scroll_distance: px(0.),
 
             history_grouping_interval: super::DEFAULT_GROUP_INTERVAL,
             history_undo_stack: Vec::new(),
@@ -232,6 +232,10 @@ impl InputState {
         &self.selected_range
     }
 
+    pub fn selection_direction(&self) -> NavigationDirection {
+        self.selection_direction
+    }
+
     /// Sets the selection range directly.
     pub fn set_selected_range(&mut self, range: Range<usize>) {
         let range = range.start.min(self.content.len())..range.end.min(self.content.len());
@@ -254,7 +258,7 @@ impl InputState {
 
     /// Returns true if the scroll position is at the top.
     pub fn at_top(&self) -> bool {
-        self.scroll_offset <= px(0.)
+        self.scroll_distance <= px(0.)
     }
 
     /// Returns true if the scroll position is at the bottom.
@@ -266,7 +270,7 @@ impl InputState {
             return true;
         }
 
-        self.scroll_offset + visible_height >= content_height
+        self.scroll_distance + visible_height >= content_height
     }
 
     /// Returns the scroll progress as a value from 0.0 (top) to 1.0 (bottom).
@@ -279,12 +283,12 @@ impl InputState {
             return 0.0;
         }
 
-        (self.scroll_offset / max_scroll).clamp(0.0, 1.0)
+        (self.scroll_distance / max_scroll).clamp(0.0, 1.0)
     }
 
     /// Returns how far the content is scrolled from the top in pixels.
     pub fn distance_from_top(&self) -> Pixels {
-        self.scroll_offset.max(px(0.))
+        self.scroll_distance.max(px(0.))
     }
 
     /// Returns how far the content is from the bottom in pixels.
@@ -297,7 +301,7 @@ impl InputState {
             return px(0.);
         }
 
-        (max_scroll - self.scroll_offset).max(px(0.))
+        (max_scroll - self.scroll_distance).max(px(0.))
     }
 
     /// Configures how long the input will wait between user-input changes to create new logs in the history for undo/redo.
@@ -347,7 +351,7 @@ impl InputState {
             self.cached_utf16_len = Some(cached_len - removed_utf16_len + added_utf16_len);
         }
 
-        self.replace_range(range.clone(), &text_to_insert);
+        self.replace_text_at_range(range.clone(), &text_to_insert);
 
         self.selected_range =
             range.start + text_to_insert.len()..range.start + text_to_insert.len();
@@ -834,8 +838,12 @@ impl InputState {
         self.layout_data.line_height
     }
 
+    pub(super) fn set_marked_range(&mut self, range: Option<Range<usize>>) {
+        self.marked_range = range;
+    }
+
     /// Replaces the provided utf-8 character range with the provided text
-    pub(super) fn replace_range(&mut self, range: Range<usize>, text: &str) {
+    pub(super) fn replace_text_at_range(&mut self, range: Range<usize>, text: &str) {
         self.content.replace_range(range, &text);
     }
 
@@ -944,6 +952,10 @@ impl InputState {
         self.content.len()
     }
 
+    pub(super) fn apply_scroll_delta(&mut self, delta: Pixels, max: Pixels) {
+        self.scroll_distance = (self.scroll_distance - delta).clamp(px(0.), max);
+    }
+
     pub(super) fn scroll_to_cursor(&mut self) {
         if self.logical_lines.is_empty() {
             return;
@@ -971,19 +983,20 @@ impl InputState {
                     px(0.)
                 };
 
-                let visible_left = self.scroll_offset;
-                let visible_right = self.scroll_offset + self.layout_data.available_size.width;
+                let visible_left = self.scroll_distance;
+                let visible_right = self.scroll_distance + self.layout_data.available_size.width;
 
                 // Add some padding so cursor isn't right at the edge
                 let padding = px(2.0);
 
                 if cursor_x < visible_left + padding {
-                    self.scroll_offset = (cursor_x - padding).max(px(0.));
+                    self.scroll_distance = (cursor_x - padding).max(px(0.));
                 } else if cursor_x > visible_right - padding {
-                    self.scroll_offset = cursor_x - self.layout_data.available_size.width + padding;
+                    self.scroll_distance =
+                        cursor_x - self.layout_data.available_size.width + padding;
                 }
 
-                self.scroll_offset = self.scroll_offset.max(px(0.));
+                self.scroll_distance = self.scroll_distance.max(px(0.));
             }
             InputLayoutStyle::MultiLine => {
                 if self.layout_data.available_size.height <= px(0.) {
@@ -1015,18 +1028,18 @@ impl InputState {
                             line.y_offset
                         };
 
-                        let visible_top = self.scroll_offset;
+                        let visible_top = self.scroll_distance;
                         let visible_bottom =
-                            self.scroll_offset + self.layout_data.available_size.height;
+                            self.scroll_distance + self.layout_data.available_size.height;
 
                         if cursor_visual_y < visible_top {
-                            self.scroll_offset = cursor_visual_y;
+                            self.scroll_distance = cursor_visual_y;
                         } else if cursor_visual_y + line_height > visible_bottom {
-                            self.scroll_offset = (cursor_visual_y + line_height)
+                            self.scroll_distance = (cursor_visual_y + line_height)
                                 - self.layout_data.available_size.height;
                         }
 
-                        self.scroll_offset = self.scroll_offset.max(px(0.));
+                        self.scroll_distance = self.scroll_distance.max(px(0.));
                         break;
                     }
                 }

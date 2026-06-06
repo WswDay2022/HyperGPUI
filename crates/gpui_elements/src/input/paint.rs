@@ -191,7 +191,7 @@ struct InputStateSnapshot {
     marked_range: Option<Range<usize>>,
     cursor_position: usize,
     logical_lines: Vec<InputLogicalLine>,
-    scroll_offset: Pixels,
+    scroll_distance: Pixels,
     line_height: Pixels,
 }
 impl InputStateSnapshot {
@@ -201,7 +201,7 @@ impl InputStateSnapshot {
         let marked_range = input_state.marked_range().cloned();
         let cursor_position = input_state.cursor_position();
         let logical_lines = input_state.logical_lines.clone();
-        let scroll_offset = input_state.scroll_offset;
+        let scroll_distance = input_state.distance_from_top();
         let line_height = input_state.line_height();
         let layout_axis = input_state.layout_style().axis();
         let should_center_placeholder = matches!(
@@ -216,7 +216,7 @@ impl InputStateSnapshot {
             marked_range,
             cursor_position,
             logical_lines,
-            scroll_offset,
+            scroll_distance,
             line_height,
         }
     }
@@ -241,6 +241,7 @@ impl<'app> PaintContext<'app> {
     ) {
         let axis = self.snapshot.layout_axis;
         let bounds = self.bounds;
+        let scroll_distance = self.snapshot.scroll_distance;
         window.on_mouse_event({
             let input = entity.clone();
             move |event: &MouseDownEvent, phase, window, cx| {
@@ -257,7 +258,7 @@ impl<'app> PaintContext<'app> {
                 input.update(cx, |input, cx| {
                     // Converts a screen position to a position relative to the text area origin, adjusted for scroll offset.
                     let text_position = (event.position - bounds.origin)
-                        .apply_along(axis, |pos| pos + input.scroll_offset);
+                        .apply_along(axis, |pos| pos + scroll_distance);
                     input.on_mouse_down(
                         text_position,
                         event.click_count,
@@ -293,7 +294,7 @@ impl<'app> PaintContext<'app> {
                 input.update(cx, |input, cx| {
                     // Converts a screen position to a position relative to the text area origin, adjusted for scroll offset.
                     let text_position = (event.position - bounds.origin)
-                        .apply_along(axis, |pos| pos + input.scroll_offset);
+                        .apply_along(axis, |pos| pos + scroll_distance);
                     input.on_mouse_move(text_position, cx);
                 });
             }
@@ -330,7 +331,7 @@ impl<'app> PaintContext<'app> {
                             }
                         }
                     };
-                    input.scroll_offset = (input.scroll_offset - delta).clamp(px(0.), max_scroll);
+                    input.apply_scroll_delta(delta, max_scroll);
                     cx.notify();
                 });
             }
@@ -372,7 +373,7 @@ impl<'app> PaintContext<'app> {
     fn paint_selection(&self, window: &mut Window) {
         let one_line = self.snapshot.logical_lines.len() == 1;
         for line in &self.snapshot.logical_lines {
-            let line_y = line.y_offset - self.snapshot.scroll_offset;
+            let line_y = line.y_offset - self.snapshot.scroll_distance;
 
             if !one_line {
                 if !self.is_line_visible(line) {
@@ -442,7 +443,7 @@ impl<'app> PaintContext<'app> {
 
     fn paint_text(&self, window: &mut Window, cx: &mut App) {
         for line_layout in &self.snapshot.logical_lines {
-            let line_y = line_layout.y_offset - self.snapshot.scroll_offset;
+            let line_y = line_layout.y_offset - self.snapshot.scroll_distance;
 
             if !self.is_line_visible(line_layout) {
                 continue;
@@ -499,7 +500,7 @@ impl<'app> PaintContext<'app> {
 
     fn find_cursor_position_in_layouts(&self) -> Point<Pixels> {
         for line in &self.snapshot.logical_lines {
-            let line_y = line.y_offset - self.snapshot.scroll_offset;
+            let line_y = line.y_offset - self.snapshot.scroll_distance;
 
             if !self.is_line_visible(line) {
                 continue;
@@ -544,7 +545,7 @@ impl<'app> PaintContext<'app> {
     }
 
     fn is_line_visible(&self, line: &InputLogicalLine) -> bool {
-        let line_y = line.y_offset - self.snapshot.scroll_offset;
+        let line_y = line.y_offset - self.snapshot.scroll_distance;
         let line_bottom = line_y + self.snapshot.line_height * line.visual_line_count as f32;
         line_bottom >= px(0.) && line_y <= self.bounds.size.height
     }
@@ -565,7 +566,7 @@ impl<'app> PaintContext<'app> {
             return;
         };
 
-        let line_y = line.y_offset - self.snapshot.scroll_offset;
+        let line_y = line.y_offset - self.snapshot.scroll_distance;
 
         let line_start = line.text_range.start;
         let line_end = line.text_range.end;

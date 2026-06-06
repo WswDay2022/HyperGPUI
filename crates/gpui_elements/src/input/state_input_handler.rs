@@ -28,8 +28,8 @@ impl EntityInputHandler for super::InputState {
         _cx: &mut Context<Self>,
     ) -> Option<UTF16Selection> {
         Some(UTF16Selection {
-            range: self.utf_range_8to16(&self.selected_range),
-            reversed: self.selection_direction == NavigationDirection::Back,
+            range: self.utf_range_8to16(self.selected_range()),
+            reversed: self.selection_direction() == NavigationDirection::Back,
         })
     }
 
@@ -38,13 +38,13 @@ impl EntityInputHandler for super::InputState {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Range<usize>> {
-        self.marked_range
+        self.marked_range()
             .as_ref()
             .map(|range| self.utf_range_8to16(range))
     }
 
     fn unmark_text(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
-        self.marked_range = None;
+        self.set_marked_range(None);
     }
 
     fn replace_text_in_range(
@@ -57,21 +57,21 @@ impl EntityInputHandler for super::InputState {
         let range = range_utf16
             .as_ref()
             .map(|range_utf16| self.utf_range_16to8(range_utf16))
-            .or(self.marked_range.clone())
-            .unwrap_or(self.selected_range.clone());
+            .or(self.marked_range().cloned())
+            .unwrap_or(self.selected_range().clone());
         let range = range.start.min(self.content().len())..range.end.min(self.content().len());
 
-        let text_to_insert = self.layout_style.sanitize_content(new_text);
+        let text_to_insert = self.layout_style().sanitize_content(new_text);
 
         // Record patch for undo before modifying content
         self.push_undo_patch(range.clone(), text_to_insert.len());
-        self.push_undo_patch(range.clone(), text_to_insert.len());
-        self.update_utf16_len(range.clone(), &text_to_insert);
-        self.replace_range(range.clone(), &text_to_insert);
 
-        self.selected_range =
-            range.start + text_to_insert.len()..range.start + text_to_insert.len();
-        self.marked_range.take();
+        self.update_utf16_len(range.clone(), &text_to_insert);
+        self.replace_text_at_range(range.clone(), &text_to_insert);
+        self.set_selected_range(
+            range.start + text_to_insert.len()..range.start + text_to_insert.len(),
+        );
+        self.set_marked_range(None);
         self.layout_data.dirty = true;
 
         self.pause_cursor_blink(cx);
@@ -90,28 +90,27 @@ impl EntityInputHandler for super::InputState {
         let range = range_utf16
             .as_ref()
             .map(|range_utf16| self.utf_range_16to8(range_utf16))
-            .or(self.marked_range.clone())
-            .unwrap_or(self.selected_range.clone());
+            .or(self.marked_range().cloned())
+            .unwrap_or(self.selected_range().clone());
         let range = range.start.min(self.content().len())..range.end.min(self.content().len());
 
-        let text_to_insert = self.layout_style.sanitize_content(new_text);
+        let text_to_insert = self.layout_style().sanitize_content(new_text);
 
         self.update_utf16_len(range.clone(), &text_to_insert);
-        self.replace_range(range.clone(), &text_to_insert);
-
-        if !text_to_insert.is_empty() {
-            self.marked_range = Some(range.start..range.start + text_to_insert.len());
-        } else {
-            self.marked_range = None;
-        }
-
-        self.selected_range = new_selected_range_utf16
-            .as_ref()
-            .map(|range_utf16| self.utf_range_16to8(range_utf16))
-            .map(|new_range| new_range.start + range.start..new_range.end + range.start)
-            .unwrap_or_else(|| {
+        self.replace_text_at_range(range.clone(), &text_to_insert);
+        self.set_marked_range(match text_to_insert.is_empty() {
+            true => None,
+            false => Some(range.start..range.start + text_to_insert.len()),
+        });
+        self.set_selected_range({
+            let new_range = new_selected_range_utf16.as_ref();
+            let new_range = new_range.map(|range_utf16| self.utf_range_16to8(range_utf16));
+            let new_range = new_range
+                .map(|new_range| new_range.start + range.start..new_range.end + range.start);
+            new_range.unwrap_or_else(|| {
                 range.start + text_to_insert.len()..range.start + text_to_insert.len()
-            });
+            })
+        });
 
         self.layout_data.dirty = true;
         cx.emit(InputStateEvent::TextChanged);
