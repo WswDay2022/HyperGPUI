@@ -1,6 +1,9 @@
 use super::unicode::UnicodeString;
 use crate::input::InputStateEvent;
-use gpui::{Bounds, Context, EntityInputHandler, Pixels, Point, UTF16Selection, Window, point, px};
+use gpui::{
+    Bounds, Context, EntityInputHandler, NavigationDirection, Pixels, Point, UTF16Selection,
+    Window, point, px,
+};
 use std::ops::Range;
 
 impl EntityInputHandler for super::InputState {
@@ -26,7 +29,7 @@ impl EntityInputHandler for super::InputState {
     ) -> Option<UTF16Selection> {
         Some(UTF16Selection {
             range: self.utf_range_8to16(&self.selected_range),
-            reversed: self.selection_reversed,
+            reversed: self.selection_direction == NavigationDirection::Back,
         })
     }
 

@@ -2,8 +2,8 @@ use super::actions::*;
 use crate::input::InputLayoutStyle;
 use gpui::{
     App, AppContext, ClipboardItem, Context, Entity, EntityId, EntityInputHandler, EventEmitter,
-    FocusHandle, Focusable, Pixels, Point, SharedString, Size, Subscription, TextRun, TextStyle,
-    Window, WrappedLine, point, px,
+    FocusHandle, Focusable, NavigationDirection, Pixels, Point, SharedString, Size, Subscription,
+    TextRun, TextStyle, Window, WrappedLine, point, px,
 };
 use std::{
     ops::Range,
@@ -39,7 +39,7 @@ pub struct InputState {
     focus_handle: FocusHandle,
     content: SharedString,
     pub(super) selected_range: Range<usize>,
-    pub(super) selection_reversed: bool, // TODO: NavigationDirection
+    pub(super) selection_direction: NavigationDirection,
     pub(super) marked_range: Option<Range<usize>>,
     pub(super) logical_lines: Vec<InputLogicalLine>,
     // refreshed each update by the element, for conveinent access in mutations and painting
@@ -124,7 +124,7 @@ impl InputState {
             focus_handle: cx.focus_handle(),
             content: SharedString::default(),
             selected_range: 0..0,
-            selection_reversed: false,
+            selection_direction: NavigationDirection::Forward,
             marked_range: None,
             layout_data: InputLayoutData::default(),
             logical_lines: Vec::new(),
@@ -173,7 +173,7 @@ impl InputState {
         let content = self.layout_style.sanitize_content(content.as_ref());
         self.content = content.to_string().into();
         self.selected_range = 0..0;
-        self.selection_reversed = false;
+        self.selection_direction = NavigationDirection::Forward;
         self.marked_range = None;
         self.layout_data.dirty = true;
         self.undo_stack.clear();
@@ -204,14 +204,14 @@ impl InputState {
     pub fn set_selected_range(&mut self, range: Range<usize>) {
         let range = range.start.min(self.content.len())..range.end.min(self.content.len());
         self.selected_range = range;
-        self.selection_reversed = false;
+        self.selection_direction = NavigationDirection::Forward;
     }
 
     /// Returns the current position of the cursor within the utf-8 character range of the current state of the text.
     pub fn cursor_position(&self) -> usize {
-        match self.selection_reversed {
-            true => self.selected_range.start,
-            false => self.selected_range.end,
+        match self.selection_direction {
+            NavigationDirection::Back => self.selected_range.start,
+            NavigationDirection::Forward => self.selected_range.end,
         }
     }
 
@@ -330,13 +330,13 @@ impl InputState {
     pub fn undo_action(&mut self, cx: &mut Context<Self>) {
         if let Some(entry) = self.undo_stack.pop() {
             let selected_range = entry.selected_range.clone();
-            let selection_reversed = entry.selection_reversed;
+            let selection_direction = entry.selection_direction;
 
             let redo_entry = entry.apply_undo(&mut self.content);
             self.redo_stack.push(redo_entry);
 
             self.selected_range = selected_range;
-            self.selection_reversed = selection_reversed;
+            self.selection_direction = selection_direction;
             self.layout_data.dirty = true;
             self.cached_utf16_len = None;
             self.scroll_to_cursor();
@@ -352,7 +352,7 @@ impl InputState {
 
             let cursor_pos = undo_entry.range.start;
             self.selected_range = cursor_pos..cursor_pos;
-            self.selection_reversed = false;
+            self.selection_direction = NavigationDirection::Forward;
 
             self.undo_stack.push(undo_entry);
             self.layout_data.dirty = true;
@@ -370,7 +370,7 @@ impl InputState {
         if let Some(entry) = self.undo_stack.pop() {
             // Remember selection to restore
             let selected_range = entry.selected_range.clone();
-            let selection_reversed = entry.selection_reversed;
+            let selection_direction = entry.selection_direction;
 
             // Apply the undo patch and get the redo patch
             let redo_entry = entry.apply_undo(&mut self.content);
@@ -378,7 +378,7 @@ impl InputState {
 
             // Restore selection state
             self.selected_range = selected_range;
-            self.selection_reversed = selection_reversed;
+            self.selection_direction = selection_direction;
             self.layout_data.dirty = true;
             self.cached_utf16_len = None;
             self.scroll_to_cursor();
@@ -396,7 +396,7 @@ impl InputState {
             // We need to restore cursor to end of inserted text
             let cursor_pos = undo_entry.range.start;
             self.selected_range = cursor_pos..cursor_pos;
-            self.selection_reversed = false;
+            self.selection_direction = NavigationDirection::Forward;
 
             self.undo_stack.push(undo_entry);
             self.layout_data.dirty = true;
@@ -409,7 +409,7 @@ impl InputState {
 
     pub(super) fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
         self.selected_range = 0..self.content.len();
-        self.selection_reversed = false;
+        self.selection_direction = NavigationDirection::Forward;
         cx.notify();
     }
 
@@ -437,14 +437,14 @@ impl InputState {
             InputLayoutStyle::SingleLine => {
                 // In single-line mode, up moves to start
                 self.selected_range = 0..0;
-                self.selection_reversed = false;
+                self.selection_direction = NavigationDirection::Forward;
                 self.scroll_to_cursor();
                 cx.notify();
             }
             InputLayoutStyle::MultiLine => {
                 if let Some(new_offset) = self.move_vertically(self.cursor_position(), -1) {
                     self.selected_range = new_offset..new_offset;
-                    self.selection_reversed = false;
+                    self.selection_direction = NavigationDirection::Forward;
                     self.scroll_to_cursor();
                     cx.notify();
                 }
@@ -459,14 +459,14 @@ impl InputState {
                 // In single-line mode, down moves to end
                 let end = self.content.len();
                 self.selected_range = end..end;
-                self.selection_reversed = false;
+                self.selection_direction = NavigationDirection::Forward;
                 self.scroll_to_cursor();
                 cx.notify();
             }
             InputLayoutStyle::MultiLine => {
                 if let Some(new_offset) = self.move_vertically(self.cursor_position(), 1) {
                     self.selected_range = new_offset..new_offset;
-                    self.selection_reversed = false;
+                    self.selection_direction = NavigationDirection::Forward;
                     self.scroll_to_cursor();
                     cx.notify();
                 }
@@ -490,19 +490,12 @@ impl InputState {
                 self.select_to(0, cx);
             }
             InputLayoutStyle::MultiLine => {
-                if let Some(new_offset) = self.move_vertically(self.cursor_position(), -1) {
-                    if self.selection_reversed {
-                        self.selected_range.start = new_offset;
-                    } else {
-                        self.selected_range.end = new_offset;
-                    }
-                    if self.selected_range.end < self.selected_range.start {
-                        self.selection_reversed = !self.selection_reversed;
-                        self.selected_range = self.selected_range.end..self.selected_range.start;
-                    }
-                    self.scroll_to_cursor();
-                    cx.notify();
-                }
+                let Some(new_offset) = self.move_vertically(self.cursor_position(), -1) else {
+                    return;
+                };
+                self.apply_selection_offset(new_offset);
+                self.scroll_to_cursor();
+                cx.notify();
             }
         }
     }
@@ -520,19 +513,12 @@ impl InputState {
                 self.select_to(self.content.len(), cx);
             }
             InputLayoutStyle::MultiLine => {
-                if let Some(new_offset) = self.move_vertically(self.cursor_position(), 1) {
-                    if self.selection_reversed {
-                        self.selected_range.start = new_offset;
-                    } else {
-                        self.selected_range.end = new_offset;
-                    }
-                    if self.selected_range.end < self.selected_range.start {
-                        self.selection_reversed = !self.selection_reversed;
-                        self.selected_range = self.selected_range.end..self.selected_range.start;
-                    }
-                    self.scroll_to_cursor();
-                    cx.notify();
-                }
+                let Some(new_offset) = self.move_vertically(self.cursor_position(), 1) else {
+                    return;
+                };
+                self.apply_selection_offset(new_offset);
+                self.scroll_to_cursor();
+                cx.notify();
             }
         }
     }
@@ -766,7 +752,7 @@ impl InputState {
             2 => {
                 let (word_start, word_end) = self.word_range_at(character_pos);
                 self.selected_range = word_start..word_end;
-                self.selection_reversed = false;
+                self.selection_direction = NavigationDirection::Forward;
                 cx.notify();
             }
             3 => {
@@ -778,7 +764,7 @@ impl InputState {
                     line_end
                 };
                 self.selected_range = line_start..line_end_with_newline;
-                self.selection_reversed = false;
+                self.selection_direction = NavigationDirection::Forward;
                 cx.notify();
             }
             _ => {
@@ -847,7 +833,7 @@ impl InputState {
             old_text,
             new_text_len,
             selected_range: self.selected_range.clone(),
-            selection_reversed: self.selection_reversed,
+            selection_direction: self.selection_direction,
             timestamp: now,
         });
 
@@ -1127,7 +1113,7 @@ impl InputState {
         self.pause_cursor_blink(cx);
         let offset = offset.min(self.content.len());
         self.selected_range = offset..offset;
-        self.selection_reversed = false;
+        self.selection_direction = NavigationDirection::Forward;
         self.scroll_to_cursor();
         cx.notify();
     }
@@ -1135,17 +1121,23 @@ impl InputState {
     fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
         self.pause_cursor_blink(cx);
         let offset = offset.min(self.content.len());
-        if self.selection_reversed {
-            self.selected_range.start = offset;
-        } else {
-            self.selected_range.end = offset;
-        }
-        if self.selected_range.end < self.selected_range.start {
-            self.selection_reversed = !self.selection_reversed;
-            self.selected_range = self.selected_range.end..self.selected_range.start;
-        }
+        self.apply_selection_offset(offset);
         self.scroll_to_cursor();
         cx.notify();
+    }
+
+    fn apply_selection_offset(&mut self, offset: usize) {
+        match self.selection_direction {
+            NavigationDirection::Forward => self.selected_range.end = offset,
+            NavigationDirection::Back => self.selected_range.start = offset,
+        }
+        if self.selected_range.end < self.selected_range.start {
+            self.selection_direction = match self.selection_direction {
+                NavigationDirection::Forward => NavigationDirection::Back,
+                NavigationDirection::Back => NavigationDirection::Forward,
+            };
+            self.selected_range = self.selected_range.end..self.selected_range.start;
+        }
     }
 
     fn find_visual_line_and_x_offset(&self, offset: usize) -> (usize, f32) {
@@ -1607,7 +1599,7 @@ mod tests {
             view.input.update(cx, |input, cx| {
                 input.select_left(&SelectLeft, window, cx);
                 assert_eq!(input.selected_range, 2..3);
-                assert!(input.selection_reversed);
+                assert_eq!(input.selection_direction, NavigationDirection::Back);
             });
         })
         .unwrap();
@@ -1620,7 +1612,7 @@ mod tests {
             view.input.update(cx, |input, cx| {
                 input.select_right(&SelectRight, window, cx);
                 assert_eq!(input.selected_range, 2..3);
-                assert!(!input.selection_reversed);
+                assert_eq!(input.selection_direction, NavigationDirection::Forward);
             });
         })
         .unwrap();
@@ -1645,7 +1637,7 @@ mod tests {
             view.input.update(cx, |input, cx| {
                 input.select_to_beginning(&SelectToBeginning, window, cx);
                 assert_eq!(input.selected_range, 0..6);
-                assert!(input.selection_reversed);
+                assert_eq!(input.selection_direction, NavigationDirection::Back);
             });
         })
         .unwrap();
@@ -1658,7 +1650,7 @@ mod tests {
             view.input.update(cx, |input, cx| {
                 input.select_to_end(&SelectToEnd, window, cx);
                 assert_eq!(input.selected_range, 6..11);
-                assert!(!input.selection_reversed);
+                assert_eq!(input.selection_direction, NavigationDirection::Forward);
             });
         })
         .unwrap();
@@ -1951,12 +1943,12 @@ mod tests {
         let view = create_test_input(cx, "hello world", 3..8);
         view.update(cx, |view, _window, cx| {
             view.input.update(cx, |input, cx| {
-                input.selection_reversed = true;
+                input.selection_direction = NavigationDirection::Back;
                 input.marked_range = Some(5..7);
                 input.set_content("new content", cx);
                 assert_eq!(input.content(), "new content");
                 assert_eq!(input.selected_range, 0..0);
-                assert!(!input.selection_reversed);
+                assert_eq!(input.selection_direction, NavigationDirection::Forward);
                 assert_eq!(input.marked_range, None);
             });
         })
@@ -2366,7 +2358,7 @@ mod tests {
             view.input.update(cx, |input, cx| {
                 input.select_up(&SelectUp, window, cx);
                 assert_eq!(input.selected_range, 0..5);
-                assert!(input.selection_reversed);
+                assert_eq!(input.selection_direction, NavigationDirection::Back);
             });
         })
         .unwrap();
@@ -2379,7 +2371,7 @@ mod tests {
             view.input.update(cx, |input, cx| {
                 input.select_down(&SelectDown, window, cx);
                 assert_eq!(input.selected_range, 5..11); // "hello world".len() == 11
-                assert!(!input.selection_reversed);
+                assert_eq!(input.selection_direction, NavigationDirection::Forward);
             });
         })
         .unwrap();

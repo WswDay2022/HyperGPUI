@@ -3,7 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use gpui::SharedString;
+use gpui::{NavigationDirection, SharedString};
 
 /// Maximum number of history entries to keep.
 pub const MAX_HISTORY_LEN: usize = 1000;
@@ -23,8 +23,8 @@ pub struct HistoryEntry {
     pub new_text_len: usize,
     /// The selection range before the edit.
     pub selected_range: Range<usize>,
-    /// Whether the selection was reversed before the edit.
-    pub selection_reversed: bool,
+    /// The direction of the selection before the edit.
+    pub selection_direction: NavigationDirection,
     /// Timestamp for grouping consecutive edits.
     pub timestamp: Instant,
 }
@@ -47,7 +47,7 @@ impl HistoryEntry {
             old_text: removed_text,
             new_text_len: self.old_text.len(),
             selected_range: self.selected_range.clone(),
-            selection_reversed: self.selection_reversed,
+            selection_direction: self.selection_direction,
             timestamp: self.timestamp,
         }
     }
