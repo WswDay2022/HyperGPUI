@@ -4,7 +4,7 @@ use gpui::{
     ElementInputHandler, Entity, Focusable, GlobalElementId, Hitbox, HitboxBehavior, Hsla,
     InspectorElementId, LayoutId, Length, MouseButton, MouseDownEvent, MouseMoveEvent,
     MouseUpEvent, Pixels, Point, ScrollWheelEvent, SharedString, Style, TextAlign, TextRun,
-    TextStyle, Window, WrappedLine, fill, point, px, relative, size,
+    TextStyle, Window, fill, point, px, relative, size,
 };
 use std::ops::Range;
 
@@ -155,20 +155,6 @@ impl Element for Input {
         });
 
         let perform_paint = |_style: &Style, window: &mut Window, cx: &mut App| {
-            let precomputed_first_line = match (snapshot.layout, snapshot.logical_lines.first()) {
-                (
-                    super::InputLayoutStyle::SingleLine,
-                    Some(InputLogicalLine {
-                        wrapped_line: Some(wrapped_line),
-                        ..
-                    }),
-                ) => Some(PrecomputedLinePosition::new(
-                    &snapshot.content,
-                    &**wrapped_line,
-                    snapshot.line_height,
-                )),
-                _ => None,
-            };
             let context = PaintContext {
                 snapshot,
                 is_focused,
@@ -177,7 +163,6 @@ impl Element for Input {
                 placeholder: placeholder.as_ref(),
                 colors: &colors,
                 cursor_visible: is_cursor_visible,
-                precomputed_first_line,
             };
             context.process_mouse_events(&self.input, window, cx);
             window.with_content_mask(Some(ContentMask { bounds }), |window| {
@@ -236,7 +221,6 @@ struct PaintContext<'app> {
     placeholder: Option<&'app SharedString>,
     colors: &'app PaintColors,
     cursor_visible: bool,
-    precomputed_first_line: Option<PrecomputedLinePosition>,
 }
 
 impl<'app> PaintContext<'app> {
@@ -377,67 +361,38 @@ impl<'app> PaintContext<'app> {
     }
 
     fn paint_selection(&self, window: &mut Window) {
-        match self.snapshot.layout {
-            super::InputLayoutStyle::MultiLine => {
-                for line in &self.snapshot.logical_lines {
-                    let line_y = line.y_offset - self.snapshot.scroll_offset;
+        let one_line = self.snapshot.logical_lines.len() == 1;
+        for line in &self.snapshot.logical_lines {
+            let line_y = line.y_offset - self.snapshot.scroll_offset;
 
-                    if !self.is_line_visible(line) {
-                        continue;
-                    }
+            if !one_line {
+                if !self.is_line_visible(line) {
+                    continue;
+                }
 
-                    if !line_intersects_range(&line.text_range, &self.snapshot.selected_range) {
-                        continue;
-                    }
-
-                    if line.text_range.is_empty() {
-                        const EMPTY_LINE_SELECTION_WIDTH: Pixels = px(6.);
-                        self.paint_bounds_quad(
-                            window,
-                            self.colors.selection,
-                            point(px(0.), line_y),
-                            point(
-                                EMPTY_LINE_SELECTION_WIDTH,
-                                line_y + self.snapshot.line_height,
-                            ),
-                        );
-                    } else {
-                        self.paint_line_range(
-                            window,
-                            line,
-                            &self.snapshot.selected_range,
-                            self.colors.selection,
-                            px(0.),
-                        );
-                    }
+                if !line_intersects_range(&line.text_range, &self.snapshot.selected_range) {
+                    continue;
                 }
             }
-            super::InputLayoutStyle::SingleLine => {
-                let precomputed = self
-                    .precomputed_first_line
-                    .as_ref()
-                    .expect("missing precomputed single-line");
-                let start_x = pos_in_string_for_char_index(
-                    &self.snapshot.content,
-                    &precomputed.char_positions,
-                    self.snapshot.selected_range.start,
-                    &precomputed.text_width,
-                ) - self.snapshot.scroll_offset;
-                let end_x = pos_in_string_for_char_index(
-                    &self.snapshot.content,
-                    &precomputed.char_positions,
-                    self.snapshot.selected_range.end,
-                    &precomputed.text_width,
-                ) - self.snapshot.scroll_offset;
 
-                let y_offset =
-                    (self.bounds.size.height - self.snapshot.line_height).max(px(0.)) / 2.0;
-
+            if line.text_range.is_empty() {
+                const EMPTY_LINE_SELECTION_WIDTH: Pixels = px(6.);
                 self.paint_bounds_quad(
                     window,
                     self.colors.selection,
-                    point(start_x, y_offset),
-                    point(end_x, y_offset + self.snapshot.line_height),
+                    point(px(0.), line_y),
+                    point(
+                        EMPTY_LINE_SELECTION_WIDTH,
+                        line_y + self.snapshot.line_height,
+                    ),
+                );
+            } else {
+                self.paint_line_range(
+                    window,
+                    line,
+                    &self.snapshot.selected_range,
+                    self.colors.selection,
+                    px(0.),
                 );
             }
         }
@@ -477,52 +432,26 @@ impl<'app> PaintContext<'app> {
     }
 
     fn paint_text(&self, window: &mut Window, cx: &mut App) {
-        match self.snapshot.layout {
-            super::InputLayoutStyle::MultiLine => {
-                for line_layout in &self.snapshot.logical_lines {
-                    let line_y = line_layout.y_offset - self.snapshot.scroll_offset;
+        for line_layout in &self.snapshot.logical_lines {
+            let line_y = line_layout.y_offset - self.snapshot.scroll_offset;
 
-                    if !self.is_line_visible(line_layout) {
-                        continue;
-                    }
-
-                    if let Some(wrapped) = &line_layout.wrapped_line {
-                        let paint_pos = point(self.bounds.left(), self.bounds.top() + line_y);
-                        let _ = wrapped.paint(
-                            paint_pos,
-                            self.snapshot.line_height,
-                            TextAlign::Left,
-                            Some(self.bounds),
-                            window,
-                            cx,
-                        );
-                    }
-                }
+            if !self.is_line_visible(line_layout) {
+                continue;
             }
-            super::InputLayoutStyle::SingleLine => {
-                let Some(line_layout) = self.snapshot.logical_lines.first() else {
-                    return;
-                };
-                let Some(wrapped_line) = &line_layout.wrapped_line else {
-                    return;
-                };
 
-                let y_offset =
-                    (self.bounds.size.height - self.snapshot.line_height).max(px(0.)) / 2.0;
-                let paint_origin = point(
-                    self.bounds.origin.x - self.snapshot.scroll_offset,
-                    self.bounds.origin.y + y_offset,
-                );
+            let Some(wrapped) = &line_layout.wrapped_line else {
+                continue;
+            };
 
-                let _ = wrapped_line.paint(
-                    paint_origin,
-                    self.snapshot.line_height,
-                    TextAlign::Left,
-                    Some(self.bounds),
-                    window,
-                    cx,
-                );
-            }
+            let paint_pos = point(self.bounds.left(), self.bounds.top() + line_y);
+            let _ = wrapped.paint(
+                paint_pos,
+                self.snapshot.line_height,
+                TextAlign::Left,
+                Some(self.bounds),
+                window,
+                cx,
+            );
         }
     }
 
@@ -536,57 +465,26 @@ impl<'app> PaintContext<'app> {
 
         let underline_thickness = px(MARKED_TEXT_UNDERLINE_THICKNESS);
         let underline_offset = self.snapshot.line_height - underline_thickness;
-        match self.snapshot.layout {
-            super::InputLayoutStyle::MultiLine => {
-                for line in &self.snapshot.logical_lines {
-                    if !self.is_line_visible(line) {
-                        continue;
-                    }
-
-                    if !line_intersects_range(&line.text_range, marked_range) {
-                        continue;
-                    }
-
-                    if line.text_range.is_empty() {
-                        continue;
-                    }
-
-                    self.paint_line_range(
-                        window,
-                        line,
-                        marked_range,
-                        self.colors.cursor,
-                        underline_offset,
-                    );
-                }
+        for line in &self.snapshot.logical_lines {
+            if !self.is_line_visible(line) {
+                continue;
             }
-            super::InputLayoutStyle::SingleLine => {
-                let Some(precomputed) = &self.precomputed_first_line else {
-                    return;
-                };
-                let start_x = pos_in_string_for_char_index(
-                    &self.snapshot.content,
-                    &precomputed.char_positions,
-                    marked_range.start,
-                    &precomputed.text_width,
-                ) - self.snapshot.scroll_offset;
-                let end_x = pos_in_string_for_char_index(
-                    &self.snapshot.content,
-                    &precomputed.char_positions,
-                    marked_range.end,
-                    &precomputed.text_width,
-                ) - self.snapshot.scroll_offset;
 
-                let y_offset =
-                    (self.bounds.size.height - self.snapshot.line_height).max(px(0.)) / 2.0;
-
-                self.paint_bounds_quad(
-                    window,
-                    self.colors.cursor,
-                    point(start_x, y_offset + underline_offset),
-                    point(end_x, y_offset + self.snapshot.line_height),
-                );
+            if !line_intersects_range(&line.text_range, marked_range) {
+                continue;
             }
+
+            if line.text_range.is_empty() {
+                continue;
+            }
+
+            self.paint_line_range(
+                window,
+                line,
+                marked_range,
+                self.colors.cursor,
+                underline_offset,
+            );
         }
     }
 
@@ -626,26 +524,7 @@ impl<'app> PaintContext<'app> {
     }
 
     fn paint_cursor(&self, window: &mut Window) {
-        let cursor_pos = match self.snapshot.layout {
-            super::InputLayoutStyle::MultiLine => self.find_cursor_position_in_layouts(),
-            super::InputLayoutStyle::SingleLine => {
-                let Some(precomputed) = &self.precomputed_first_line else {
-                    return;
-                };
-                let cursor_x = pos_in_string_for_char_index(
-                    &self.snapshot.content,
-                    &precomputed.char_positions,
-                    self.snapshot.cursor_offset,
-                    &precomputed.text_width,
-                ) - self.snapshot.scroll_offset;
-
-                let y_offset =
-                    (self.bounds.size.height - self.snapshot.line_height).max(px(0.)) / 2.0;
-
-                point(cursor_x, y_offset)
-            }
-        };
-
+        let cursor_pos = self.find_cursor_position_in_layouts();
         window.paint_quad(fill(
             Bounds::new(
                 point(self.bounds.left(), self.bounds.top()) + cursor_pos,
@@ -747,41 +626,4 @@ fn line_intersects_range(
     } else {
         selected_range.end > text_range.start && selected_range.start < text_range.end
     }
-}
-
-struct PrecomputedLinePosition {
-    text_width: Pixels,
-    char_positions: Vec<Pixels>,
-}
-impl PrecomputedLinePosition {
-    fn new(string: &str, line: &WrappedLine, line_height: Pixels) -> Self {
-        let text_width = line.width();
-        let mut char_positions = Vec::new();
-
-        let mut idx = 0;
-        for ch in string.chars() {
-            if let Some(pos) = line.position_for_index(idx, line_height) {
-                char_positions.push(pos.x);
-            } else {
-                char_positions.push(text_width);
-            }
-            idx += ch.len_utf8();
-        }
-        char_positions.push(text_width);
-
-        Self {
-            text_width,
-            char_positions,
-        }
-    }
-}
-
-fn pos_in_string_for_char_index<'chars>(
-    content: &SharedString,
-    char_positions: &'chars Vec<Pixels>,
-    index: usize,
-    default: &Pixels,
-) -> Pixels {
-    let char_index = content[..index.min(content.len())].chars().count();
-    char_positions.get(char_index).unwrap_or(default).clone()
 }
