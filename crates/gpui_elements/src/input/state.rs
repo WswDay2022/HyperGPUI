@@ -55,6 +55,7 @@ pub struct InputState {
     pub(super) available_height: Pixels,
     pub(super) available_width: Pixels,
     pub(super) layout: InputLayout,
+    history_grouping_interval: Duration,
     /// Stack of previous states for undo.
     undo_stack: Vec<super::HistoryEntry>,
     /// Stack of undone states for redo.
@@ -74,7 +75,7 @@ pub struct InputState {
 /// When text wrapping is enabled, a logical line may span multiple visual lines.
 #[derive(Clone, Debug)]
 pub(super) struct InputLineLayout {
-    /// The byte range in the content string that this line covers.
+    /// The utf8 byte range in the content string that this line covers.
     pub text_range: Range<usize>,
     /// The shaped and wrapped text for this line, if available.
     pub wrapped_line: Option<Arc<WrappedLine>>,
@@ -122,6 +123,7 @@ impl InputState {
             available_height: px(0.),
             available_width: px(0.),
             layout: InputLayout::SingleLine,
+            history_grouping_interval: super::DEFAULT_GROUP_INTERVAL,
             undo_stack: Vec::new(),
             cached_utf16_len: None,
             redo_stack: Vec::new(),
@@ -197,6 +199,11 @@ impl InputState {
         &self.content
     }
 
+    pub fn layout(mut self, layout: InputLayout) -> Self {
+        self.layout = layout;
+        self
+    }
+
     pub fn get_layout(&self) -> InputLayout {
         self.layout
     }
@@ -216,6 +223,10 @@ impl InputState {
         self.pause_cursor_blink(cx);
         cx.emit(InputStateEvent::TextChanged);
         cx.notify();
+    }
+
+    pub fn set_history_group_interval(&mut self, interval: Duration) {
+        self.history_grouping_interval = interval;
     }
 
     /// Returns whether undo is available.
@@ -240,7 +251,7 @@ impl InputState {
 
         // Check if we should group with the last entry
         if let Some(last) = self.undo_stack.last() {
-            if now.duration_since(last.timestamp) < super::DEFAULT_GROUP_INTERVAL {
+            if now.duration_since(last.timestamp) < self.history_grouping_interval {
                 // Within group interval - extend the existing patch
                 // We need to merge this edit with the previous one
                 return;
@@ -1310,5 +1321,1694 @@ impl InputState {
         }
 
         (offset, offset)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::{
+        AppContext, Entity, IntoElement, Render, TestAppContext, TextStyle, WindowHandle, div,
+    };
+
+    struct TestView {
+        input: Entity<InputState>,
+    }
+
+    impl Render for TestView {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+        }
+    }
+
+    fn create_test_input(
+        cx: &mut TestAppContext,
+        content: &str,
+        range: std::ops::Range<usize>,
+    ) -> WindowHandle<TestView> {
+        cx.add_window(|_window, cx| {
+            let input = cx.new(|cx| {
+                let mut input = InputState::new(cx).layout(InputLayout::MultiLine);
+                input.content = content.to_string().into();
+                input.selected_range = range;
+                input
+            });
+            TestView { input }
+        })
+    }
+
+    fn create_test_input_with_layout(
+        cx: &mut TestAppContext,
+        content: &str,
+        range: std::ops::Range<usize>,
+    ) -> WindowHandle<TestView> {
+        let view = cx.add_window(|window, cx| {
+            let input = cx.new(|cx| {
+                let mut input = InputState::new(cx).layout(InputLayout::MultiLine);
+                input.content = content.to_string().into();
+                input.selected_range = range;
+                input.update_line_layouts(px(500.), px(20.), &TextStyle::default(), window);
+                input
+            });
+            TestView { input }
+        });
+        view
+    }
+
+    // ============================================================
+    // BASIC MOVEMENT
+    // ============================================================
+
+    #[gpui::test]
+    fn test_left_at_start_of_content(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello", 0..0);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.left(&Left, window, cx);
+                assert_eq!(input.selected_range, 0..0);
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_left_moves_by_grapheme(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello", 3..3);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.left(&Left, window, cx);
+                assert_eq!(input.selected_range, 2..2);
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_left_collapses_selection_to_start(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello", 1..4);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.left(&Left, window, cx);
+                assert_eq!(input.selected_range, 1..1);
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_left_stops_at_end_of_line(cx: &mut TestAppContext) {
+        // "ab\ncd" - cursor at position 3 (start of "cd", after newline)
+        // Pressing left should move to position 2 (end of "ab", before newline)
+        let view = create_test_input(cx, "ab\ncd", 3..3);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.left(&Left, window, cx);
+                assert_eq!(input.selected_range, 2..2); // cursor at end of line 1
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_right_at_end_of_content(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello", 5..5);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.right(&Right, window, cx);
+                assert_eq!(input.selected_range, 5..5);
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_right_moves_by_grapheme(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello", 2..2);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.right(&Right, window, cx);
+                assert_eq!(input.selected_range, 3..3);
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_right_collapses_selection_to_end(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello", 1..4);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.right(&Right, window, cx);
+                assert_eq!(input.selected_range, 4..4);
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_right_stops_at_end_of_line(cx: &mut TestAppContext) {
+        // "ab\ncd" - cursor at position 1 (after 'a')
+        // Pressing right should move to position 2 (end of "ab", before newline)
+        let view = create_test_input(cx, "ab\ncd", 1..1);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.right(&Right, window, cx);
+                assert_eq!(input.selected_range, 2..2); // cursor at end of line 1
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_right_crosses_newline(cx: &mut TestAppContext) {
+        // "ab\ncd" - cursor at position 2 (end of "ab", before newline)
+        // Pressing right should move to position 3 (after newline, start of "cd")
+        let view = create_test_input(cx, "ab\ncd", 2..2);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.right(&Right, window, cx);
+                assert_eq!(input.selected_range, 3..3); // cursor at start of line 2
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_left_crosses_newline(cx: &mut TestAppContext) {
+        // "ab\ncd" - cursor at position 2 (end of "ab", before newline)
+        // Pressing left should move to position 1 (after 'a')
+        let view = create_test_input(cx, "ab\ncd", 2..2);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.left(&Left, window, cx);
+                assert_eq!(input.selected_range, 1..1);
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_home_moves_to_line_start(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "first\nsecond", 9..9);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.home(&Home, window, cx);
+                assert_eq!(input.selected_range, 6..6);
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_end_moves_to_line_end(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "first\nsecond", 8..8);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.end(&End, window, cx);
+                assert_eq!(input.selected_range, 12..12);
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_move_to_beginning(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "first\nsecond\nthird", 9..9);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.move_to_beginning(&MoveToBeginning, window, cx);
+                assert_eq!(input.selected_range, 0..0);
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_move_to_end(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "first\nsecond\nthird", 0..0);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.move_to_end(&MoveToEnd, window, cx);
+                assert_eq!(input.selected_range, 18..18);
+            });
+        })
+        .unwrap();
+    }
+
+    // ============================================================
+    // WORD MOVEMENT
+    // ============================================================
+
+    #[gpui::test]
+    fn test_word_left_at_start(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello world", 0..0);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.word_left(&WordLeft, window, cx);
+                assert_eq!(input.selected_range, 0..0);
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_word_left_stops_at_boundary(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello world test", 11..11);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.word_left(&WordLeft, window, cx);
+                assert_eq!(input.selected_range, 6..6);
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_word_right_at_end(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello world", 11..11);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.word_right(&WordRight, window, cx);
+                assert_eq!(input.selected_range, 11..11);
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_word_right_stops_at_boundary(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello world test", 0..0);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.word_right(&WordRight, window, cx);
+                assert_eq!(input.selected_range, 5..5);
+            });
+        })
+        .unwrap();
+    }
+
+    // ============================================================
+    // SELECTION
+    // ============================================================
+
+    #[gpui::test]
+    fn test_select_left_extends_selection(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello", 3..3);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.select_left(&SelectLeft, window, cx);
+                assert_eq!(input.selected_range, 2..3);
+                assert!(input.selection_reversed);
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_select_right_extends_selection(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello", 2..2);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.select_right(&SelectRight, window, cx);
+                assert_eq!(input.selected_range, 2..3);
+                assert!(!input.selection_reversed);
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_select_all(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello\nworld", 3..3);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.select_all(&SelectAll, window, cx);
+                assert_eq!(input.selected_range, 0..11);
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_select_to_beginning(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello world", 6..6);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.select_to_beginning(&SelectToBeginning, window, cx);
+                assert_eq!(input.selected_range, 0..6);
+                assert!(input.selection_reversed);
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_select_to_end(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello world", 6..6);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.select_to_end(&SelectToEnd, window, cx);
+                assert_eq!(input.selected_range, 6..11);
+                assert!(!input.selection_reversed);
+            });
+        })
+        .unwrap();
+    }
+
+    // ============================================================
+    // EDITING - BACKSPACE
+    // ============================================================
+
+    #[gpui::test]
+    fn test_backspace_deletes_selection(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello world", 6..11);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.backspace(&Backspace, window, cx);
+                assert_eq!(input.content(), "hello ");
+                assert_eq!(input.selected_range, 6..6);
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_backspace_deletes_previous_grapheme(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello", 5..5);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.backspace(&Backspace, window, cx);
+                assert_eq!(input.content(), "hell");
+                assert_eq!(input.selected_range, 4..4);
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_backspace_at_start_does_nothing(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello", 0..0);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.backspace(&Backspace, window, cx);
+                assert_eq!(input.content(), "hello");
+                assert_eq!(input.selected_range, 0..0);
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_backspace_deletes_entire_emoji(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "Hi 👋", 7..7);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.backspace(&Backspace, window, cx);
+                assert_eq!(input.content(), "Hi ");
+                assert_eq!(input.selected_range, 3..3);
+            });
+        })
+        .unwrap();
+    }
+
+    // ============================================================
+    // EDITING - DELETE
+    // ============================================================
+
+    #[gpui::test]
+    fn test_delete_deletes_selection(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello world", 0..5);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.delete(&Delete, window, cx);
+                assert_eq!(input.content(), " world");
+                assert_eq!(input.selected_range, 0..0);
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_delete_deletes_next_grapheme(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello", 0..0);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.delete(&Delete, window, cx);
+                assert_eq!(input.content(), "ello");
+                assert_eq!(input.selected_range, 0..0);
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_delete_at_end_does_nothing(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello", 5..5);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.delete(&Delete, window, cx);
+                assert_eq!(input.content(), "hello");
+                assert_eq!(input.selected_range, 5..5);
+            });
+        })
+        .unwrap();
+    }
+
+    // ============================================================
+    // EDITING - ENTER
+    // ============================================================
+
+    #[gpui::test]
+    fn test_enter_inserts_newline(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello world", 5..5);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.enter(&Enter, window, cx);
+                assert_eq!(input.content(), "hello\n world");
+                assert_eq!(input.selected_range, 6..6);
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_enter_replaces_selection(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello world", 5..6);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.enter(&Enter, window, cx);
+                assert_eq!(input.content(), "hello\nworld");
+                assert_eq!(input.selected_range, 6..6);
+            });
+        })
+        .unwrap();
+    }
+
+    // ============================================================
+    // CLIPBOARD
+    // ============================================================
+
+    #[gpui::test]
+    fn test_copy_with_selection(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello world", 6..11);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.copy(&Copy, window, cx);
+            });
+        })
+        .unwrap();
+
+        let clipboard = cx.read_from_clipboard();
+        assert!(clipboard.is_some());
+        assert_eq!(clipboard.unwrap().text().as_deref(), Some("world"));
+    }
+
+    #[gpui::test]
+    fn test_cut_with_selection(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello world", 0..5);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.cut(&Cut, window, cx);
+                assert_eq!(input.content(), " world");
+                assert_eq!(input.selected_range, 0..0);
+            });
+        })
+        .unwrap();
+
+        let clipboard = cx.read_from_clipboard();
+        assert_eq!(clipboard.unwrap().text().as_deref(), Some("hello"));
+    }
+
+    #[gpui::test]
+    fn test_paste_inserts_text(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello world", 5..5);
+        cx.write_to_clipboard(ClipboardItem::new_string(" there".to_string()));
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.paste(&Paste, window, cx);
+                assert_eq!(input.content(), "hello there world");
+                assert_eq!(input.selected_range, 11..11);
+            });
+        })
+        .unwrap();
+    }
+
+    // ============================================================
+    // UNICODE / GRAPHEME HANDLING
+    // ============================================================
+
+    #[gpui::test]
+    fn test_movement_with_multibyte_utf8(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "café", 0..0);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.right(&Right, window, cx);
+                assert_eq!(input.selected_range, 1..1);
+                input.right(&Right, window, cx);
+                assert_eq!(input.selected_range, 2..2);
+                input.right(&Right, window, cx);
+                assert_eq!(input.selected_range, 3..3);
+                input.right(&Right, window, cx);
+                assert_eq!(input.selected_range, 5..5);
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_movement_with_emoji(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "a👋b", 0..0);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.right(&Right, window, cx);
+                assert_eq!(input.selected_range, 1..1);
+                input.right(&Right, window, cx);
+                assert_eq!(input.selected_range, 5..5);
+                input.right(&Right, window, cx);
+                assert_eq!(input.selected_range, 6..6);
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_selection_with_multibyte_characters(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "日本語", 0..0);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.select_right(&SelectRight, window, cx);
+                assert_eq!(input.selected_range, 0..3);
+                input.select_right(&SelectRight, window, cx);
+                assert_eq!(input.selected_range, 0..6);
+                input.select_right(&SelectRight, window, cx);
+                assert_eq!(input.selected_range, 0..9);
+            });
+        })
+        .unwrap();
+    }
+
+    // ============================================================
+    // NEWLINE HANDLING
+    // ============================================================
+
+    #[gpui::test]
+    fn test_find_line_start_and_end(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "first\nsecond\nthird", 0..0);
+        view.update(cx, |view, _window, cx| {
+            view.input.update(cx, |input, _cx| {
+                assert_eq!(input.find_line_start(0), 0);
+                assert_eq!(input.find_line_start(3), 0);
+                assert_eq!(input.find_line_start(6), 6);
+                assert_eq!(input.find_line_start(13), 13);
+
+                assert_eq!(input.find_line_end(0), 5);
+                assert_eq!(input.find_line_end(6), 12);
+                assert_eq!(input.find_line_end(13), 18);
+            });
+        })
+        .unwrap();
+    }
+
+    // ============================================================
+    // EDGE CASES
+    // ============================================================
+
+    #[gpui::test]
+    fn test_operations_on_empty_content(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "", 0..0);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.left(&Left, window, cx);
+                assert_eq!(input.selected_range, 0..0);
+
+                input.right(&Right, window, cx);
+                assert_eq!(input.selected_range, 0..0);
+
+                input.backspace(&Backspace, window, cx);
+                assert_eq!(input.content(), "");
+
+                input.delete(&Delete, window, cx);
+                assert_eq!(input.content(), "");
+
+                input.select_all(&SelectAll, window, cx);
+                assert_eq!(input.selected_range, 0..0);
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_set_content_resets_selection(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello world", 3..8);
+        view.update(cx, |view, _window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.selection_reversed = true;
+                input.marked_range = Some(5..7);
+                input.set_content("new content", cx);
+                assert_eq!(input.content(), "new content");
+                assert_eq!(input.selected_range, 0..0);
+                assert!(!input.selection_reversed);
+                assert_eq!(input.marked_range, None);
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_cursor_clamped_to_content_length(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello", 100..100);
+        view.update(cx, |view, _window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.move_to(1000, cx);
+                assert_eq!(input.selected_range, 5..5);
+
+                input.selected_range = 0..0;
+                input.select_to(1000, cx);
+                assert_eq!(input.selected_range, 0..5);
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_previous_boundary_at_start(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello", 0..0);
+        view.update(cx, |view, _window, cx| {
+            view.input.update(cx, |input, _cx| {
+                assert_eq!(input.previous_boundary(0), 0);
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_next_boundary_at_end(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello", 0..0);
+        view.update(cx, |view, _window, cx| {
+            view.input.update(cx, |input, _cx| {
+                assert_eq!(input.next_boundary(5), 5);
+                assert_eq!(input.next_boundary(100), 5);
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_word_range_at_boundary(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello world", 0..0);
+        view.update(cx, |view, _window, cx| {
+            view.input.update(cx, |input, _cx| {
+                let (start, end) = input.word_range_at(5);
+                assert_eq!(start, 0);
+                assert_eq!(end, 5);
+
+                let (start, end) = input.word_range_at(8);
+                assert_eq!(start, 6);
+                assert_eq!(end, 11);
+            });
+        })
+        .unwrap();
+    }
+
+    // ============================================================
+    // EMOJI & GRAPHEME CLUSTERS
+    // ============================================================
+
+    #[gpui::test]
+    fn test_simple_emoji_navigation(cx: &mut TestAppContext) {
+        // 😀 is 4 bytes in UTF-8
+        let view = create_test_input(cx, "a😀b", 0..0);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                // Move right through: a -> 😀 -> b
+                input.right(&Right, window, cx);
+                assert_eq!(input.selected_range.start, 1); // after 'a'
+
+                input.right(&Right, window, cx);
+                assert_eq!(input.selected_range.start, 5); // after 😀 (1 + 4 bytes)
+
+                input.right(&Right, window, cx);
+                assert_eq!(input.selected_range.start, 6); // after 'b'
+
+                // Move left back
+                input.left(&Left, window, cx);
+                assert_eq!(input.selected_range.start, 5); // before 'b'
+
+                input.left(&Left, window, cx);
+                assert_eq!(input.selected_range.start, 1); // before 😀
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_emoji_with_skin_tone_modifier(cx: &mut TestAppContext) {
+        // 👋🏽 = 👋 (U+1F44B, 4 bytes) + 🏽 (U+1F3FD, 4 bytes) = 8 bytes total
+        let emoji = "👋🏽";
+        assert_eq!(emoji.len(), 8);
+
+        let view = create_test_input(cx, &format!("a{}b", emoji), 0..0);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.right(&Right, window, cx); // past 'a'
+                assert_eq!(input.selected_range.start, 1);
+
+                input.right(&Right, window, cx); // past entire emoji with modifier
+                assert_eq!(input.selected_range.start, 9); // 1 + 8
+
+                input.left(&Left, window, cx); // back before emoji
+                assert_eq!(input.selected_range.start, 1);
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_zwj_family_emoji(cx: &mut TestAppContext) {
+        // 👨‍👩‍👧 = man + ZWJ + woman + ZWJ + girl
+        // Each person emoji is 4 bytes, ZWJ is 3 bytes
+        // Total: 4 + 3 + 4 + 3 + 4 = 18 bytes
+        let family = "👨‍👩‍👧";
+        assert_eq!(family.len(), 18);
+
+        let view = create_test_input(cx, &format!("x{}y", family), 0..0);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.right(&Right, window, cx); // past 'x'
+                assert_eq!(input.selected_range.start, 1);
+
+                input.right(&Right, window, cx); // past entire ZWJ sequence
+                assert_eq!(input.selected_range.start, 19); // 1 + 18
+
+                input.right(&Right, window, cx); // past 'y'
+                assert_eq!(input.selected_range.start, 20);
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_backspace_deletes_emoji_between_ascii(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "a😀b", 5..5); // cursor after emoji
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.backspace(&Backspace, window, cx);
+                assert_eq!(input.content(), "ab");
+                assert_eq!(input.selected_range.start, 1);
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_backspace_deletes_zwj_sequence(cx: &mut TestAppContext) {
+        let family = "👨‍👩‍👧";
+        let content = format!("a{}b", family);
+        let cursor_pos = 1 + family.len(); // after the family emoji
+
+        let view = create_test_input(cx, &content, cursor_pos..cursor_pos);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.backspace(&Backspace, window, cx);
+                assert_eq!(input.content(), "ab");
+                assert_eq!(input.selected_range.start, 1);
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_delete_removes_entire_emoji(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "a😀b", 1..1); // cursor before emoji
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.delete(&Delete, window, cx);
+                assert_eq!(input.content(), "ab");
+                assert_eq!(input.selected_range.start, 1);
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_flag_emoji_navigation(cx: &mut TestAppContext) {
+        // 🇯🇵 = Regional Indicator J (4 bytes) + Regional Indicator P (4 bytes)
+        let flag = "🇯🇵";
+        assert_eq!(flag.len(), 8);
+
+        let view = create_test_input(cx, &format!("x{}y", flag), 0..0);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.right(&Right, window, cx); // past 'x'
+                input.right(&Right, window, cx); // past flag (should be single grapheme)
+                assert_eq!(input.selected_range.start, 9); // 1 + 8
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_combining_diacritical_marks(cx: &mut TestAppContext) {
+        // é as e + combining acute accent (U+0301)
+        let combining = "e\u{0301}"; // 1 + 2 = 3 bytes
+        assert_eq!(combining.len(), 3);
+
+        let view = create_test_input(cx, &format!("a{}b", combining), 0..0);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.right(&Right, window, cx); // past 'a'
+                assert_eq!(input.selected_range.start, 1);
+
+                input.right(&Right, window, cx); // past e + combining mark (single grapheme)
+                assert_eq!(input.selected_range.start, 4); // 1 + 3
+
+                input.left(&Left, window, cx);
+                assert_eq!(input.selected_range.start, 1);
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_multiple_combining_marks(cx: &mut TestAppContext) {
+        // ë́ = e + combining diaeresis (U+0308) + combining acute (U+0301)
+        let multi_combining = "e\u{0308}\u{0301}"; // 1 + 2 + 2 = 5 bytes
+        assert_eq!(multi_combining.len(), 5);
+
+        let view = create_test_input(cx, &format!("x{}y", multi_combining), 0..0);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.right(&Right, window, cx); // past 'x'
+                input.right(&Right, window, cx); // past entire combined character
+                assert_eq!(input.selected_range.start, 6); // 1 + 5
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_select_emoji_with_shift(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "a😀b", 1..1); // cursor before emoji
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.select_right(&SelectRight, window, cx);
+                assert_eq!(input.selected_range, 1..5); // selected the entire emoji
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_cjk_characters(cx: &mut TestAppContext) {
+        // 你好 - each character is 3 bytes in UTF-8
+        let view = create_test_input(cx, "a你好b", 0..0);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.right(&Right, window, cx); // past 'a'
+                assert_eq!(input.selected_range.start, 1);
+
+                input.right(&Right, window, cx); // past 你
+                assert_eq!(input.selected_range.start, 4); // 1 + 3
+
+                input.right(&Right, window, cx); // past 好
+                assert_eq!(input.selected_range.start, 7); // 4 + 3
+
+                input.right(&Right, window, cx); // past 'b'
+                assert_eq!(input.selected_range.start, 8);
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_mixed_script_text(cx: &mut TestAppContext) {
+        // Mix of ASCII, CJK, and emoji
+        let view = create_test_input(cx, "Hi你😀", 0..0);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.right(&Right, window, cx); // past 'H'
+                assert_eq!(input.selected_range.start, 1);
+
+                input.right(&Right, window, cx); // past 'i'
+                assert_eq!(input.selected_range.start, 2);
+
+                input.right(&Right, window, cx); // past 你 (3 bytes)
+                assert_eq!(input.selected_range.start, 5);
+
+                input.right(&Right, window, cx); // past 😀 (4 bytes)
+                assert_eq!(input.selected_range.start, 9);
+
+                // Now go back
+                input.left(&Left, window, cx);
+                assert_eq!(input.selected_range.start, 5);
+
+                input.left(&Left, window, cx);
+                assert_eq!(input.selected_range.start, 2);
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_variation_selector_emoji(cx: &mut TestAppContext) {
+        // ☺️ = ☺ (U+263A, 3 bytes) + variation selector-16 (U+FE0F, 3 bytes)
+        let emoji_presentation = "☺\u{FE0F}";
+        assert_eq!(emoji_presentation.len(), 6);
+
+        let view = create_test_input(cx, &format!("a{}b", emoji_presentation), 0..0);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.right(&Right, window, cx); // past 'a'
+                input.right(&Right, window, cx); // past emoji with variation selector
+                assert_eq!(input.selected_range.start, 7); // 1 + 6
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_keycap_emoji(cx: &mut TestAppContext) {
+        // 1️⃣ = 1 + variation selector + combining enclosing keycap
+        let keycap = "1\u{FE0F}\u{20E3}";
+
+        let view = create_test_input(cx, &format!("x{}y", keycap), 0..0);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.right(&Right, window, cx); // past 'x'
+                input.right(&Right, window, cx); // past keycap sequence
+                let expected_pos = 1 + keycap.len();
+                assert_eq!(input.selected_range.start, expected_pos);
+            });
+        })
+        .unwrap();
+    }
+
+    // Single-line input tests
+
+    fn create_single_line_input(
+        cx: &mut TestAppContext,
+        content: &str,
+        selected_range: Range<usize>,
+    ) -> WindowHandle<TestView> {
+        cx.add_window(|_window, cx| {
+            let input = cx.new(|cx| {
+                let mut input = InputState::new(cx).layout(InputLayout::SingleLine);
+                input.content = content.to_string().into();
+                input.selected_range = selected_range;
+                input
+            });
+            TestView { input }
+        })
+    }
+
+    #[gpui::test]
+    fn test_single_line_enter_does_nothing(cx: &mut TestAppContext) {
+        let view = create_single_line_input(cx, "hello", 5..5);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.enter(&Enter, window, cx);
+                assert_eq!(input.content(), "hello");
+                assert_eq!(input.selected_range, 5..5);
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_single_line_set_content_strips_newlines(cx: &mut TestAppContext) {
+        let view = create_single_line_input(cx, "", 0..0);
+        view.update(cx, |view, _window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.set_content("hello\nworld\r\nfoo", cx);
+                assert_eq!(input.content(), "hello world foo");
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_single_line_up_moves_to_start(cx: &mut TestAppContext) {
+        let view = create_single_line_input(cx, "hello world", 5..5);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.up(&Up, window, cx);
+                assert_eq!(input.selected_range, 0..0);
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_single_line_down_moves_to_end(cx: &mut TestAppContext) {
+        let view = create_single_line_input(cx, "hello world", 5..5);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.down(&Down, window, cx);
+                assert_eq!(input.selected_range, 11..11); // "hello world".len() == 11
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_single_line_select_up_selects_to_start(cx: &mut TestAppContext) {
+        let view = create_single_line_input(cx, "hello world", 5..5);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.select_up(&SelectUp, window, cx);
+                assert_eq!(input.selected_range, 0..5);
+                assert!(input.selection_reversed);
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_single_line_select_down_selects_to_end(cx: &mut TestAppContext) {
+        let view = create_single_line_input(cx, "hello world", 5..5);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.select_down(&SelectDown, window, cx);
+                assert_eq!(input.selected_range, 5..11); // "hello world".len() == 11
+                assert!(!input.selection_reversed);
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_single_line_multiline_getter(cx: &mut TestAppContext) {
+        let view = create_single_line_input(cx, "hello", 0..0);
+        view.update(cx, |view, _window, cx| {
+            view.input.update(cx, |input, _cx| {
+                assert_eq!(input.get_layout(), InputLayout::SingleLine);
+            });
+        })
+        .unwrap();
+
+        let multiline_view = create_test_input(cx, "hello", 0..0);
+        multiline_view
+            .update(cx, |view, _window, cx| {
+                view.input.update(cx, |input, _cx| {
+                    assert_eq!(input.get_layout(), InputLayout::MultiLine);
+                });
+            })
+            .unwrap();
+    }
+
+    // ============================================================
+    // UNDO / REDO
+    // ============================================================
+
+    #[gpui::test]
+    fn test_undo_restores_content(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello", 5..5);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                // Disable grouping for predictable test behavior
+                input.set_history_group_interval(Duration::from_secs(0));
+
+                // Make an edit
+                input.replace_text_in_range(None, " world", window, cx);
+                assert_eq!(input.content(), "hello world");
+
+                // Undo should restore original content
+                input.undo(&Undo, window, cx);
+                assert_eq!(input.content(), "hello");
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_redo_restores_undone_content(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello", 5..5);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.set_history_group_interval(Duration::from_secs(0));
+
+                input.replace_text_in_range(None, " world", window, cx);
+                assert_eq!(input.content(), "hello world");
+
+                input.undo(&Undo, window, cx);
+                assert_eq!(input.content(), "hello");
+
+                input.redo(&Redo, window, cx);
+                assert_eq!(input.content(), "hello world");
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_undo_with_no_history_does_nothing(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello", 0..0);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                assert!(!input.can_undo());
+                input.undo(&Undo, window, cx);
+                assert_eq!(input.content(), "hello");
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_redo_with_no_history_does_nothing(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello", 0..0);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                assert!(!input.can_redo());
+                input.redo(&Redo, window, cx);
+                assert_eq!(input.content(), "hello");
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_undo_restores_selection(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello world", 0..5);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.set_history_group_interval(Duration::from_secs(0));
+
+                // Delete selection
+                input.replace_text_in_range(None, "", window, cx);
+                assert_eq!(input.content(), " world");
+                assert_eq!(input.selected_range, 0..0);
+
+                // Undo should restore content and selection
+                input.undo(&Undo, window, cx);
+                assert_eq!(input.content(), "hello world");
+                assert_eq!(input.selected_range, 0..5);
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_multiple_undo_redo(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "", 0..0);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.set_history_group_interval(Duration::from_secs(0));
+
+                input.replace_text_in_range(None, "a", window, cx);
+                input.replace_text_in_range(None, "b", window, cx);
+                input.replace_text_in_range(None, "c", window, cx);
+                assert_eq!(input.content(), "abc");
+
+                input.undo(&Undo, window, cx);
+                assert_eq!(input.content(), "ab");
+
+                input.undo(&Undo, window, cx);
+                assert_eq!(input.content(), "a");
+
+                input.undo(&Undo, window, cx);
+                assert_eq!(input.content(), "");
+
+                input.redo(&Redo, window, cx);
+                assert_eq!(input.content(), "a");
+
+                input.redo(&Redo, window, cx);
+                assert_eq!(input.content(), "ab");
+
+                input.redo(&Redo, window, cx);
+                assert_eq!(input.content(), "abc");
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_new_edit_clears_redo_stack(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello", 5..5);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.set_history_group_interval(Duration::from_secs(0));
+
+                input.replace_text_in_range(None, " world", window, cx);
+                assert_eq!(input.content(), "hello world");
+
+                input.undo(&Undo, window, cx);
+                assert_eq!(input.content(), "hello");
+                assert!(input.can_redo());
+
+                // New edit should clear redo stack
+                input.replace_text_in_range(None, "!", window, cx);
+                assert_eq!(input.content(), "hello!");
+                assert!(!input.can_redo());
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_set_content_clears_history(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello", 5..5);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.set_history_group_interval(Duration::from_secs(0));
+
+                input.replace_text_in_range(None, " world", window, cx);
+                assert!(input.can_undo());
+
+                input.set_content("new content", cx);
+                assert!(!input.can_undo());
+                assert!(!input.can_redo());
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_can_undo_can_redo(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello", 5..5);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.set_history_group_interval(Duration::from_secs(0));
+
+                assert!(!input.can_undo());
+                assert!(!input.can_redo());
+
+                input.replace_text_in_range(None, "!", window, cx);
+                assert!(input.can_undo());
+                assert!(!input.can_redo());
+
+                input.undo(&Undo, window, cx);
+                assert!(!input.can_undo());
+                assert!(input.can_redo());
+
+                input.redo(&Redo, window, cx);
+                assert!(input.can_undo());
+                assert!(!input.can_redo());
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_backspace_is_undoable(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello", 5..5);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.set_history_group_interval(Duration::from_secs(0));
+
+                input.backspace(&Backspace, window, cx);
+                assert_eq!(input.content(), "hell");
+
+                input.undo(&Undo, window, cx);
+                assert_eq!(input.content(), "hello");
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_delete_is_undoable(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello", 0..0);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.set_history_group_interval(Duration::from_secs(0));
+
+                input.delete(&Delete, window, cx);
+                assert_eq!(input.content(), "ello");
+
+                input.undo(&Undo, window, cx);
+                assert_eq!(input.content(), "hello");
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_cut_is_undoable(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello world", 0..5);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.set_history_group_interval(Duration::from_secs(0));
+
+                input.cut(&Cut, window, cx);
+                assert_eq!(input.content(), " world");
+
+                input.undo(&Undo, window, cx);
+                assert_eq!(input.content(), "hello world");
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_cut_line_with_no_selection(cx: &mut TestAppContext) {
+        // Cursor in middle line, no selection - should cut entire line including newline
+        let view = create_test_input(cx, "line1\nline2\nline3", 8..8); // cursor in "line2"
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.cut(&Cut, window, cx);
+                assert_eq!(input.content(), "line1\nline3");
+            });
+        })
+        .unwrap();
+
+        let clipboard = cx.read_from_clipboard();
+        assert_eq!(clipboard.unwrap().text().as_deref(), Some("line2\n"));
+    }
+
+    #[gpui::test]
+    fn test_cut_first_line_with_no_selection(cx: &mut TestAppContext) {
+        // Cursor on first line, no selection
+        let view = create_test_input(cx, "line1\nline2\nline3", 2..2); // cursor in "line1"
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.cut(&Cut, window, cx);
+                assert_eq!(input.content(), "line2\nline3");
+            });
+        })
+        .unwrap();
+
+        let clipboard = cx.read_from_clipboard();
+        assert_eq!(clipboard.unwrap().text().as_deref(), Some("line1\n"));
+    }
+
+    #[gpui::test]
+    fn test_cut_last_line_with_no_selection(cx: &mut TestAppContext) {
+        // Cursor on last line, no selection - should include preceding newline
+        let view = create_test_input(cx, "line1\nline2\nline3", 14..14); // cursor in "line3"
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.cut(&Cut, window, cx);
+                assert_eq!(input.content(), "line1\nline2");
+            });
+        })
+        .unwrap();
+
+        let clipboard = cx.read_from_clipboard();
+        assert_eq!(clipboard.unwrap().text().as_deref(), Some("\nline3"));
+    }
+
+    #[gpui::test]
+    fn test_cut_empty_line(cx: &mut TestAppContext) {
+        // Cursor on empty line - should remove that line
+        let view = create_test_input(cx, "line1\n\nline3", 6..6); // cursor on empty line
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.cut(&Cut, window, cx);
+                assert_eq!(input.content(), "line1\nline3");
+            });
+        })
+        .unwrap();
+
+        let clipboard = cx.read_from_clipboard();
+        assert_eq!(clipboard.unwrap().text().as_deref(), Some("\n"));
+    }
+
+    #[gpui::test]
+    fn test_cut_only_line_with_no_selection(cx: &mut TestAppContext) {
+        // Single line content, no selection - should cut entire content
+        let view = create_test_input(cx, "hello", 2..2);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.cut(&Cut, window, cx);
+                assert_eq!(input.content(), "");
+            });
+        })
+        .unwrap();
+
+        let clipboard = cx.read_from_clipboard();
+        assert_eq!(clipboard.unwrap().text().as_deref(), Some("hello"));
+    }
+
+    #[gpui::test]
+    fn test_cut_line_is_undoable(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "line1\nline2\nline3", 8..8);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.set_history_group_interval(Duration::from_secs(0));
+
+                input.cut(&Cut, window, cx);
+                assert_eq!(input.content(), "line1\nline3");
+
+                input.undo(&Undo, window, cx);
+                assert_eq!(input.content(), "line1\nline2\nline3");
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_paste_is_undoable(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello", 5..5);
+        cx.write_to_clipboard(ClipboardItem::new_string(" world".to_string()));
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.set_history_group_interval(Duration::from_secs(0));
+
+                input.paste(&Paste, window, cx);
+                assert_eq!(input.content(), "hello world");
+
+                input.undo(&Undo, window, cx);
+                assert_eq!(input.content(), "hello");
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_enter_is_undoable(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello world", 5..5);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.set_history_group_interval(Duration::from_secs(0));
+
+                input.enter(&Enter, window, cx);
+                assert_eq!(input.content(), "hello\n world");
+
+                input.undo(&Undo, window, cx);
+                assert_eq!(input.content(), "hello world");
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_delete_word_left(cx: &mut TestAppContext) {
+        // Cursor at end of "hello" in "hello world"
+        let view = create_test_input(cx, "hello world", 5..5);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.delete_word_left(&DeleteWordLeft, window, cx);
+                assert_eq!(input.content(), " world");
+                assert_eq!(input.selected_range, 0..0);
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_delete_word_left_with_selection(cx: &mut TestAppContext) {
+        // Selection from 0 to 5 ("hello")
+        let view = create_test_input(cx, "hello world", 0..5);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.delete_word_left(&DeleteWordLeft, window, cx);
+                assert_eq!(input.content(), " world");
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_delete_word_left_at_start(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello world", 0..0);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.delete_word_left(&DeleteWordLeft, window, cx);
+                assert_eq!(input.content(), "hello world");
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_delete_word_right(cx: &mut TestAppContext) {
+        // Cursor at start
+        let view = create_test_input(cx, "hello world", 0..0);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.delete_word_right(&DeleteWordRight, window, cx);
+                assert_eq!(input.content(), " world");
+                assert_eq!(input.selected_range, 0..0);
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_delete_word_right_with_selection(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello world", 0..5);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.delete_word_right(&DeleteWordRight, window, cx);
+                assert_eq!(input.content(), " world");
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_delete_word_right_at_end(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello world", 11..11);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.delete_word_right(&DeleteWordRight, window, cx);
+                assert_eq!(input.content(), "hello world");
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_delete_to_beginning_of_line(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello world", 5..5);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.delete_to_beginning_of_line(&DeleteToBeginningOfLine, window, cx);
+                assert_eq!(input.content(), " world");
+                assert_eq!(input.selected_range, 0..0);
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_delete_to_beginning_of_line_multiline(cx: &mut TestAppContext) {
+        // Cursor at position 8 (middle of "line2")
+        let view = create_test_input(cx, "line1\nline2\nline3", 8..8);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.delete_to_beginning_of_line(&DeleteToBeginningOfLine, window, cx);
+                assert_eq!(input.content(), "line1\nne2\nline3");
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_delete_to_beginning_of_line_at_start(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello world", 0..0);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.delete_to_beginning_of_line(&DeleteToBeginningOfLine, window, cx);
+                assert_eq!(input.content(), "hello world");
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_delete_to_end_of_line(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello world", 5..5);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.delete_to_end_of_line(&DeleteToEndOfLine, window, cx);
+                assert_eq!(input.content(), "hello");
+                assert_eq!(input.selected_range, 5..5);
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_delete_to_end_of_line_multiline(cx: &mut TestAppContext) {
+        // Cursor at position 8 (middle of "line2")
+        let view = create_test_input(cx, "line1\nline2\nline3", 8..8);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.delete_to_end_of_line(&DeleteToEndOfLine, window, cx);
+                assert_eq!(input.content(), "line1\nli\nline3");
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_delete_to_end_of_line_at_end(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello world", 11..11);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.delete_to_end_of_line(&DeleteToEndOfLine, window, cx);
+                assert_eq!(input.content(), "hello world");
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_delete_word_left_is_undoable(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello world", 5..5);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.set_history_group_interval(Duration::from_secs(0));
+
+                input.delete_word_left(&DeleteWordLeft, window, cx);
+                assert_eq!(input.content(), " world");
+
+                input.undo(&Undo, window, cx);
+                assert_eq!(input.content(), "hello world");
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_delete_word_right_is_undoable(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello world", 6..6);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.set_history_group_interval(Duration::from_secs(0));
+
+                input.delete_word_right(&DeleteWordRight, window, cx);
+                assert_eq!(input.content(), "hello ");
+
+                input.undo(&Undo, window, cx);
+                assert_eq!(input.content(), "hello world");
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_delete_to_beginning_of_line_is_undoable(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello world", 5..5);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.set_history_group_interval(Duration::from_secs(0));
+
+                input.delete_to_beginning_of_line(&DeleteToBeginningOfLine, window, cx);
+                assert_eq!(input.content(), " world");
+
+                input.undo(&Undo, window, cx);
+                assert_eq!(input.content(), "hello world");
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_delete_to_end_of_line_is_undoable(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "hello world", 5..5);
+        view.update(cx, |view, window, cx| {
+            view.input.update(cx, |input, cx| {
+                input.set_history_group_interval(Duration::from_secs(0));
+
+                input.delete_to_end_of_line(&DeleteToEndOfLine, window, cx);
+                assert_eq!(input.content(), "hello");
+
+                input.undo(&Undo, window, cx);
+                assert_eq!(input.content(), "hello world");
+            });
+        })
+        .unwrap();
     }
 }
