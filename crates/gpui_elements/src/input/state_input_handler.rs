@@ -1,4 +1,3 @@
-use super::unicode::UnicodeString;
 use crate::input::InputStateEvent;
 use gpui::{
     Bounds, Context, EntityInputHandler, NavigationDirection, Pixels, Point, UTF16Selection,
@@ -14,11 +13,11 @@ impl EntityInputHandler for super::InputState {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<String> {
-        let range = self.utf_range_16to8(&range_utf16);
+        let range = self.content().utf_range_16to8(&range_utf16);
         let clamped_range =
             range.start.min(self.content().len())..range.end.min(self.content().len());
-        adjusted_range.replace(self.utf_range_8to16(&clamped_range));
-        Some(self.content()[clamped_range].to_string())
+        adjusted_range.replace(self.content().utf_range_8to16(&clamped_range));
+        Some(self.content().as_str()[clamped_range].to_string())
     }
 
     fn selected_text_range(
@@ -28,7 +27,7 @@ impl EntityInputHandler for super::InputState {
         _cx: &mut Context<Self>,
     ) -> Option<UTF16Selection> {
         Some(UTF16Selection {
-            range: self.utf_range_8to16(self.selected_range()),
+            range: self.content().utf_range_8to16(self.selected_range()),
             reversed: self.selection_direction() == NavigationDirection::Back,
         })
     }
@@ -40,7 +39,7 @@ impl EntityInputHandler for super::InputState {
     ) -> Option<Range<usize>> {
         self.marked_range()
             .as_ref()
-            .map(|range| self.utf_range_8to16(range))
+            .map(|range| self.content().utf_range_8to16(range))
     }
 
     fn unmark_text(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
@@ -56,7 +55,7 @@ impl EntityInputHandler for super::InputState {
     ) {
         let range = range_utf16
             .as_ref()
-            .map(|range_utf16| self.utf_range_16to8(range_utf16))
+            .map(|range_utf16| self.content().utf_range_16to8(range_utf16))
             .or(self.marked_range().cloned())
             .unwrap_or(self.selected_range().clone());
         let range = range.start.min(self.content().len())..range.end.min(self.content().len());
@@ -89,7 +88,7 @@ impl EntityInputHandler for super::InputState {
     ) {
         let range = range_utf16
             .as_ref()
-            .map(|range_utf16| self.utf_range_16to8(range_utf16))
+            .map(|range_utf16| self.content().utf_range_16to8(range_utf16))
             .or(self.marked_range().cloned())
             .unwrap_or(self.selected_range().clone());
         let range = range.start.min(self.content().len())..range.end.min(self.content().len());
@@ -104,7 +103,8 @@ impl EntityInputHandler for super::InputState {
         });
         self.set_selected_range({
             let new_range = new_selected_range_utf16.as_ref();
-            let new_range = new_range.map(|range_utf16| self.utf_range_16to8(range_utf16));
+            let new_range =
+                new_range.map(|range_utf16| self.content().utf_range_16to8(range_utf16));
             let new_range = new_range
                 .map(|new_range| new_range.start + range.start..new_range.end + range.start);
             new_range.unwrap_or_else(|| {
@@ -124,7 +124,7 @@ impl EntityInputHandler for super::InputState {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
-        let range = self.utf_range_16to8(&range_utf16);
+        let range = self.content().utf_range_16to8(&range_utf16);
 
         for line in self.lines() {
             if line.text_range.is_empty() {
@@ -192,6 +192,6 @@ impl EntityInputHandler for super::InputState {
         _cx: &mut Context<Self>,
     ) -> Option<usize> {
         let index = self.index_for_pixel_point(point);
-        Some(self.utf_offset_8to16(index))
+        Some(self.content().utf_offset_8to16(index))
     }
 }

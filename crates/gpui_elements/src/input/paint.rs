@@ -203,7 +203,7 @@ impl InputStateSnapshot {
         Self {
             layout_axis,
             should_center_placeholder,
-            show_placeholder: input_state.content().is_empty(),
+            show_placeholder: input_state.content().as_str().is_empty(),
             selected_range,
             marked_range,
             cursor_position,

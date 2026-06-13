@@ -7,6 +7,7 @@ mod layout;
 mod paint;
 mod state;
 mod state_input_handler;
+mod storage;
 pub(self) mod unicode;
 
 pub use colors::*;
@@ -15,3 +16,4 @@ pub use element::*;
 pub(self) use history::*;
 pub use layout::*;
 pub use state::*;
+pub use storage::*;

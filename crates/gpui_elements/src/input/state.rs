@@ -1,5 +1,5 @@
 use super::actions::*;
-use crate::input::{CursorBlinkType, InputLayoutStyle};
+use crate::input::{CursorBlinkType, InputLayoutStyle, InputStorage};
 use gpui::{
     App, AppContext, ClipboardItem, Context, Entity, EntityId, EntityInputHandler, EventEmitter,
     FocusHandle, Focusable, NavigationDirection, Pixels, Point, SharedString, Size, Subscription,
@@ -39,9 +39,7 @@ pub struct InputState {
     entity_id: EntityId,
     focus_handle: FocusHandle,
     /// The true internal text
-    content: String,
-    /// Cached UTF-16 length of content for faster IME operations. Lazily computed when queried.
-    cached_utf16_len: Option<usize>,
+    content: Box<dyn InputStorage>,
 
     /// The style of layout (single or multiline).
     layout_style: InputLayoutStyle,
@@ -123,23 +121,6 @@ impl Focusable for InputState {
     }
 }
 
-impl super::unicode::UnicodeString for InputState {
-    fn len_utf16_cached(&self) -> Option<usize> {
-        self.cached_utf16_len
-    }
-
-    fn content_utf8(&self) -> &str {
-        &self.content
-    }
-
-    fn len_utf16(&self) -> usize {
-        if let Some(len) = self.cached_utf16_len {
-            return len;
-        }
-        self.content.chars().map(|c| c.len_utf16()).sum()
-    }
-}
-
 // External API
 impl InputState {
     /// Creates a new `Input` with the specified multiline setting.
@@ -148,8 +129,7 @@ impl InputState {
         let mut this = Self {
             entity_id: cx.entity_id(),
             focus_handle: cx.focus_handle(),
-            content: String::default(),
-            cached_utf16_len: None,
+            content: Box::new(super::Standard::default()),
 
             layout_style: InputLayoutStyle::SingleLine,
             selected_range: 0..0,
@@ -195,16 +175,15 @@ impl InputState {
     }
 
     /// Returns the current text content.
-    pub fn content(&self) -> &String {
-        &self.content
+    pub fn content(&self) -> &dyn InputStorage {
+        self.content.as_ref()
     }
 
     /// Sets the text content, resetting selection to the beginning.
     /// This clears the undo/redo history.
     pub fn set_content(&mut self, content: impl AsRef<str>, cx: &mut Context<Self>) {
         let content = self.layout_style.sanitize_content(content.as_ref());
-        self.content = content.to_string().into();
-        self.cached_utf16_len = None;
+        self.content.emplace(content.as_ref());
         self.selected_range = 0..0;
         self.selection_direction = NavigationDirection::Forward;
         self.marked_range = None;
@@ -342,14 +321,8 @@ impl InputState {
         self.push_undo_patch(range.clone(), text_to_insert.len());
 
         // Update cached UTF-16 length incrementally if available
-        if let Some(cached_len) = self.cached_utf16_len {
-            let removed_utf16_len: usize = self.content[range.clone()]
-                .chars()
-                .map(|c| c.len_utf16())
-                .sum();
-            let added_utf16_len: usize = text_to_insert.chars().map(|c| c.len_utf16()).sum();
-            self.cached_utf16_len = Some(cached_len - removed_utf16_len + added_utf16_len);
-        }
+        self.content
+            .update_utf8(range.clone(), text_to_insert.as_ref());
 
         self.replace_text_at_range(range.clone(), &text_to_insert);
 
@@ -380,7 +353,7 @@ impl InputState {
             let redo_entry = entry.apply_undo(&mut self.content);
             self.history_redo_stack.push(redo_entry);
 
-            self.cached_utf16_len = None;
+            self.content.clear_utf16_cache();
             self.selected_range = selected_range;
             self.selection_direction = selection_direction;
             self.mark_layout_dirty();
@@ -402,7 +375,7 @@ impl InputState {
 
             self.history_undo_stack.push(undo_entry);
 
-            self.cached_utf16_len = None;
+            self.content.clear_utf16_cache();
             self.mark_layout_dirty();
 
             self.scroll_to_cursor();
@@ -427,7 +400,7 @@ impl InputState {
             // Restore selection state
             self.selected_range = selected_range;
             self.selection_direction = selection_direction;
-            self.cached_utf16_len = None;
+            self.content.clear_utf16_cache();
             self.mark_layout_dirty();
 
             self.scroll_to_cursor();
@@ -448,7 +421,7 @@ impl InputState {
             self.selection_direction = NavigationDirection::Forward;
 
             self.history_undo_stack.push(undo_entry);
-            self.cached_utf16_len = None;
+            self.content.clear_utf16_cache();
             self.mark_layout_dirty();
 
             self.scroll_to_cursor();
@@ -726,18 +699,16 @@ impl InputState {
 
     pub(super) fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
         if !self.selected_range.is_empty() {
-            cx.write_to_clipboard(ClipboardItem::new_string(
-                self.content[self.selected_range.clone()].to_string(),
-            ));
+            let slice = &self.content.as_str()[self.selected_range.clone()];
+            cx.write_to_clipboard(ClipboardItem::new_string(slice.to_string()));
         }
     }
 
     pub(super) fn cut(&mut self, _: &Cut, window: &mut Window, cx: &mut Context<Self>) {
         if !self.selected_range.is_empty() {
             // Cut selected text
-            cx.write_to_clipboard(ClipboardItem::new_string(
-                self.content[self.selected_range.clone()].to_string(),
-            ));
+            let slice = &self.content.as_str()[self.selected_range.clone()];
+            cx.write_to_clipboard(ClipboardItem::new_string(slice.to_string()));
             self.replace_text_in_range(None, "", window, cx);
         } else {
             // No selection: cut the entire current line (including newline)
@@ -762,10 +733,11 @@ impl InputState {
                 line_start
             };
 
-            let line_text = self.content[cut_start..cut_end].to_string();
-            cx.write_to_clipboard(ClipboardItem::new_string(line_text));
-
             self.selected_range = cut_start..cut_end;
+
+            let slice = &self.content.as_str()[self.selected_range.clone()];
+            cx.write_to_clipboard(ClipboardItem::new_string(slice.to_string()));
+
             self.replace_text_in_range(None, "", window, cx);
         }
     }
@@ -859,12 +831,7 @@ impl InputState {
 
     // Update cached UTF-16 length incrementally if available
     pub(super) fn update_utf16_len(&mut self, range: Range<usize>, text_to_insert: &str) {
-        let Some(cached_len) = self.cached_utf16_len else {
-            return;
-        };
-        let removed_utf16_len: usize = self.content[range].chars().map(|c| c.len_utf16()).sum();
-        let added_utf16_len: usize = text_to_insert.chars().map(|c| c.len_utf16()).sum();
-        self.cached_utf16_len = Some(cached_len - removed_utf16_len + added_utf16_len);
+        self.content.update_utf8(range, text_to_insert);
     }
 
     /// Temporarily pauses blinking and leaves the cursor visible. Blinking will resume after the pre-established interval elapses from the time this is called.
@@ -894,7 +861,7 @@ impl InputState {
         }
 
         // Capture the text that will be replaced
-        let old_text = self.content[range.clone()].to_string();
+        let old_text = self.content.as_str()[range.clone()].to_string();
 
         self.history_undo_stack.push(super::HistoryEntry {
             range: range.start..range.start + new_text_len,
@@ -916,7 +883,7 @@ impl InputState {
 
     /// Returns the utf-8 character position of first character after the first new-line preceeding the character at the provided utf-8 character position.
     pub(super) fn find_line_start(&self, position: usize) -> usize {
-        self.content[..position.min(self.content.len())]
+        self.content.as_str()[..position.min(self.content.len())]
             .rfind('\n')
             .map(|pos| pos + 1)
             .unwrap_or(0)
@@ -924,7 +891,7 @@ impl InputState {
 
     /// Returns the utf-8 character position of the character immediately before the first new-line character after the character at the provided utf-8 character position.
     pub(super) fn find_line_end(&self, position: usize) -> usize {
-        self.content[position.min(self.content.len())..]
+        self.content.as_str()[position.min(self.content.len())..]
             .find('\n')
             .map(|pos| position + pos)
             .unwrap_or(self.content.len())
@@ -932,7 +899,7 @@ impl InputState {
 
     /// Returns the utf-8 character position of the start of the line that contains the provided pixel-point.
     pub(super) fn index_for_pixel_point(&self, point: Point<Pixels>) -> usize {
-        if self.content.is_empty() {
+        if self.content.as_str().is_empty() {
             return 0;
         }
 
@@ -1068,7 +1035,7 @@ impl InputState {
         self.layout_data = layout_data;
         if dirty {
             self.logical_lines =
-                InputState::build_logical_lines(&self.content, window, &self.layout_data);
+                InputState::build_logical_lines(self.content.as_str(), window, &self.layout_data);
             self.scroll_to_cursor();
         }
     }
@@ -1313,7 +1280,7 @@ impl InputState {
             return 0;
         }
 
-        let text_before = &self.content[..offset.min(self.content.len())];
+        let text_before = &self.content.as_str()[..offset.min(self.content.len())];
         text_before
             .grapheme_indices(true)
             .map(|(i, _)| i)
@@ -1326,7 +1293,7 @@ impl InputState {
             return self.content.len();
         }
 
-        let text_after = &self.content[offset..];
+        let text_after = &self.content.as_str()[offset..];
         text_after
             .grapheme_indices(true)
             .nth(1)
@@ -1339,7 +1306,7 @@ impl InputState {
             return 0;
         }
 
-        let text_before = &self.content[..offset.min(self.content.len())];
+        let text_before = &self.content.as_str()[..offset.min(self.content.len())];
 
         let mut last_word_start = 0;
         for (idx, _) in text_before.unicode_word_indices() {
@@ -1366,7 +1333,7 @@ impl InputState {
             return self.content.len();
         }
 
-        let text_after = &self.content[offset..];
+        let text_after = &self.content.as_str()[offset..];
 
         for (idx, word) in text_after.unicode_word_indices() {
             let word_end = offset + idx + word.len();
@@ -1381,7 +1348,7 @@ impl InputState {
     fn word_range_at(&self, offset: usize) -> (usize, usize) {
         let offset = offset.min(self.content.len());
 
-        for (idx, word) in self.content.unicode_word_indices() {
+        for (idx, word) in self.content.as_str().unicode_word_indices() {
             let word_end = idx + word.len();
             if offset >= idx && offset <= word_end {
                 return (idx, word_end);
@@ -1415,7 +1382,7 @@ mod tests {
         cx.add_window(|_window, cx| {
             let input = cx.new(|cx| {
                 let mut input = InputState::new(cx).with_layout_style(InputLayoutStyle::MultiLine);
-                input.content = content.to_string().into();
+                input.content.emplace(content);
                 input.selected_range = range;
                 input
             });
@@ -1432,12 +1399,15 @@ mod tests {
         let view = cx.add_window(|window, cx| {
             let input = cx.new(|cx| {
                 let mut input = InputState::new(cx).with_layout_style(InputLayoutStyle::MultiLine);
-                input.content = content.to_string().into();
+                input.content.emplace(content);
                 input.selected_range = range;
                 input.layout_data.line_height = px(20.);
                 input.layout_data.wrap_width = Some(px(500.));
-                input.logical_lines =
-                    InputState::build_logical_lines(&input.content, window, &input.layout_data);
+                input.logical_lines = InputState::build_logical_lines(
+                    input.content.as_str(),
+                    window,
+                    &input.layout_data,
+                );
                 input
             });
             TestView { input }
@@ -1755,7 +1725,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.backspace(&Backspace, window, cx);
-                assert_eq!(input.content(), "hello ");
+                assert_eq!(input.content().as_str(), "hello ");
                 assert_eq!(input.selected_range, 6..6);
             });
         })
@@ -1768,7 +1738,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.backspace(&Backspace, window, cx);
-                assert_eq!(input.content(), "hell");
+                assert_eq!(input.content().as_str(), "hell");
                 assert_eq!(input.selected_range, 4..4);
             });
         })
@@ -1781,7 +1751,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.backspace(&Backspace, window, cx);
-                assert_eq!(input.content(), "hello");
+                assert_eq!(input.content().as_str(), "hello");
                 assert_eq!(input.selected_range, 0..0);
             });
         })
@@ -1794,7 +1764,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.backspace(&Backspace, window, cx);
-                assert_eq!(input.content(), "Hi ");
+                assert_eq!(input.content().as_str(), "Hi ");
                 assert_eq!(input.selected_range, 3..3);
             });
         })
@@ -1811,7 +1781,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.delete(&Delete, window, cx);
-                assert_eq!(input.content(), " world");
+                assert_eq!(input.content().as_str(), " world");
                 assert_eq!(input.selected_range, 0..0);
             });
         })
@@ -1824,7 +1794,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.delete(&Delete, window, cx);
-                assert_eq!(input.content(), "ello");
+                assert_eq!(input.content().as_str(), "ello");
                 assert_eq!(input.selected_range, 0..0);
             });
         })
@@ -1837,7 +1807,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.delete(&Delete, window, cx);
-                assert_eq!(input.content(), "hello");
+                assert_eq!(input.content().as_str(), "hello");
                 assert_eq!(input.selected_range, 5..5);
             });
         })
@@ -1854,7 +1824,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.enter(&Enter, window, cx);
-                assert_eq!(input.content(), "hello\n world");
+                assert_eq!(input.content().as_str(), "hello\n world");
                 assert_eq!(input.selected_range, 6..6);
             });
         })
@@ -1867,7 +1837,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.enter(&Enter, window, cx);
-                assert_eq!(input.content(), "hello\nworld");
+                assert_eq!(input.content().as_str(), "hello\nworld");
                 assert_eq!(input.selected_range, 6..6);
             });
         })
@@ -1899,7 +1869,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.cut(&Cut, window, cx);
-                assert_eq!(input.content(), " world");
+                assert_eq!(input.content().as_str(), " world");
                 assert_eq!(input.selected_range, 0..0);
             });
         })
@@ -1916,7 +1886,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.paste(&Paste, window, cx);
-                assert_eq!(input.content(), "hello there world");
+                assert_eq!(input.content().as_str(), "hello there world");
                 assert_eq!(input.selected_range, 11..11);
             });
         })
@@ -2015,10 +1985,10 @@ mod tests {
                 assert_eq!(input.selected_range, 0..0);
 
                 input.backspace(&Backspace, window, cx);
-                assert_eq!(input.content(), "");
+                assert_eq!(input.content().as_str(), "");
 
                 input.delete(&Delete, window, cx);
-                assert_eq!(input.content(), "");
+                assert_eq!(input.content().as_str(), "");
 
                 input.select_all(&SelectAll, window, cx);
                 assert_eq!(input.selected_range, 0..0);
@@ -2035,7 +2005,7 @@ mod tests {
                 input.selection_direction = NavigationDirection::Back;
                 input.marked_range = Some(5..7);
                 input.set_content("new content", cx);
-                assert_eq!(input.content(), "new content");
+                assert_eq!(input.content().as_str(), "new content");
                 assert_eq!(input.selected_range, 0..0);
                 assert_eq!(input.selection_direction, NavigationDirection::Forward);
                 assert_eq!(input.marked_range, None);
@@ -2183,7 +2153,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.backspace(&Backspace, window, cx);
-                assert_eq!(input.content(), "ab");
+                assert_eq!(input.content().as_str(), "ab");
                 assert_eq!(input.selected_range.start, 1);
             });
         })
@@ -2200,7 +2170,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.backspace(&Backspace, window, cx);
-                assert_eq!(input.content(), "ab");
+                assert_eq!(input.content().as_str(), "ab");
                 assert_eq!(input.selected_range.start, 1);
             });
         })
@@ -2213,7 +2183,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.delete(&Delete, window, cx);
-                assert_eq!(input.content(), "ab");
+                assert_eq!(input.content().as_str(), "ab");
                 assert_eq!(input.selected_range.start, 1);
             });
         })
@@ -2383,7 +2353,7 @@ mod tests {
         cx.add_window(|_window, cx| {
             let input = cx.new(|cx| {
                 let mut input = InputState::new(cx).with_layout_style(InputLayoutStyle::SingleLine);
-                input.content = content.to_string().into();
+                input.content.emplace(content);
                 input.selected_range = selected_range;
                 input
             });
@@ -2397,7 +2367,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.enter(&Enter, window, cx);
-                assert_eq!(input.content(), "hello");
+                assert_eq!(input.content().as_str(), "hello");
                 assert_eq!(input.selected_range, 5..5);
             });
         })
@@ -2410,7 +2380,7 @@ mod tests {
         view.update(cx, |view, _window, cx| {
             view.input.update(cx, |input, cx| {
                 input.set_content("hello\nworld\r\nfoo", cx);
-                assert_eq!(input.content(), "hello world foo");
+                assert_eq!(input.content().as_str(), "hello world foo");
             });
         })
         .unwrap();
@@ -2500,11 +2470,11 @@ mod tests {
 
                 // Make an edit
                 input.replace_text_in_range(None, " world", window, cx);
-                assert_eq!(input.content(), "hello world");
+                assert_eq!(input.content().as_str(), "hello world");
 
                 // Undo should restore original content
                 input.undo(&Undo, window, cx);
-                assert_eq!(input.content(), "hello");
+                assert_eq!(input.content().as_str(), "hello");
             });
         })
         .unwrap();
@@ -2518,13 +2488,13 @@ mod tests {
                 input.set_history_group_interval(Duration::from_secs(0));
 
                 input.replace_text_in_range(None, " world", window, cx);
-                assert_eq!(input.content(), "hello world");
+                assert_eq!(input.content().as_str(), "hello world");
 
                 input.undo(&Undo, window, cx);
-                assert_eq!(input.content(), "hello");
+                assert_eq!(input.content().as_str(), "hello");
 
                 input.redo(&Redo, window, cx);
-                assert_eq!(input.content(), "hello world");
+                assert_eq!(input.content().as_str(), "hello world");
             });
         })
         .unwrap();
@@ -2537,7 +2507,7 @@ mod tests {
             view.input.update(cx, |input, cx| {
                 assert!(!input.is_undo_available());
                 input.undo(&Undo, window, cx);
-                assert_eq!(input.content(), "hello");
+                assert_eq!(input.content().as_str(), "hello");
             });
         })
         .unwrap();
@@ -2550,7 +2520,7 @@ mod tests {
             view.input.update(cx, |input, cx| {
                 assert!(!input.is_redo_available());
                 input.redo(&Redo, window, cx);
-                assert_eq!(input.content(), "hello");
+                assert_eq!(input.content().as_str(), "hello");
             });
         })
         .unwrap();
@@ -2565,12 +2535,12 @@ mod tests {
 
                 // Delete selection
                 input.replace_text_in_range(None, "", window, cx);
-                assert_eq!(input.content(), " world");
+                assert_eq!(input.content().as_str(), " world");
                 assert_eq!(input.selected_range, 0..0);
 
                 // Undo should restore content and selection
                 input.undo(&Undo, window, cx);
-                assert_eq!(input.content(), "hello world");
+                assert_eq!(input.content().as_str(), "hello world");
                 assert_eq!(input.selected_range, 0..5);
             });
         })
@@ -2587,25 +2557,25 @@ mod tests {
                 input.replace_text_in_range(None, "a", window, cx);
                 input.replace_text_in_range(None, "b", window, cx);
                 input.replace_text_in_range(None, "c", window, cx);
-                assert_eq!(input.content(), "abc");
+                assert_eq!(input.content().as_str(), "abc");
 
                 input.undo(&Undo, window, cx);
-                assert_eq!(input.content(), "ab");
+                assert_eq!(input.content().as_str(), "ab");
 
                 input.undo(&Undo, window, cx);
-                assert_eq!(input.content(), "a");
+                assert_eq!(input.content().as_str(), "a");
 
                 input.undo(&Undo, window, cx);
-                assert_eq!(input.content(), "");
+                assert_eq!(input.content().as_str(), "");
 
                 input.redo(&Redo, window, cx);
-                assert_eq!(input.content(), "a");
+                assert_eq!(input.content().as_str(), "a");
 
                 input.redo(&Redo, window, cx);
-                assert_eq!(input.content(), "ab");
+                assert_eq!(input.content().as_str(), "ab");
 
                 input.redo(&Redo, window, cx);
-                assert_eq!(input.content(), "abc");
+                assert_eq!(input.content().as_str(), "abc");
             });
         })
         .unwrap();
@@ -2619,15 +2589,15 @@ mod tests {
                 input.set_history_group_interval(Duration::from_secs(0));
 
                 input.replace_text_in_range(None, " world", window, cx);
-                assert_eq!(input.content(), "hello world");
+                assert_eq!(input.content().as_str(), "hello world");
 
                 input.undo(&Undo, window, cx);
-                assert_eq!(input.content(), "hello");
+                assert_eq!(input.content().as_str(), "hello");
                 assert!(input.is_redo_available());
 
                 // New edit should clear redo stack
                 input.replace_text_in_range(None, "!", window, cx);
-                assert_eq!(input.content(), "hello!");
+                assert_eq!(input.content().as_str(), "hello!");
                 assert!(!input.is_redo_available());
             });
         })
@@ -2686,10 +2656,10 @@ mod tests {
                 input.set_history_group_interval(Duration::from_secs(0));
 
                 input.backspace(&Backspace, window, cx);
-                assert_eq!(input.content(), "hell");
+                assert_eq!(input.content().as_str(), "hell");
 
                 input.undo(&Undo, window, cx);
-                assert_eq!(input.content(), "hello");
+                assert_eq!(input.content().as_str(), "hello");
             });
         })
         .unwrap();
@@ -2703,10 +2673,10 @@ mod tests {
                 input.set_history_group_interval(Duration::from_secs(0));
 
                 input.delete(&Delete, window, cx);
-                assert_eq!(input.content(), "ello");
+                assert_eq!(input.content().as_str(), "ello");
 
                 input.undo(&Undo, window, cx);
-                assert_eq!(input.content(), "hello");
+                assert_eq!(input.content().as_str(), "hello");
             });
         })
         .unwrap();
@@ -2720,10 +2690,10 @@ mod tests {
                 input.set_history_group_interval(Duration::from_secs(0));
 
                 input.cut(&Cut, window, cx);
-                assert_eq!(input.content(), " world");
+                assert_eq!(input.content().as_str(), " world");
 
                 input.undo(&Undo, window, cx);
-                assert_eq!(input.content(), "hello world");
+                assert_eq!(input.content().as_str(), "hello world");
             });
         })
         .unwrap();
@@ -2736,7 +2706,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.cut(&Cut, window, cx);
-                assert_eq!(input.content(), "line1\nline3");
+                assert_eq!(input.content().as_str(), "line1\nline3");
             });
         })
         .unwrap();
@@ -2752,7 +2722,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.cut(&Cut, window, cx);
-                assert_eq!(input.content(), "line2\nline3");
+                assert_eq!(input.content().as_str(), "line2\nline3");
             });
         })
         .unwrap();
@@ -2768,7 +2738,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.cut(&Cut, window, cx);
-                assert_eq!(input.content(), "line1\nline2");
+                assert_eq!(input.content().as_str(), "line1\nline2");
             });
         })
         .unwrap();
@@ -2784,7 +2754,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.cut(&Cut, window, cx);
-                assert_eq!(input.content(), "line1\nline3");
+                assert_eq!(input.content().as_str(), "line1\nline3");
             });
         })
         .unwrap();
@@ -2800,7 +2770,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.cut(&Cut, window, cx);
-                assert_eq!(input.content(), "");
+                assert_eq!(input.content().as_str(), "");
             });
         })
         .unwrap();
@@ -2817,10 +2787,10 @@ mod tests {
                 input.set_history_group_interval(Duration::from_secs(0));
 
                 input.cut(&Cut, window, cx);
-                assert_eq!(input.content(), "line1\nline3");
+                assert_eq!(input.content().as_str(), "line1\nline3");
 
                 input.undo(&Undo, window, cx);
-                assert_eq!(input.content(), "line1\nline2\nline3");
+                assert_eq!(input.content().as_str(), "line1\nline2\nline3");
             });
         })
         .unwrap();
@@ -2835,10 +2805,10 @@ mod tests {
                 input.set_history_group_interval(Duration::from_secs(0));
 
                 input.paste(&Paste, window, cx);
-                assert_eq!(input.content(), "hello world");
+                assert_eq!(input.content().as_str(), "hello world");
 
                 input.undo(&Undo, window, cx);
-                assert_eq!(input.content(), "hello");
+                assert_eq!(input.content().as_str(), "hello");
             });
         })
         .unwrap();
@@ -2852,10 +2822,10 @@ mod tests {
                 input.set_history_group_interval(Duration::from_secs(0));
 
                 input.enter(&Enter, window, cx);
-                assert_eq!(input.content(), "hello\n world");
+                assert_eq!(input.content().as_str(), "hello\n world");
 
                 input.undo(&Undo, window, cx);
-                assert_eq!(input.content(), "hello world");
+                assert_eq!(input.content().as_str(), "hello world");
             });
         })
         .unwrap();
@@ -2868,7 +2838,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.delete_word_left(&DeleteWordLeft, window, cx);
-                assert_eq!(input.content(), " world");
+                assert_eq!(input.content().as_str(), " world");
                 assert_eq!(input.selected_range, 0..0);
             });
         })
@@ -2882,7 +2852,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.delete_word_left(&DeleteWordLeft, window, cx);
-                assert_eq!(input.content(), " world");
+                assert_eq!(input.content().as_str(), " world");
             });
         })
         .unwrap();
@@ -2894,7 +2864,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.delete_word_left(&DeleteWordLeft, window, cx);
-                assert_eq!(input.content(), "hello world");
+                assert_eq!(input.content().as_str(), "hello world");
             });
         })
         .unwrap();
@@ -2907,7 +2877,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.delete_word_right(&DeleteWordRight, window, cx);
-                assert_eq!(input.content(), " world");
+                assert_eq!(input.content().as_str(), " world");
                 assert_eq!(input.selected_range, 0..0);
             });
         })
@@ -2920,7 +2890,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.delete_word_right(&DeleteWordRight, window, cx);
-                assert_eq!(input.content(), " world");
+                assert_eq!(input.content().as_str(), " world");
             });
         })
         .unwrap();
@@ -2932,7 +2902,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.delete_word_right(&DeleteWordRight, window, cx);
-                assert_eq!(input.content(), "hello world");
+                assert_eq!(input.content().as_str(), "hello world");
             });
         })
         .unwrap();
@@ -2944,7 +2914,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.delete_to_beginning_of_line(&DeleteToBeginningOfLine, window, cx);
-                assert_eq!(input.content(), " world");
+                assert_eq!(input.content().as_str(), " world");
                 assert_eq!(input.selected_range, 0..0);
             });
         })
@@ -2958,7 +2928,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.delete_to_beginning_of_line(&DeleteToBeginningOfLine, window, cx);
-                assert_eq!(input.content(), "line1\nne2\nline3");
+                assert_eq!(input.content().as_str(), "line1\nne2\nline3");
             });
         })
         .unwrap();
@@ -2970,7 +2940,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.delete_to_beginning_of_line(&DeleteToBeginningOfLine, window, cx);
-                assert_eq!(input.content(), "hello world");
+                assert_eq!(input.content().as_str(), "hello world");
             });
         })
         .unwrap();
@@ -2982,7 +2952,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.delete_to_end_of_line(&DeleteToEndOfLine, window, cx);
-                assert_eq!(input.content(), "hello");
+                assert_eq!(input.content().as_str(), "hello");
                 assert_eq!(input.selected_range, 5..5);
             });
         })
@@ -2996,7 +2966,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.delete_to_end_of_line(&DeleteToEndOfLine, window, cx);
-                assert_eq!(input.content(), "line1\nli\nline3");
+                assert_eq!(input.content().as_str(), "line1\nli\nline3");
             });
         })
         .unwrap();
@@ -3008,7 +2978,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.delete_to_end_of_line(&DeleteToEndOfLine, window, cx);
-                assert_eq!(input.content(), "hello world");
+                assert_eq!(input.content().as_str(), "hello world");
             });
         })
         .unwrap();
@@ -3022,10 +2992,10 @@ mod tests {
                 input.set_history_group_interval(Duration::from_secs(0));
 
                 input.delete_word_left(&DeleteWordLeft, window, cx);
-                assert_eq!(input.content(), " world");
+                assert_eq!(input.content().as_str(), " world");
 
                 input.undo(&Undo, window, cx);
-                assert_eq!(input.content(), "hello world");
+                assert_eq!(input.content().as_str(), "hello world");
             });
         })
         .unwrap();
@@ -3039,10 +3009,10 @@ mod tests {
                 input.set_history_group_interval(Duration::from_secs(0));
 
                 input.delete_word_right(&DeleteWordRight, window, cx);
-                assert_eq!(input.content(), "hello ");
+                assert_eq!(input.content().as_str(), "hello ");
 
                 input.undo(&Undo, window, cx);
-                assert_eq!(input.content(), "hello world");
+                assert_eq!(input.content().as_str(), "hello world");
             });
         })
         .unwrap();
@@ -3056,10 +3026,10 @@ mod tests {
                 input.set_history_group_interval(Duration::from_secs(0));
 
                 input.delete_to_beginning_of_line(&DeleteToBeginningOfLine, window, cx);
-                assert_eq!(input.content(), " world");
+                assert_eq!(input.content().as_str(), " world");
 
                 input.undo(&Undo, window, cx);
-                assert_eq!(input.content(), "hello world");
+                assert_eq!(input.content().as_str(), "hello world");
             });
         })
         .unwrap();
@@ -3073,10 +3043,10 @@ mod tests {
                 input.set_history_group_interval(Duration::from_secs(0));
 
                 input.delete_to_end_of_line(&DeleteToEndOfLine, window, cx);
-                assert_eq!(input.content(), "hello");
+                assert_eq!(input.content().as_str(), "hello");
 
                 input.undo(&Undo, window, cx);
-                assert_eq!(input.content(), "hello world");
+                assert_eq!(input.content().as_str(), "hello world");
             });
         })
         .unwrap();

@@ -7,6 +7,8 @@ pub trait UnicodeString {
     /// Returns the UTF-16 length of the content.
     fn len_utf16(&self) -> usize;
 
+    fn clear_utf16_cache(&mut self) {}
+
     fn utf_offset_8to16(&self, pos_uft8: usize) -> usize {
         // Fast path: if offset is 0, return 0
         if pos_uft8 == 0 {
