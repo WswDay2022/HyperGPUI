@@ -8,7 +8,8 @@ use crate::{
     AbsoluteLength, App, Background, BackgroundTag, BorderStyle, Bounds, ContentMask, Corners,
     CornersRefinement, CursorStyle, DefiniteLength, DevicePixels, Edges, EdgesRefinement, Font,
     FontFallbacks, FontFeatures, FontStyle, FontWeight, GridLocation, Hsla, Length, Pixels, Point,
-    PointRefinement, Rgba, SharedString, Size, SizeRefinement, Styled, TextRun, Window, black, phi,
+    PointRefinement, Rgba, ScaledPixels, SharedString, Size, SizeRefinement, Styled, TextRun,
+    Window, black, phi,
     point, quad, rems, size,
 };
 use collections::HashSet;
@@ -287,6 +288,12 @@ pub struct Style {
     /// Box shadow of the element
     pub box_shadow: Vec<BoxShadow>,
 
+    /// Filters applied to this element's own content and children (CSS `filter`).
+    pub filter: Vec<Filter>,
+
+    /// Filters applied to the content rendered behind this element (CSS `backdrop-filter`).
+    pub backdrop_filter: Vec<Filter>,
+
     /// The text style of this element
     #[refineable]
     pub text: TextStyleRefinement,
@@ -353,6 +360,50 @@ pub struct BoxShadow {
     pub spread_radius: Pixels,
     /// Whether this is an inset shadow (drawn inside the element's bounds).
     pub inset: bool,
+}
+
+/// A graphical filter that can be applied either to an element's own content
+/// (via [`Styled::filter`], like CSS `filter`) or to the content rendered behind
+/// it (via [`Styled::backdrop_filter`], like CSS `backdrop-filter`).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub enum Filter {
+    /// A gaussian blur with the given radius, in logical pixels. Maps to CSS `blur(<px>)`.
+    Blur(Pixels),
+}
+
+impl Filter {
+    /// Whether this filter has no visible effect, so painting can skip it entirely (and the
+    /// element can avoid the offscreen isolation pass when *all* of its filters are identities).
+    ///
+    /// Each variant declares its own no-op case here rather than the pipeline special-casing
+    /// blur — adding a filter that this returns `true` for is silently dropped before it ever
+    /// reaches the renderer.
+    pub fn is_identity(&self) -> bool {
+        match self {
+            Filter::Blur(radius) => *radius <= Pixels::ZERO,
+        }
+    }
+
+    /// Lower this logical-pixel filter into its scene-space ([`ScaledFilter`]) form for the
+    /// renderer, scaling any pixel magnitudes by `factor` (the window scale factor).
+    pub fn scale(&self, factor: f32) -> ScaledFilter {
+        match self {
+            Filter::Blur(radius) => ScaledFilter::Blur(radius.scale(factor)),
+        }
+    }
+}
+
+/// The scene-space (device-pixel) form of a [`Filter`], carried on the scene primitives that the
+/// renderers consume. Produced by [`Filter::scale`]; pixel magnitudes are in [`ScaledPixels`].
+///
+/// This is intentionally a separate enum from [`Filter`] (rather than reusing it) so the scene
+/// stays in device space like every other primitive, and so the renderers `match` on it
+/// exhaustively — adding a filter variant breaks each backend's match, forcing a deliberate
+/// implement-or-decline decision per backend instead of silently rendering nothing.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ScaledFilter {
+    /// A gaussian blur with the given radius, in scaled (device) pixels.
+    Blur(ScaledPixels),
 }
 
 /// How to handle whitespace in text
@@ -669,49 +720,68 @@ impl Style {
 
         window.paint_drop_shadows(bounds, corner_radii, &self.box_shadow);
 
-        let background_color = self.background.as_ref().and_then(Fill::color);
-        if background_color.is_some_and(|color| !color.is_transparent()) {
-            let mut border_color = match background_color {
-                Some(color) => match color.tag {
-                    BackgroundTag::Solid
-                    | BackgroundTag::PatternSlash
-                    | BackgroundTag::Checkerboard => color.solid,
-
-                    BackgroundTag::LinearGradient => color
-                        .colors
-                        .first()
-                        .map(|stop| stop.color)
-                        .unwrap_or_default(),
-                },
-                None => Hsla::default(),
-            };
-            border_color.a = 0.;
-            window.paint_quad(quad(
-                bounds,
-                corner_radii,
-                background_color.unwrap_or_default(),
-                Edges::default(),
-                border_color,
-                self.border_style,
-            ));
+        // Blur the content behind this element before its (typically translucent) background
+        // is painted on top, so the background tints the frosted backdrop (CSS `backdrop-filter`).
+        if !self.backdrop_filter.is_empty() {
+            window.paint_backdrop_filter(bounds, corner_radii, &self.backdrop_filter);
         }
 
-        window.paint_inset_shadows(bounds, corner_radii, &self.box_shadow);
+        // The element's own box — background, inset shadows, children, and border — painted as a
+        // unit. A `filter` (CSS `filter`) wraps this whole unit so the renderer blurs the element
+        // and its children together as one group; without a filter it paints directly.
+        let paint_box = |window: &mut Window, cx: &mut App| {
+            let background_color = self.background.as_ref().and_then(Fill::color);
+            if background_color.is_some_and(|color| !color.is_transparent()) {
+                let mut border_color = match background_color {
+                    Some(color) => match color.tag {
+                        BackgroundTag::Solid
+                        | BackgroundTag::PatternSlash
+                        | BackgroundTag::Checkerboard => color.solid,
 
-        continuation(window, cx);
+                        BackgroundTag::LinearGradient => color
+                            .colors
+                            .first()
+                            .map(|stop| stop.color)
+                            .unwrap_or_default(),
+                    },
+                    None => Hsla::default(),
+                };
+                border_color.a = 0.;
+                window.paint_quad(quad(
+                    bounds,
+                    corner_radii,
+                    background_color.unwrap_or_default(),
+                    Edges::default(),
+                    border_color,
+                    self.border_style,
+                ));
+            }
 
-        if self.is_border_visible() {
-            let border_widths = self.border_widths.to_pixels(rem_size);
-            let mut background = self.border_color.unwrap_or_default();
-            background.a = 0.;
-            window.paint_quad(quad(
-                bounds,
-                corner_radii,
-                background,
-                border_widths,
-                self.border_color.unwrap_or_default(),
-                self.border_style,
-            ));
+            window.paint_inset_shadows(bounds, corner_radii, &self.box_shadow);
+
+            continuation(window, cx);
+
+            if self.is_border_visible() {
+                let border_widths = self.border_widths.to_pixels(rem_size);
+                let mut background = self.border_color.unwrap_or_default();
+                background.a = 0.;
+                window.paint_quad(quad(
+                    bounds,
+                    corner_radii,
+                    background,
+                    border_widths,
+                    self.border_color.unwrap_or_default(),
+                    self.border_style,
+                ));
+            }
+        };
+
+        if self.filter.is_empty() {
+            paint_box(window, cx);
+        } else {
+            window.with_filter_layer(bounds, corner_radii, &self.filter, |window| {
+                paint_box(window, cx);
+            });
         }
 
         #[cfg(debug_assertions)]
@@ -765,6 +835,8 @@ impl Default for Style {
             border_style: BorderStyle::default(),
             corner_radii: Corners::default(),
             box_shadow: Default::default(),
+            filter: Default::default(),
+            backdrop_filter: Default::default(),
             text: TextStyleRefinement::default(),
             mouse_cursor: None,
             opacity: None,

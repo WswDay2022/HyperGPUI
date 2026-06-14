@@ -1256,3 +1256,122 @@ float4 polychrome_sprite_fragment(PolychromeSpriteFragmentInput input): SV_Targe
     color.a *= sprite.opacity * saturate(0.5 - distance);
     return color;
 }
+
+/*
+**
+**              Blur (backdrop-filter / filter)
+**
+** Shared by backdrop and content blur. The source texture is bound at t0 (t_sprite) and the
+** parameters in the BlurParams constant buffer at b1. Three passes: downsample (full -> half
+** res), separable gaussian (run twice), and a composite into a rounded rectangle.
+*/
+
+cbuffer BlurParams: register(b1) {
+    Bounds blur_bounds;
+    Bounds blur_content_mask;
+    float4 blur_corner_radii;
+    float2 blur_direction;
+    float blur_sigma;
+    float blur_opacity;
+    float blur_tap_count;
+    float blur_clip_rounded;
+    // 1.0 = snapped 2:1 box downsample (anchor the half-res grid to a fixed 2px grid at the origin
+    // so a stationary element blurs identically at every window size); 0.0 = 1:1 copy (scene blit).
+    float blur_downsample;
+    // Spacing between taps in pixels (gaussian passes only); >1 lets `blur_tap_count` taps span
+    // very large radii without truncating the gaussian.
+    float blur_tap_step;
+};
+
+struct BlurVertexOutput {
+    float4 position: SV_Position;
+    float2 uv: TEXCOORD0;
+};
+
+BlurVertexOutput blur_fullscreen(uint vertex_id) {
+    float2 uv = float2(float((vertex_id << 1u) & 2u), float(vertex_id & 2u));
+    BlurVertexOutput output;
+    output.uv = uv;
+    output.position = float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0);
+    return output;
+}
+
+BlurVertexOutput blur_downsample_vertex(uint vertex_id: SV_VertexID) {
+    return blur_fullscreen(vertex_id);
+}
+
+float4 blur_downsample_fragment(BlurVertexOutput input): SV_Target {
+    if (blur_downsample > 0.5) {
+        // Snapped 2:1 box downsample. Half-res texel `px` samples source at full-res coordinate
+        // 2*px + 1 (the boundary between source texels 2*px and 2*px+1), so one bilinear tap
+        // averages exactly that pair. Anchored to the origin and independent of the viewport size,
+        // so an element at fixed pixels blurs identically at every window size — otherwise the
+        // implicit floor(W/2) grid stretches and the halo wobbles by ~1px on resize.
+        uint sw, sh;
+        t_sprite.GetDimensions(sw, sh);
+        float2 src_uv = (floor(input.position.xy) * 2.0 + 1.0) / float2(sw, sh);
+        return t_sprite.SampleLevel(s_sprite, src_uv, 0.0);
+    }
+    // 1:1 copy at matching resolution (used to blit the offscreen scene into the swapchain).
+    return t_sprite.SampleLevel(s_sprite, input.uv, 0.0);
+}
+
+BlurVertexOutput blur_vertex(uint vertex_id: SV_VertexID) {
+    return blur_fullscreen(vertex_id);
+}
+
+float4 blur_fragment(BlurVertexOutput input): SV_Target {
+    int taps = int(blur_tap_count);
+    float4 color = float4(0.0, 0.0, 0.0, 0.0);
+    float weight_sum = 0.0;
+    [loop]
+    for (int i = -taps; i <= taps; i++) {
+        float offset = float(i) * blur_tap_step;
+        float weight = gaussian(offset, blur_sigma);
+        color += t_sprite.SampleLevel(s_sprite, input.uv + blur_direction * offset, 0.0) * weight;
+        weight_sum += weight;
+    }
+    return color / max(weight_sum, 1e-5);
+}
+
+struct BlurCompositeVertexOutput {
+    float4 position: SV_Position;
+    float4 clip_distance: SV_ClipDistance;
+};
+
+struct BlurCompositeFragmentInput {
+    float4 position: SV_Position;
+};
+
+BlurCompositeVertexOutput blur_composite_vertex(uint vertex_id: SV_VertexID) {
+    float2 unit_vertex = float2(float(vertex_id & 1u), 0.5 * float(vertex_id & 2u));
+    BlurCompositeVertexOutput output;
+    output.position = to_device_position(unit_vertex, blur_bounds);
+    output.clip_distance = distance_from_clip_rect(unit_vertex, blur_bounds, blur_content_mask);
+    return output;
+}
+
+float4 blur_composite_fragment(BlurCompositeFragmentInput input): SV_Target {
+    // Sample the half-res blur by screen position, on the SAME fixed 2:1 grid the snapped downsample
+    // wrote (anchored at the origin, independent of viewport parity): 2 * the half-res texture size
+    // maps screen pixel p to half-res texel p/2 at every window size, so it doesn't wobble on resize.
+    uint hw, hh;
+    t_sprite.GetDimensions(hw, hh);
+    float2 uv = input.position.xy / (2.0 * float2(hw, hh));
+    float4 blurred = t_sprite.SampleLevel(s_sprite, uv, 0.0);
+    Corners radii;
+    radii.top_left = blur_corner_radii.x;
+    radii.top_right = blur_corner_radii.y;
+    radii.bottom_right = blur_corner_radii.z;
+    radii.bottom_left = blur_corner_radii.w;
+    float distance = quad_sdf(input.position.xy, blur_bounds, radii);
+    // Backdrop clips to the rounded rect (the panel has a defined shape); content blur bleeds past
+    // its bounds like CSS `filter: blur`, so its shape comes from the blurred group's own alpha.
+    float coverage = blur_clip_rounded > 0.5 ? saturate(0.5 - distance) : 1.0;
+    // The blurred sample is premultiplied (blurring against the transparent surround scales rgb
+    // with the fading alpha), so output premultiplied and use a premultiplied-blend state. A
+    // backdrop's scene is opaque (so this replaces); a content-filter group is transparent outside
+    // its subtree (so the target shows through there instead of darkening).
+    float a = coverage * blur_opacity;
+    return float4(blurred.rgb * a, blurred.a * a);
+}
