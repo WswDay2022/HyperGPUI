@@ -1,5 +1,11 @@
-use gpui::{Bounds, Context, Element, Hsla, IntoElement, Pixels, Point, Render};
+use gpui::{
+    Bounds, Context, Element, Entity, EventEmitter, Hsla, IntoElement, Pixels, Point, Render,
+    Subscription,
+};
+use smallvec::SmallVec;
 use std::time::Duration;
+
+use crate::input::CursorTrigger;
 
 /// Default interval for cursor blinking.
 pub const DEFAULT_BLINK_INTERVAL: Duration = Duration::from_millis(500);
@@ -17,6 +23,8 @@ pub struct Cursor {
     was_focused: bool,
     point: Point<Pixels>,
     height: Pixels,
+    #[allow(dead_code)]
+    subscriptions: SmallVec<[Subscription; 2]>,
 }
 
 impl Cursor {
@@ -33,12 +41,26 @@ impl Cursor {
             was_focused: false,
             point: Point::default(),
             height: Pixels::ZERO,
+            subscriptions: SmallVec::new(),
         }
     }
 
     pub fn color(mut self, color: Hsla) -> Self {
         self.color = color;
         self
+    }
+
+    pub fn subscribe_to<E>(&mut self, emitter: &Entity<E>, cx: &mut Context<Self>)
+    where
+        E: EventEmitter<CursorTrigger>,
+    {
+        let handle = cx.subscribe(emitter, |cursor, _emitter, event, cx| match event {
+            CursorTrigger::PauseBlinkingForUserAction => {
+                cursor.pause_blinking(cx);
+                cx.notify();
+            }
+        });
+        self.subscriptions.push(handle);
     }
 
     /// Returns whether the cursor should currently be rendered.
