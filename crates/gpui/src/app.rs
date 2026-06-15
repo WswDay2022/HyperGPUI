@@ -1129,6 +1129,12 @@ impl App {
         self.platform.set_gpu_requirements(requirements);
     }
 
+    /// Sets the label applied to credentials stored in the system keyring.
+    /// Call before writing credentials. Only Linux/FreeBSD apply the label.
+    pub fn set_keyring_label(&self, label: impl Into<SharedString>) {
+        self.platform.set_keyring_label(label.into());
+    }
+
     /// Returns a handle to the window that is currently focused at the platform level, if one exists.
     pub fn active_window(&self) -> Option<AnyWindowHandle> {
         self.platform.active_window()
