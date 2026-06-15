@@ -1,11 +1,12 @@
 use crate::input::{Input, InputColors, InputLayoutData, InputLogicalLine, InputState};
 use gpui::{
-    Along, App, Axis, Bounds, ContentMask, CursorStyle, DispatchPhase, Element, ElementId,
+    Along, App, Axis, Bounds, ContentMask, CursorStyle, DispatchPhase, Display, Element, ElementId,
     ElementInputHandler, Entity, Focusable, GlobalElementId, Hitbox, HitboxBehavior, Hsla,
     InspectorElementId, LayoutId, Length, MouseButton, MouseDownEvent, MouseMoveEvent,
     MouseUpEvent, Pixels, Point, ScrollWheelEvent, SharedString, Style, TextAlign, TextRun,
     TextStyle, Window, fill, point, px, relative, size,
 };
+use smallvec::SmallVec;
 use std::ops::Range;
 
 const CURSOR_WIDTH: f32 = 2.0;
@@ -13,6 +14,8 @@ const MARKED_TEXT_UNDERLINE_THICKNESS: f32 = 2.0;
 
 pub struct InputLayoutState {
     text_style: TextStyle,
+    #[allow(dead_code)]
+    child_layout_ids: SmallVec<[LayoutId; 2]>,
 }
 
 pub struct InputPrepaintState {
@@ -39,6 +42,7 @@ impl Element for Input {
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
         let mut resolved_text_style = None;
+        let mut child_layout_ids = SmallVec::new();
 
         let layout_id = self.interactivity.request_layout(
             global_id,
@@ -46,12 +50,13 @@ impl Element for Input {
             window,
             cx,
             |element_style, window, cx| {
-                let layout = self.input.read(cx).layout_style();
                 window.with_text_style(element_style.text_style().cloned(), |window| {
+                    let state = self.input.read(cx);
+
                     resolved_text_style = Some(window.text_style());
 
                     let mut layout_style = element_style.clone();
-                    if matches!(layout, super::InputLayoutStyle::MultiLine) {
+                    if matches!(state.layout_style(), super::InputLayoutStyle::MultiLine) {
                         if let Length::Auto = layout_style.size.width {
                             layout_style.size.width = relative(1.).into();
                         }
@@ -59,13 +64,21 @@ impl Element for Input {
                             layout_style.size.height = relative(1.).into();
                         }
                     }
-                    window.request_layout(layout_style, None, cx)
+
+                    child_layout_ids = self
+                        .cursor
+                        .iter_mut()
+                        .map(|cursor| cursor.request_layout(window, cx))
+                        .collect::<SmallVec<_>>();
+
+                    window.request_layout(layout_style, child_layout_ids.iter().copied(), cx)
                 })
             },
         );
 
         let layout_state = InputLayoutState {
             text_style: resolved_text_style.unwrap_or_else(|| window.text_style()),
+            child_layout_ids,
         };
         (layout_id, layout_state)
     }
@@ -106,8 +119,19 @@ impl Element for Input {
             bounds.size,
             window,
             cx,
-            |_style, _point, hitbox, window, _cx| {
-                hitbox.or_else(|| Some(window.insert_hitbox(bounds, HitboxBehavior::Normal)))
+            |style, scroll_offset, hitbox, window, cx| {
+                let hitbox =
+                    hitbox.or_else(|| Some(window.insert_hitbox(bounds, HitboxBehavior::Normal)));
+
+                if style.display != Display::None {
+                    window.with_element_offset(scroll_offset, |window| {
+                        if let Some(cursor) = &mut self.cursor {
+                            cursor.prepaint(window, cx);
+                        }
+                    });
+                }
+
+                hitbox
             },
         );
 
@@ -146,7 +170,11 @@ impl Element for Input {
             input.toggle_cursor_on_focus_change(is_focused, cx)
         });
 
-        let perform_paint = |_style: &Style, window: &mut Window, cx: &mut App| {
+        let perform_paint = |style: &Style, window: &mut Window, cx: &mut App| {
+            if style.display == Display::None {
+                return;
+            }
+
             let context = PaintContext {
                 snapshot,
                 is_focused,
@@ -159,6 +187,10 @@ impl Element for Input {
             context.process_mouse_events(&self.input, window, cx);
             window.with_content_mask(Some(ContentMask { bounds }), |window| {
                 context.paint(window, cx);
+
+                if let Some(cursor) = &mut self.cursor {
+                    cursor.paint(window, cx);
+                }
             });
         };
         self.interactivity.paint(

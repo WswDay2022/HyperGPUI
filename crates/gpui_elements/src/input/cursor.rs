@@ -4,6 +4,8 @@ use std::time::Duration;
 /// Default interval for cursor blinking.
 pub const DEFAULT_BLINK_INTERVAL: Duration = Duration::from_millis(500);
 
+pub trait Cursor {}
+
 /// Configuration for cursor blinking, to be provided to InputState.
 pub enum CursorBlinkType<'app> {
     /// The cursor will not blink.

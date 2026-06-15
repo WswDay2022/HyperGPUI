@@ -15,6 +15,7 @@ ignored = ["gpui"]
 gpui.workspace = true
 async-io.workspace = true
 unicode-segmentation.workspace = true
+smallvec.workspace = true
 
 [dev-dependencies]
 gpui = { path = "../gpui", features = ["test-support"] }

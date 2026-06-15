@@ -2,8 +2,8 @@ use super::actions::*;
 use crate::input::{CursorBlinkType, InputLayoutStyle, InputStorage};
 use gpui::{
     App, AppContext, ClipboardItem, Context, Entity, EntityId, EntityInputHandler, EventEmitter,
-    FocusHandle, Focusable, NavigationDirection, Pixels, Point, SharedString, Size, Subscription,
-    TextRun, TextStyle, Window, WrappedLine, point, px,
+    FocusHandle, Focusable, NavigationDirection, Pixels, Point, Render, SharedString, Size,
+    Subscription, TextRun, TextStyle, Window, WrappedLine, point, px,
 };
 use std::{
     ops::Range,
@@ -74,9 +74,6 @@ pub struct InputState {
     history_undo_stack: Vec<super::HistoryEntry>,
     /// Stack of undone states for redo.
     history_redo_stack: Vec<super::HistoryEntry>,
-
-    /// Optional entity and subscription tracking the blinking of the text cursor.
-    cursor_blink: Option<(Entity<super::CursorBlink>, Subscription)>,
 }
 
 /// Data built during element prepaint that is stored in InputState for conveinence
@@ -126,7 +123,7 @@ impl InputState {
     /// Creates a new `Input` with the specified multiline setting.
     /// Cursor blinking is enabled by default.
     pub fn new(cx: &mut Context<Self>) -> Self {
-        let mut this = Self {
+        Self {
             entity_id: cx.entity_id(),
             focus_handle: cx.focus_handle(),
             content: Box::new(super::Standard::default()),
@@ -148,30 +145,7 @@ impl InputState {
             history_grouping_interval: super::DEFAULT_GROUP_INTERVAL,
             history_undo_stack: Vec::new(),
             history_redo_stack: Vec::new(),
-
-            cursor_blink: None,
-        };
-        // TODO: This is unoptimal for non-blinking cases, since the entity is generated and then discarded.
-        this = this.cursor_blink(CursorBlinkType::Enabled {
-            app: cx,
-            interval: None,
-        });
-        this
-    }
-
-    /// Configure how often the cursor should blink when the input element has focus.
-    pub fn cursor_blink<'app>(mut self, args: CursorBlinkType<'app>) -> Self {
-        self.cursor_blink = match args {
-            CursorBlinkType::Disabled => None,
-            CursorBlinkType::Enabled { app: cx, interval } => {
-                let interval = interval.unwrap_or(super::DEFAULT_BLINK_INTERVAL);
-                let cursor_blink = cx.new(|_cx| super::CursorBlink::new(interval));
-                let entity_id = self.entity_id;
-                let subscription = cx.observe(&cursor_blink, move |_, cx| cx.notify(entity_id));
-                Some((cursor_blink, subscription))
-            }
-        };
-        self
+        }
     }
 
     /// Returns the current text content.

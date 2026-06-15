@@ -1,7 +1,7 @@
-use crate::input::{InputColors, InputState};
+use crate::input::{Cursor, InputColors, InputState};
 use gpui::{
-    Action, App, Context, Entity, FocusHandle, Focusable, Hsla, InteractiveElement, Interactivity,
-    IntoElement, SharedString, StyleRefinement, Styled, Window,
+    Action, AnyElement, App, Context, Entity, FocusHandle, Focusable, Hsla, InteractiveElement,
+    Interactivity, IntoElement, SharedString, StyleRefinement, Styled, Window,
 };
 
 #[track_caller]
@@ -15,6 +15,7 @@ pub struct Input {
     pub(super) interactivity: Interactivity,
     pub(super) placeholder: Option<SharedString>,
     pub(super) colors: InputColors,
+    pub(super) cursor: Option<AnyElement>,
 }
 
 impl Input {
@@ -26,6 +27,7 @@ impl Input {
             interactivity: Interactivity::new(),
             placeholder: None,
             colors: InputColors::default(),
+            cursor: None,
         };
         input.register_actions();
         input
@@ -161,6 +163,15 @@ impl Input {
     /// Marking text comes from IME and needs further doc clarification.
     pub fn marked_color(mut self, color: Hsla) -> Self {
         self.colors.marked = color;
+        self
+    }
+
+    pub fn cursor<T>(mut self, entity: Entity<T>) -> Self
+    where
+        T: Cursor,
+        Entity<T>: Into<AnyElement>,
+    {
+        self.cursor = Some(entity.into());
         self
     }
 }
