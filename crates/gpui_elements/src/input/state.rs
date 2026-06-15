@@ -1,5 +1,5 @@
 use super::actions::*;
-use crate::input::{CursorBlinkType, InputLayoutStyle, InputStorage};
+use crate::input::{InputLayoutStyle, InputStorage};
 use gpui::{
     App, AppContext, ClipboardItem, Context, Entity, EntityId, EntityInputHandler, EventEmitter,
     FocusHandle, Focusable, NavigationDirection, Pixels, Point, Render, SharedString, Size,
@@ -26,8 +26,14 @@ pub enum InputStateEvent {
     /// Emitted when a redo operation is performed.
     Redo,
 }
-
 impl EventEmitter<InputStateEvent> for InputState {}
+
+#[derive(Clone, Debug)]
+pub enum CursorTrigger {
+    // TODO: cursor needs to receive this
+    PauseBlinkingForUserAction,
+}
+impl EventEmitter<CursorTrigger> for InputState {}
 
 /// `Input` is the state model for text input components. It handles:
 /// - Text content storage and manipulation
@@ -56,8 +62,6 @@ pub struct InputState {
     layout_data: InputLayoutData,
     /// A reinterpretation of `content` as wrapped lines with layout information. Regenerated when content changes or the layout changes during element painting.
     logical_lines: Vec<InputLogicalLine>,
-    /// Tracks whether we were focused on the last update.
-    was_focused: bool,
 
     /// True while the user is in the act of highlighting a section of the text (e.g. during mouse pressed & dragging).
     is_selecting: bool,
@@ -135,7 +139,6 @@ impl InputState {
 
             layout_data: InputLayoutData::default(),
             logical_lines: Vec::new(),
-            was_focused: false,
 
             is_selecting: false,
             last_click_position: None,
@@ -164,7 +167,7 @@ impl InputState {
         self.history_undo_stack.clear();
         self.history_redo_stack.clear();
         self.mark_layout_dirty();
-        self.pause_cursor_blink(cx);
+        cx.emit(CursorTrigger::PauseBlinkingForUserAction);
         cx.emit(InputStateEvent::TextChanged);
         cx.notify();
     }
@@ -305,7 +308,7 @@ impl InputState {
         self.marked_range.take();
         self.mark_layout_dirty();
 
-        self.pause_cursor_blink(cx);
+        cx.emit(CursorTrigger::PauseBlinkingForUserAction);
         cx.emit(InputStateEvent::TextChanged);
         cx.notify();
     }
@@ -429,7 +432,7 @@ impl InputState {
     }
 
     pub(super) fn up(&mut self, _: &Up, _window: &mut Window, cx: &mut Context<Self>) {
-        self.pause_cursor_blink(cx);
+        cx.emit(CursorTrigger::PauseBlinkingForUserAction);
         match self.layout_style {
             InputLayoutStyle::SingleLine => {
                 // In single-line mode, up moves to start
@@ -450,7 +453,7 @@ impl InputState {
     }
 
     pub(super) fn down(&mut self, _: &Down, _window: &mut Window, cx: &mut Context<Self>) {
-        self.pause_cursor_blink(cx);
+        cx.emit(CursorTrigger::PauseBlinkingForUserAction);
         match self.layout_style {
             InputLayoutStyle::SingleLine => {
                 // In single-line mode, down moves to end
@@ -480,7 +483,7 @@ impl InputState {
     }
 
     pub(super) fn select_up(&mut self, _: &SelectUp, _window: &mut Window, cx: &mut Context<Self>) {
-        self.pause_cursor_blink(cx);
+        cx.emit(CursorTrigger::PauseBlinkingForUserAction);
         match self.layout_style {
             InputLayoutStyle::SingleLine => {
                 // In single-line mode, select_up selects to start
@@ -503,7 +506,7 @@ impl InputState {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.pause_cursor_blink(cx);
+        cx.emit(CursorTrigger::PauseBlinkingForUserAction);
         match self.layout_style {
             InputLayoutStyle::SingleLine => {
                 // In single-line mode, select_down selects to end
@@ -808,13 +811,6 @@ impl InputState {
         self.content.update_utf8(range, text_to_insert);
     }
 
-    /// Temporarily pauses blinking and leaves the cursor visible. Blinking will resume after the pre-established interval elapses from the time this is called.
-    pub(super) fn pause_cursor_blink(&self, cx: &mut Context<Self>) {
-        if let Some((cursor_blink, _)) = &self.cursor_blink {
-            cursor_blink.update(cx, |cb, cx| cb.pause_blinking(cx));
-        }
-    }
-
     /// Records a patch for undo. Called before making changes to content.
     /// Returns true if a new entry was created, false if grouped with previous.
     pub(super) fn push_undo_patch(&mut self, range: Range<usize>, new_text_len: usize) {
@@ -1110,37 +1106,8 @@ impl InputState {
         logical_lines
     }
 
-    /// Processes a focus-flag update during window paint, returning whether the cursor should be visible in this frame.
-    /// Returns false if the cursor is blinking and not currently visible.
-    pub(super) fn toggle_cursor_on_focus_change(
-        &mut self,
-        is_focused: bool,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        // Update cursor blink based on focus changes
-        let was_focused = self.was_focused;
-        self.was_focused = is_focused;
-
-        match &self.cursor_blink {
-            None => true,
-            Some((cursor_blink, _)) => match (is_focused, was_focused) {
-                (true, false) => {
-                    cursor_blink.update(cx, |cursor, cx| cursor.enable(cx));
-                    cx.emit(InputStateEvent::Focus);
-                    true
-                }
-                (false, true) => {
-                    cursor_blink.update(cx, |cursor, cx| cursor.disable(cx));
-                    cx.emit(InputStateEvent::Blur);
-                    false
-                }
-                _ => cursor_blink.read(cx).visible(),
-            },
-        }
-    }
-
     fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
-        self.pause_cursor_blink(cx);
+        cx.emit(CursorTrigger::PauseBlinkingForUserAction);
         let offset = offset.min(self.content.len());
         self.selected_range = offset..offset;
         self.selection_direction = NavigationDirection::Forward;
@@ -1149,7 +1116,7 @@ impl InputState {
     }
 
     fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
-        self.pause_cursor_blink(cx);
+        cx.emit(CursorTrigger::PauseBlinkingForUserAction);
         let offset = offset.min(self.content.len());
         self.apply_selection_offset(offset);
         self.scroll_to_cursor();

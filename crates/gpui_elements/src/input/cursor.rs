@@ -1,45 +1,44 @@
-use gpui::Context;
+use gpui::{Bounds, Context, Element, Hsla, IntoElement, Pixels, Point, Render};
 use std::time::Duration;
 
 /// Default interval for cursor blinking.
 pub const DEFAULT_BLINK_INTERVAL: Duration = Duration::from_millis(500);
 
-pub trait Cursor {}
-
-/// Configuration for cursor blinking, to be provided to InputState.
-pub enum CursorBlinkType<'app> {
-    /// The cursor will not blink.
-    Disabled,
-    /// The cursor will blink at some interval.
-    Enabled {
-        /// Provide the app so that the internal state to track cursor blinking can be created.
-        app: &'app mut gpui::App,
-        /// The interval to blink at. If none, the default value of 500ms is used (defined by `DEFAULT_BLINK_INTERVAL`).
-        interval: Option<Duration>,
-    },
-}
-
 /// The state of an input's cursor blinking. While active, the cursor's visibility changes at some interval.
 /// This blinking can be temporarily paused (e.g. during typing).
-pub(super) struct CursorBlink {
+pub struct Cursor {
     interval: Duration,
     generation: usize,
     visible: bool,
     active: bool,
     paused: bool,
+    color: Hsla,
+    /// Tracks whether we were focused on the last update.
+    was_focused: bool,
+    point: Point<Pixels>,
+    height: Pixels,
 }
 
-impl CursorBlink {
+impl Cursor {
     /// Initializes the cursor blinking with the cursor already being visible.
     #[track_caller]
-    pub fn new(interval: Duration) -> Self {
+    pub fn new(interval: Option<Duration>) -> Self {
         Self {
-            interval,
+            interval: interval.unwrap_or_default(),
             generation: 0,
             visible: true,
             active: false,
             paused: false,
+            color: Hsla::white(),
+            was_focused: false,
+            point: Point::default(),
+            height: Pixels::ZERO,
         }
+    }
+
+    pub fn color(mut self, color: Hsla) -> Self {
+        self.color = color;
+        self
     }
 
     /// Returns whether the cursor should currently be rendered.
@@ -120,5 +119,95 @@ impl CursorBlink {
             }
         })
         .detach();
+    }
+
+    pub fn update_input(
+        &mut self,
+        is_focused: bool,
+        pos: Point<Pixels>,
+        line_height: Pixels,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let was_focused = self.was_focused;
+        self.was_focused = is_focused;
+
+        self.point = pos;
+        self.height = line_height;
+
+        match (self.interval.is_zero(), is_focused, was_focused) {
+            (true, _, _) => true,
+            (false, true, false) => {
+                self.enable(cx);
+                true
+            }
+            (false, false, true) => {
+                self.disable(cx);
+                false
+            }
+            (false, _, _) => self.visible,
+        }
+    }
+}
+
+impl IntoElement for Cursor {
+    type Element = Self;
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl Element for Cursor {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<gpui::ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _id: Option<&gpui::GlobalElementId>,
+        _inspector_id: Option<&gpui::InspectorElementId>,
+        window: &mut gpui::Window,
+        cx: &mut gpui::App,
+    ) -> (gpui::LayoutId, Self::RequestLayoutState) {
+        let layout_id = window.request_layout(gpui::Style::default(), None, cx);
+        (layout_id, ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _id: Option<&gpui::GlobalElementId>,
+        _inspector_id: Option<&gpui::InspectorElementId>,
+        _bounds: gpui::Bounds<gpui::Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        _window: &mut gpui::Window,
+        _cx: &mut gpui::App,
+    ) -> Self::PrepaintState {
+        ()
+    }
+
+    fn paint(
+        &mut self,
+        _id: Option<&gpui::GlobalElementId>,
+        _inspector_id: Option<&gpui::InspectorElementId>,
+        bounds: gpui::Bounds<gpui::Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        _prepaint: &mut Self::PrepaintState,
+        window: &mut gpui::Window,
+        _cx: &mut gpui::App,
+    ) {
+        const CURSOR_WIDTH: f32 = 2.0;
+        window.paint_quad(gpui::fill(
+            Bounds::new(
+                gpui::point(bounds.left(), bounds.top()) + self.point,
+                gpui::size(gpui::px(CURSOR_WIDTH), self.height),
+            ),
+            self.color,
+        ));
     }
 }

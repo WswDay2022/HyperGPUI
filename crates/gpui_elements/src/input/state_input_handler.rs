@@ -1,4 +1,4 @@
-use crate::input::InputStateEvent;
+use crate::input::{CursorTrigger, InputStateEvent};
 use gpui::{
     Bounds, Context, EntityInputHandler, NavigationDirection, Pixels, Point, UTF16Selection,
     Window, point, px,
@@ -73,7 +73,7 @@ impl EntityInputHandler for super::InputState {
         self.set_marked_range(None);
         self.mark_layout_dirty();
 
-        self.pause_cursor_blink(cx);
+        cx.emit(CursorTrigger::PauseBlinkingForUserAction);
         cx.emit(InputStateEvent::TextChanged);
         cx.notify();
     }

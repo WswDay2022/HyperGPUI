@@ -1,4 +1,4 @@
-use crate::input::{Input, InputColors, InputLayoutData, InputLogicalLine, InputState};
+use crate::input::{Cursor, Input, InputColors, InputLayoutData, InputLogicalLine, InputState};
 use gpui::{
     Along, App, Axis, Bounds, ContentMask, CursorStyle, DispatchPhase, Display, Element, ElementId,
     ElementInputHandler, Entity, Focusable, GlobalElementId, Hitbox, HitboxBehavior, Hsla,
@@ -9,17 +9,18 @@ use gpui::{
 use smallvec::SmallVec;
 use std::ops::Range;
 
-const CURSOR_WIDTH: f32 = 2.0;
 const MARKED_TEXT_UNDERLINE_THICKNESS: f32 = 2.0;
 
 pub struct InputLayoutState {
     text_style: TextStyle,
     #[allow(dead_code)]
     child_layout_ids: SmallVec<[LayoutId; 2]>,
+    cursor_layout: Option<<Cursor as Element>::RequestLayoutState>,
 }
 
 pub struct InputPrepaintState {
     hitbox: Option<Hitbox>,
+    cursor_prepaint: Option<<Cursor as Element>::PrepaintState>,
 }
 
 impl Element for Input {
@@ -43,6 +44,7 @@ impl Element for Input {
     ) -> (LayoutId, Self::RequestLayoutState) {
         let mut resolved_text_style = None;
         let mut child_layout_ids = SmallVec::new();
+        let mut cursor_layout = None;
 
         let layout_id = self.interactivity.request_layout(
             global_id,
@@ -65,11 +67,13 @@ impl Element for Input {
                         }
                     }
 
-                    child_layout_ids = self
-                        .cursor
-                        .iter_mut()
-                        .map(|cursor| cursor.request_layout(window, cx))
-                        .collect::<SmallVec<_>>();
+                    if let Some(cursor) = &self.cursor {
+                        let (layout_id, layout) = cursor.update(cx, |cursor, cx| {
+                            cursor.request_layout(global_id, inspector_id, window, cx)
+                        });
+                        child_layout_ids.push(layout_id);
+                        cursor_layout = Some(layout);
+                    }
 
                     window.request_layout(layout_style, child_layout_ids.iter().copied(), cx)
                 })
@@ -79,6 +83,7 @@ impl Element for Input {
         let layout_state = InputLayoutState {
             text_style: resolved_text_style.unwrap_or_else(|| window.text_style()),
             child_layout_ids,
+            cursor_layout,
         };
         (layout_id, layout_state)
     }
@@ -112,6 +117,7 @@ impl Element for Input {
             input.apply_layout_update(layout_data, window);
         });
 
+        let mut cursor_prepaint = None;
         let hitbox = self.interactivity.prepaint(
             global_id,
             inspector_id,
@@ -125,8 +131,21 @@ impl Element for Input {
 
                 if style.display != Display::None {
                     window.with_element_offset(scroll_offset, |window| {
-                        if let Some(cursor) = &mut self.cursor {
-                            cursor.prepaint(window, cx);
+                        match (&mut self.cursor, &mut layout_state.cursor_layout) {
+                            (Some(cursor), Some(layout)) => {
+                                let prepaint = cursor.update(cx, |cursor, cx| {
+                                    cursor.prepaint(
+                                        global_id,
+                                        inspector_id,
+                                        bounds,
+                                        layout,
+                                        window,
+                                        cx,
+                                    )
+                                });
+                                cursor_prepaint = Some(prepaint);
+                            }
+                            _ => {}
                         }
                     });
                 }
@@ -135,7 +154,10 @@ impl Element for Input {
             },
         );
 
-        InputPrepaintState { hitbox }
+        InputPrepaintState {
+            hitbox,
+            cursor_prepaint,
+        }
     }
 
     fn paint(
@@ -166,10 +188,6 @@ impl Element for Input {
         let is_focused = focus_handle.is_focused(window);
         let colors = self.colors;
 
-        let is_cursor_visible = self.input.update(cx, |input, cx| {
-            input.toggle_cursor_on_focus_change(is_focused, cx)
-        });
-
         let perform_paint = |style: &Style, window: &mut Window, cx: &mut App| {
             if style.display == Display::None {
                 return;
@@ -182,14 +200,39 @@ impl Element for Input {
                 text_style: &text_style,
                 placeholder: placeholder.as_ref(),
                 colors: &colors,
-                cursor_visible: is_cursor_visible,
             };
             context.process_mouse_events(&self.input, window, cx);
             window.with_content_mask(Some(ContentMask { bounds }), |window| {
                 context.paint(window, cx);
 
-                if let Some(cursor) = &mut self.cursor {
-                    cursor.paint(window, cx);
+                match (
+                    &mut self.cursor,
+                    &mut layout_state.cursor_layout,
+                    &mut prepaint_state.cursor_prepaint,
+                ) {
+                    (Some(cursor), Some(layout), Some(prepaint)) => {
+                        cursor.update(cx, |cursor, cx| {
+                            let cursor_pos = context.find_cursor_position_in_layouts();
+                            let visible = cursor.update_input(
+                                is_focused,
+                                cursor_pos,
+                                context.snapshot.line_height,
+                                cx,
+                            );
+                            if is_focused && visible && context.snapshot.selected_range.is_empty() {
+                                cursor.paint(
+                                    global_id,
+                                    inspector_id,
+                                    bounds,
+                                    layout,
+                                    prepaint,
+                                    window,
+                                    cx,
+                                );
+                            }
+                        });
+                    }
+                    _ => {}
                 }
             });
         };
@@ -253,7 +296,6 @@ struct PaintContext<'app> {
     text_style: &'app TextStyle,
     placeholder: Option<&'app SharedString>,
     colors: &'app InputColors,
-    cursor_visible: bool,
 }
 
 impl<'app> PaintContext<'app> {
@@ -388,10 +430,6 @@ impl<'app> PaintContext<'app> {
         }
 
         self.paint_marked_underline(window);
-
-        if self.is_focused && self.snapshot.selected_range.is_empty() && self.cursor_visible {
-            self.paint_cursor(window);
-        }
     }
 
     fn paint_selection(&self, window: &mut Window) {
@@ -555,17 +593,6 @@ impl<'app> PaintContext<'app> {
             return cursor_pos + point(px(0.), line_y);
         }
         Point::default()
-    }
-
-    fn paint_cursor(&self, window: &mut Window) {
-        let cursor_pos = self.find_cursor_position_in_layouts();
-        window.paint_quad(fill(
-            Bounds::new(
-                point(self.bounds.left(), self.bounds.top()) + cursor_pos,
-                size(px(CURSOR_WIDTH), self.snapshot.line_height),
-            ),
-            self.colors.cursor,
-        ));
     }
 
     fn is_line_visible(&self, line: &InputLogicalLine) -> bool {

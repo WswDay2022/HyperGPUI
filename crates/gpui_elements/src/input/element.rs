@@ -15,7 +15,7 @@ pub struct Input {
     pub(super) interactivity: Interactivity,
     pub(super) placeholder: Option<SharedString>,
     pub(super) colors: InputColors,
-    pub(super) cursor: Option<AnyElement>,
+    pub(super) cursor: Option<Entity<Cursor>>,
 }
 
 impl Input {
@@ -145,13 +145,6 @@ impl Input {
         self
     }
 
-    /// Sets the "cursor" color for the input element.
-    /// This is the color of the user's text cursor.
-    pub fn cursor_color(mut self, color: Hsla) -> Self {
-        self.colors.cursor = color;
-        self
-    }
-
     /// Sets the "placeholder" color for the input element.
     /// This is the color of the placeholder string, when one is assigned and the text field is empty.
     pub fn placeholder_color(mut self, color: Hsla) -> Self {
@@ -166,12 +159,8 @@ impl Input {
         self
     }
 
-    pub fn cursor<T>(mut self, entity: Entity<T>) -> Self
-    where
-        T: Cursor,
-        Entity<T>: Into<AnyElement>,
-    {
-        self.cursor = Some(entity.into());
+    pub fn cursor(mut self, entity: Entity<Cursor>) -> Self {
+        self.cursor = Some(entity);
         self
     }
 }
