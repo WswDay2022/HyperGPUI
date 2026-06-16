@@ -16,8 +16,10 @@ use unicode_segmentation::UnicodeSegmentation;
 #[derive(Clone, Debug)]
 pub enum InputStateEvent {
     /// Emitted when the input gains focus.
+    /// TODO: an emit was removed from element painting
     Focus,
     /// Emitted when the input loses focus.
+    /// TODO: an emit was removed from element painting
     Blur,
     /// Emitted when the text content changes.
     TextChanged,
@@ -30,7 +32,6 @@ impl EventEmitter<InputStateEvent> for InputState {}
 
 #[derive(Clone, Debug)]
 pub enum CursorTrigger {
-    // TODO: cursor needs to receive this
     PauseBlinkingForUserAction,
 }
 impl EventEmitter<CursorTrigger> for InputState {}

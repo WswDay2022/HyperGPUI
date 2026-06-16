@@ -15,7 +15,7 @@ pub struct Input {
     pub(super) interactivity: Interactivity,
     pub(super) placeholder: Option<SharedString>,
     pub(super) colors: InputColors,
-    pub(super) cursor: Option<Entity<Cursor>>,
+    pub(super) cursor: Option<Cursor>,
 }
 
 impl Input {
@@ -159,8 +159,8 @@ impl Input {
         self
     }
 
-    pub fn cursor(mut self, entity: Entity<Cursor>) -> Self {
-        self.cursor = Some(entity);
+    pub fn text_cursor(mut self, cursor: Cursor) -> Self {
+        self.cursor = Some(cursor);
         self
     }
 }

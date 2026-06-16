@@ -67,10 +67,9 @@ impl Element for Input {
                         }
                     }
 
-                    if let Some(cursor) = &self.cursor {
-                        let (layout_id, layout) = cursor.update(cx, |cursor, cx| {
-                            cursor.request_layout(global_id, inspector_id, window, cx)
-                        });
+                    if let Some(cursor) = &mut self.cursor {
+                        let (layout_id, layout) =
+                            cursor.request_layout(global_id, inspector_id, window, cx);
                         child_layout_ids.push(layout_id);
                         cursor_layout = Some(layout);
                     }
@@ -133,16 +132,14 @@ impl Element for Input {
                     window.with_element_offset(scroll_offset, |window| {
                         match (&mut self.cursor, &mut layout_state.cursor_layout) {
                             (Some(cursor), Some(layout)) => {
-                                let prepaint = cursor.update(cx, |cursor, cx| {
-                                    cursor.prepaint(
-                                        global_id,
-                                        inspector_id,
-                                        bounds,
-                                        layout,
-                                        window,
-                                        cx,
-                                    )
-                                });
+                                let prepaint = cursor.prepaint(
+                                    global_id,
+                                    inspector_id,
+                                    bounds,
+                                    layout,
+                                    window,
+                                    cx,
+                                );
                                 cursor_prepaint = Some(prepaint);
                             }
                             _ => {}
@@ -211,26 +208,24 @@ impl Element for Input {
                     &mut prepaint_state.cursor_prepaint,
                 ) {
                     (Some(cursor), Some(layout), Some(prepaint)) => {
-                        cursor.update(cx, |cursor, cx| {
-                            let cursor_pos = context.find_cursor_position_in_layouts();
-                            let visible = cursor.update_input(
-                                is_focused,
-                                cursor_pos,
-                                context.snapshot.line_height,
+                        let cursor_pos = context.find_cursor_position_in_layouts();
+                        let visible = cursor.update_input(
+                            is_focused,
+                            cursor_pos,
+                            context.snapshot.line_height,
+                            cx,
+                        );
+                        if is_focused && visible && context.snapshot.selected_range.is_empty() {
+                            cursor.paint(
+                                global_id,
+                                inspector_id,
+                                bounds,
+                                layout,
+                                prepaint,
+                                window,
                                 cx,
                             );
-                            if is_focused && visible && context.snapshot.selected_range.is_empty() {
-                                cursor.paint(
-                                    global_id,
-                                    inspector_id,
-                                    bounds,
-                                    layout,
-                                    prepaint,
-                                    window,
-                                    cx,
-                                );
-                            }
-                        });
+                        }
                     }
                     _ => {}
                 }

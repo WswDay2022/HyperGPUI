@@ -11,7 +11,7 @@ mod storage;
 pub(self) mod unicode;
 
 pub use colors::*;
-pub(self) use cursor::*;
+pub use cursor::*;
 pub use element::*;
 pub(self) use history::*;
 pub use layout::*;
@@ -22,10 +22,5 @@ pub use storage::*;
 fn make_element(app: &mut gpui::App) -> impl gpui::IntoElement {
     use gpui::AppContext;
     let state = app.new(|cx| InputState::new(cx));
-    let cursor = app.new(|cx| {
-        let mut cursor = Cursor::new(None);
-        cursor.subscribe_to(&state, cx);
-        cursor
-    });
-    input(&state, app).cursor(cursor)
+    input(&state, app).text_cursor(default_cursor(&state, app))
 }
