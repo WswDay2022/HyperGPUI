@@ -3,8 +3,8 @@ use crate::editable_text::{
     notify::{TextChanged, TextHistoryPushed},
 };
 use gpui::{
-    App, AppContext, ClipboardItem, FocusHandle, Focusable, NavigationDirection, Pixels, Point,
-    UTF16Selection, Window,
+    App, ClipboardItem, FocusHandle, Focusable, NavigationDirection, Pixels, Point, UTF16Selection,
+    Window,
 };
 use std::ops::Range;
 
@@ -45,8 +45,6 @@ impl Focusable for TextInputStateBase {
 }
 
 impl TextInputStateBase {
-    /// Creates a new `Input` with the specified multiline setting.
-    /// Cursor blinking is enabled by default.
     pub fn new(storage: impl Into<Box<dyn UnicodeTextStorage>>, cx: &mut App) -> Self {
         Self {
             storage: storage.into(),
