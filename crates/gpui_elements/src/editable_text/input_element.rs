@@ -1,9 +1,11 @@
+use crate::editable_text::{
+    EditableInputActionElement, StateBackedElement, TextInputState, UnicodeTextStorage,
+};
 use gpui::{
     App, Element, ElementId, Entity, Hitbox, InteractiveElement, Interactivity, IntoElement,
-    Length, SharedString, StyleRefinement, Styled, TextStyle,
+    SharedString, StyleRefinement, Styled, TextStyle, Window,
 };
-
-use crate::editable_text::{TextInputState, UnicodeTextStorage};
+use std::rc::Rc;
 
 #[track_caller]
 pub fn input(id: impl Into<ElementId>) -> TextInputElement {
@@ -11,9 +13,10 @@ pub fn input(id: impl Into<ElementId>) -> TextInputElement {
         id: id.into(),
         placeholder: None,
         interactivity: Interactivity::new(),
-        init_storage: None,
+        init_storage: InitStorage::default(),
     };
     this = this.key_context(super::DEFAULT_INPUT_CONTEXT);
+    this.register_actions();
     this
 }
 
@@ -22,7 +25,7 @@ pub struct TextInputElement {
     id: ElementId,
     placeholder: Option<SharedString>,
     interactivity: Interactivity,
-    init_storage: Option<Box<dyn Fn(&mut App) -> Box<dyn UnicodeTextStorage>>>,
+    init_storage: InitStorage,
 }
 
 impl InteractiveElement for TextInputElement {
@@ -41,6 +44,39 @@ impl IntoElement for TextInputElement {
     type Element = Self;
     fn into_element(self) -> Self::Element {
         self
+    }
+}
+
+#[derive(Clone, Default)]
+pub(super) struct InitStorage(Option<Rc<dyn Fn(&mut App) -> Box<dyn UnicodeTextStorage>>>);
+impl InitStorage {
+    fn exec(&self, cx: &mut App) -> Box<dyn UnicodeTextStorage> {
+        match &self.0 {
+            None => Box::new(String::new()),
+            Some(init) => (*init)(cx),
+        }
+    }
+}
+
+impl EditableInputActionElement for TextInputElement {}
+impl super::StateBackedElement for TextInputElement {
+    type State = TextInputState;
+    type InitProps = (ElementId, InitStorage);
+
+    fn init_props(&self) -> Self::InitProps {
+        (self.id.clone(), self.init_storage.clone())
+    }
+
+    fn get_or_init_state(
+        init_props: &Self::InitProps,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Entity<TextInputState> {
+        // Get the state from the app using the element's id as the key.
+        // If it doesnt exist, initialize a new state with the user's desired storage medium.
+        window.use_keyed_state(init_props.0.clone(), cx, |_window, cx| {
+            TextInputState::new(init_props.1.exec(cx), cx)
+        })
     }
 }
 
@@ -76,15 +112,7 @@ impl Element for TextInputElement {
     ) -> (gpui::LayoutId, Self::RequestLayoutState) {
         let mut resolved_text_style = None;
 
-        // Get the state from the app using the element's id as the key.
-        // If it doesnt exist, initialize a new state with the user's desired storage medium.
-        let state = window.use_keyed_state(self.id.clone(), cx, |_window, cx| {
-            let storage = match &self.init_storage {
-                None => Box::new(String::new()),
-                Some(init_storage) => (*init_storage)(cx),
-            };
-            TextInputState::new(storage, cx)
-        });
+        let state = self.get_state(window, cx);
 
         let layout_id = self.interactivity.request_layout(
             global_id,

@@ -3,8 +3,8 @@ use crate::editable_text::{
     notify::{TextChanged, TextHistoryPushed},
 };
 use gpui::{
-    App, ClipboardItem, FocusHandle, Focusable, NavigationDirection, Pixels, Point, UTF16Selection,
-    Window,
+    App, ClipboardItem, Entity, FocusHandle, Focusable, NavigationDirection, Pixels, Point,
+    UTF16Selection, Window,
 };
 use std::ops::Range;
 
@@ -12,6 +12,23 @@ pub trait TextStateNotifier {
     fn notify_changed(&mut self);
     fn emit_text_changed(&mut self, event: TextChanged);
     fn emit_history(&mut self, event: TextHistoryPushed);
+}
+
+pub(super) trait StateBackedElement {
+    type State: 'static;
+    type InitProps: 'static;
+
+    fn init_props(&self) -> Self::InitProps;
+
+    fn get_or_init_state(
+        init_props: &Self::InitProps,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Entity<Self::State>;
+
+    fn get_state(&self, window: &mut Window, cx: &mut App) -> Entity<Self::State> {
+        Self::get_or_init_state(&self.init_props(), window, cx)
+    }
 }
 
 pub struct TextInputStateBase {
