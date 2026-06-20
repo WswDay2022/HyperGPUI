@@ -1,6 +1,18 @@
-use crate::editable_text::UnicodeTextStorage;
-use gpui::{App, FocusHandle, Focusable, NavigationDirection, Pixels, Point, UTF16Selection};
+use crate::editable_text::{
+    TextBoundary, UnicodeTextStorage,
+    notify::{TextChanged, TextHistoryPushed},
+};
+use gpui::{
+    App, AppContext, ClipboardItem, FocusHandle, Focusable, NavigationDirection, Pixels, Point,
+    UTF16Selection, Window,
+};
 use std::ops::Range;
+
+pub trait TextStateNotifier {
+    fn notify_changed(&mut self);
+    fn emit_text_changed(&mut self, event: TextChanged);
+    fn emit_history(&mut self, event: TextHistoryPushed);
+}
 
 pub struct TextInputStateBase {
     storage: Box<dyn UnicodeTextStorage>,
@@ -72,6 +84,10 @@ impl TextInputStateBase {
     pub fn caret_pos(&self) -> usize {
         self.selected_range.start
     }
+
+    pub fn set_selected_range(&mut self, range: Range<usize>) {
+        self.selected_range = range;
+    }
 }
 
 impl TextInputStateBase {
@@ -117,17 +133,36 @@ impl TextInputStateBase {
         range.start.min(storage_len_utf8)..range.end.min(storage_len_utf8)
     }
 
-    pub fn replace_text(&mut self, start: usize, end: usize, new_text: &str) {
+    pub fn replace_text(&mut self, range: &Range<usize>, new_text: &str) {
         let storage_len_utf8 = self.storage.content_utf8().len();
-        let start = start.min(storage_len_utf8);
-        let end = end.max(start).min(storage_len_utf8);
+        let start = range.start.min(storage_len_utf8);
+        let end = range.end.max(start).min(storage_len_utf8);
         self.storage.replace_range(start..end, new_text);
 
         let new_caret = start + new_text.len();
         self.selected_range = new_caret..new_caret;
     }
 
-    pub fn replace_text_in_range_bytes(&mut self, range: Range<usize>, mut text_to_insert: &str) {
+    fn emit_change_for_undo(
+        &self,
+        cx: &mut impl TextStateNotifier,
+        range: Range<usize>,
+        length: usize,
+    ) {
+        cx.emit_history(TextHistoryPushed::new(
+            range.clone(),
+            length,
+            &*self.storage,
+            self.selected_range.clone(),
+        ));
+    }
+
+    pub fn replace_text_in_range_bytes(
+        &mut self,
+        range: Range<usize>,
+        mut text_to_insert: &str,
+        cx: &mut impl TextStateNotifier,
+    ) {
         // TODO: Apply text sanitization
         // single-line fields should prune \n and \r
         // fields should be able to provide a max_length or other validations on text-input
@@ -142,13 +177,9 @@ impl TextInputStateBase {
             text_to_insert = &text_to_insert[..text_to_insert.len().min(room)];
         }
 
-        // TODO: Push history diff
-        // self.push_undo_patch(range.clone(), text_to_insert.len());
-
+        self.emit_change_for_undo(cx, range.clone(), text_to_insert.len());
         self.storage.replace_range(range, text_to_insert);
         self.marked_range = None;
-
-        // TODO: caller emits events
     }
 
     pub fn ime_mark_text_in_range(&mut self, range: &Range<usize>, text_len: usize) {
@@ -176,5 +207,209 @@ impl TextInputStateBase {
                 range_overwritten.start + text_len..range_overwritten.start + text_len
             })
         };
+    }
+}
+
+impl TextInputStateBase {
+    fn move_to(&mut self, caret_pos: usize) {
+        //cx.emit(CursorTrigger::PauseBlinkingForUserAction);
+        let caret_pos = caret_pos.min(self.storage.content_utf8().len());
+        self.selected_range = caret_pos..caret_pos;
+        //self.scroll_to_cursor();
+        //cx.notify_changed();
+    }
+
+    fn select_to(&mut self, caret_pos: usize) {
+        //cx.emit(CursorTrigger::PauseBlinkingForUserAction);
+        let caret_pos = caret_pos.min(self.storage().content_utf8().len());
+        self.selected_range = caret_pos..self.selected_range.start;
+        //self.scroll_to_cursor();
+        //cx.notify_changed();
+    }
+
+    pub fn delete(
+        &mut self,
+        direction: NavigationDirection,
+        boundary: TextBoundary,
+        cx: &mut impl TextStateNotifier,
+    ) {
+        let range = self.selected_range();
+        let range = match range.is_empty() {
+            false => range,
+            true => self
+                .storage
+                .range_from_caret(self.caret_pos(), direction, boundary),
+        };
+
+        self.emit_change_for_undo(cx, range.clone(), 0);
+
+        self.replace_text(&range, "");
+        self.marked_range = None;
+
+        cx.emit_text_changed(TextChanged);
+        cx.notify_changed();
+    }
+
+    pub fn nav_linear(
+        &mut self,
+        direction: NavigationDirection,
+        boundary: TextBoundary,
+        _cx: &mut impl TextStateNotifier,
+    ) {
+        let caret_pos = match self.selected_range.is_empty() {
+            false => match direction {
+                NavigationDirection::Back => self.selected_range.start,
+                NavigationDirection::Forward => self.selected_range.end,
+            },
+            true => self
+                .storage
+                .offset_from_caret(self.caret_pos(), direction, boundary),
+        };
+        self.move_to(caret_pos);
+    }
+
+    pub fn select_all(&mut self, _cx: &mut impl TextStateNotifier) {
+        self.selected_range = 0..self.storage.content_utf8().len();
+    }
+
+    pub fn select_linear(
+        &mut self,
+        direction: NavigationDirection,
+        boundary: TextBoundary,
+        _cx: &mut impl TextStateNotifier,
+    ) {
+        let caret_pos = self
+            .storage
+            .offset_from_caret(self.caret_pos(), direction, boundary);
+        self.select_to(caret_pos);
+    }
+
+    pub fn cut<T>(&mut self, cx: &mut T)
+    where
+        T: TextStateNotifier + std::ops::Deref<Target = App>,
+    {
+        if !self.selected_range.is_empty() {
+            // Cut selected text
+            let slice = &self.storage.content_utf8()[self.selected_range.clone()];
+            cx.write_to_clipboard(ClipboardItem::new_string(slice.to_string()));
+            self.replace_text_in_range_bytes(self.selected_range.clone(), "", cx);
+        } else {
+            // No selection: cut the entire current line (including newline)
+            let caret = self.caret_pos();
+            let line_start = self.storage.find_line_start(caret);
+            let line_end = self.storage.find_line_end(caret);
+            let storage_len_utf8 = self.storage.content_utf8().len();
+
+            // Include the newline character if there is one after the line
+            let cut_end = if line_end < storage_len_utf8 {
+                line_end + 1 // Include the newline
+            } else if line_start > 0 {
+                // Last line with no trailing newline - include preceding newline instead
+                line_end
+            } else {
+                line_end
+            };
+
+            // For last line, also remove the preceding newline if it exists
+            let cut_start = if line_end >= storage_len_utf8 && line_start > 0 {
+                line_start - 1 // Include preceding newline for last line
+            } else {
+                line_start
+            };
+
+            self.selected_range = cut_start..cut_end;
+
+            let slice = &self.storage.content_utf8()[self.selected_range.clone()];
+            cx.write_to_clipboard(ClipboardItem::new_string(slice.to_string()));
+
+            self.replace_text_in_range_bytes(self.selected_range.clone(), "", cx);
+        }
+        cx.emit_text_changed(TextChanged);
+        cx.notify_changed();
+    }
+
+    pub fn copy(&mut self, app: &mut App) {
+        if !self.selected_range.is_empty() {
+            let slice = &self.storage.content_utf8()[self.selected_range.clone()];
+            app.write_to_clipboard(ClipboardItem::new_string(slice.to_string()));
+        }
+    }
+
+    pub fn paste<T>(&mut self, cx: &mut T)
+    where
+        T: TextStateNotifier + std::ops::Deref<Target = App>,
+    {
+        let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
+            return;
+        };
+        self.replace_text_in_range_bytes(self.ime_resolve_range(None), &text, cx);
+        cx.emit_text_changed(TextChanged);
+        cx.notify_changed();
+    }
+
+    pub fn on_mouse_down<Context>(
+        &mut self,
+        position: Point<Pixels>,
+        character_pos: usize,
+        click_count: usize,
+        shift: bool,
+        window: &mut Window,
+        cx: &mut Context,
+    ) where
+        Context: TextStateNotifier + std::ops::DerefMut<Target = App>,
+    {
+        window.focus(&self.focus_handle, cx);
+        self.is_selecting = true;
+
+        let is_same_position = self
+            .last_click_position
+            .map(|last| {
+                let threshold = gpui::px(4.);
+                (position.x - last.x).abs() < threshold && (position.y - last.y).abs() < threshold
+            })
+            .unwrap_or(false);
+
+        if is_same_position && click_count > 1 {
+            self.click_count = click_count;
+        } else {
+            self.click_count = 1;
+        }
+        self.last_click_position = Some(position);
+
+        match self.click_count {
+            2 => {
+                let (word_start, word_end) = self.storage.word_range_at(character_pos);
+                self.selected_range = word_start..word_end;
+                //cx.notify();
+            }
+            3 => {
+                let line_start = self.storage.find_line_start(character_pos);
+                let line_end = self.storage.find_line_end(character_pos);
+                let line_end_with_newline = if line_end < self.storage.content_utf8().len() {
+                    line_end + 1
+                } else {
+                    line_end
+                };
+                self.selected_range = line_start..line_end_with_newline;
+                //cx.notify();
+            }
+            _ => {
+                if shift {
+                    self.select_to(character_pos);
+                } else {
+                    self.move_to(character_pos);
+                }
+            }
+        }
+    }
+
+    pub fn on_mouse_up(&mut self) {
+        self.is_selecting = false;
+    }
+
+    pub fn on_mouse_move(&mut self, character_pos: usize, _cx: &mut impl TextStateNotifier) {
+        if self.is_selecting && self.click_count == 1 {
+            self.select_to(character_pos);
+        }
     }
 }

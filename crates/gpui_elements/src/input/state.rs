@@ -1,9 +1,9 @@
 use super::actions::*;
 use crate::input::{InputLayoutStyle, InputStorage};
 use gpui::{
-    App, AppContext, ClipboardItem, Context, Entity, EntityId, EntityInputHandler, EventEmitter,
-    FocusHandle, Focusable, NavigationDirection, Pixels, Point, Render, SharedString, Size,
-    Subscription, TextRun, TextStyle, Window, WrappedLine, point, px,
+    App, ClipboardItem, Context, EntityId, EntityInputHandler, EventEmitter, FocusHandle,
+    Focusable, NavigationDirection, Pixels, Point, SharedString, Size, TextRun, TextStyle, Window,
+    WrappedLine, point, px,
 };
 use std::{
     ops::Range,

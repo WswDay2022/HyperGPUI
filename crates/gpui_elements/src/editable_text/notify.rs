@@ -15,7 +15,7 @@ impl TextHistoryPushed {
     pub fn new(
         range: Range<usize>,
         new_length: usize,
-        storage: impl UnicodeTextStorage,
+        storage: &dyn UnicodeTextStorage,
         selected_range: Range<usize>,
     ) -> Self {
         let timestamp = Instant::now();

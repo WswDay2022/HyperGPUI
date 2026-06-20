@@ -1,6 +1,11 @@
-use crate::editable_text::{TextInputStateBase, notify::TextChanged};
+use super::notify::TextHistoryPushed;
+use crate::editable_text::{
+    EditableTextActionHandler, TextBoundary, TextInputStateBase, TextStateNotifier,
+    notify::TextChanged,
+};
 use gpui::{
-    Bounds, Context, EntityInputHandler, EventEmitter, Pixels, Point, UTF16Selection, Window,
+    Bounds, Context, EntityInputHandler, EventEmitter, NavigationDirection, Pixels, Point,
+    UTF16Selection, Window,
 };
 use std::ops::Range;
 
@@ -9,6 +14,21 @@ pub struct TextInputState {
 }
 
 impl EventEmitter<TextChanged> for TextInputState {}
+impl EventEmitter<TextHistoryPushed> for TextInputState {}
+
+impl TextStateNotifier for Context<'_, TextInputState> {
+    fn notify_changed(&mut self) {
+        self.notify();
+    }
+
+    fn emit_text_changed(&mut self, event: TextChanged) {
+        self.emit(event);
+    }
+
+    fn emit_history(&mut self, event: TextHistoryPushed) {
+        self.emit(event);
+    }
+}
 
 impl EntityInputHandler for TextInputState {
     fn text_for_range(
@@ -52,11 +72,11 @@ impl EntityInputHandler for TextInputState {
     ) {
         let range_utf8 = self.internal.ime_resolve_range(range_utf16);
         self.internal
-            .replace_text_in_range_bytes(range_utf8, text_to_insert);
+            .replace_text_in_range_bytes(range_utf8, text_to_insert, cx);
         //self.mark_layout_dirty();
         //cx.emit(CursorTrigger::PauseBlinkingForUserAction);
-        cx.emit(TextChanged);
-        cx.notify();
+        cx.emit_text_changed(TextChanged);
+        cx.notify_changed();
     }
 
     fn replace_and_mark_text_in_range(
@@ -69,7 +89,7 @@ impl EntityInputHandler for TextInputState {
     ) {
         let range = self.internal.ime_resolve_range(range_utf16);
         self.internal
-            .replace_text_in_range_bytes(range.clone(), text_to_insert);
+            .replace_text_in_range_bytes(range.clone(), text_to_insert, cx);
         self.internal
             .ime_mark_text_in_range(&range, text_to_insert.len());
         self.internal.ime_mark_selected_range(
@@ -78,8 +98,8 @@ impl EntityInputHandler for TextInputState {
             text_to_insert.len(),
         );
         //self.mark_layout_dirty();
-        cx.emit(TextChanged);
-        cx.notify();
+        cx.emit_text_changed(TextChanged);
+        cx.notify_changed();
     }
 
     fn bounds_for_range(
@@ -99,5 +119,245 @@ impl EntityInputHandler for TextInputState {
         _cx: &mut Context<Self>,
     ) -> Option<usize> {
         unimplemented!()
+    }
+}
+
+impl<'app> EditableTextActionHandler<'app> for TextInputState {
+    type Context = gpui::Context<'app, Self>;
+
+    fn escape(&mut self, _: &super::Escape, window: &mut Window, cx: &mut Self::Context) {
+        self.internal.set_selected_range(0..0);
+        cx.notify();
+
+        window.blur();
+    }
+
+    fn insert_enter(&mut self, _: &super::Enter, _w: &mut Window, _cx: &mut Self::Context) {}
+
+    fn insert_tab(&mut self, _: &super::Tab, window: &mut Window, cx: &mut Self::Context) {
+        self.replace_text_in_range(None, "\t", window, cx);
+    }
+
+    fn backspace(&mut self, _: &super::Backspace, _: &mut Window, cx: &mut Self::Context) {
+        self.internal
+            .delete(NavigationDirection::Back, TextBoundary::Graphmeme, cx);
+    }
+
+    fn delete(&mut self, _: &super::Delete, _w: &mut Window, cx: &mut Self::Context) {
+        self.internal
+            .delete(NavigationDirection::Forward, TextBoundary::Graphmeme, cx);
+    }
+
+    fn delete_word_left(
+        &mut self,
+        _: &super::DeleteWordLeft,
+        _w: &mut Window,
+        cx: &mut Self::Context,
+    ) {
+        self.internal
+            .delete(NavigationDirection::Back, TextBoundary::Word, cx);
+    }
+
+    fn delete_word_right(
+        &mut self,
+        _: &super::DeleteWordRight,
+        _w: &mut Window,
+        cx: &mut Self::Context,
+    ) {
+        self.internal
+            .delete(NavigationDirection::Forward, TextBoundary::Word, cx);
+    }
+
+    fn delete_to_line_start(
+        &mut self,
+        _: &super::DeleteToBeginningOfLine,
+        _w: &mut Window,
+        cx: &mut Self::Context,
+    ) {
+        self.internal
+            .delete(NavigationDirection::Back, TextBoundary::Line, cx);
+    }
+
+    fn delete_to_line_end(
+        &mut self,
+        _: &super::DeleteToEndOfLine,
+        _w: &mut Window,
+        cx: &mut Self::Context,
+    ) {
+        self.internal
+            .delete(NavigationDirection::Forward, TextBoundary::Line, cx);
+    }
+
+    fn nav_left(&mut self, _: &super::Left, _w: &mut Window, cx: &mut Self::Context) {
+        self.internal
+            .nav_linear(NavigationDirection::Back, TextBoundary::Graphmeme, cx);
+    }
+
+    fn nav_right(&mut self, _: &super::Right, _w: &mut Window, cx: &mut Self::Context) {
+        self.internal
+            .nav_linear(NavigationDirection::Forward, TextBoundary::Graphmeme, cx);
+    }
+
+    fn nav_up(&mut self, _: &super::Up, _w: &mut Window, cx: &mut Self::Context) {
+        // semantically equivalent to line
+        self.internal
+            .nav_linear(NavigationDirection::Back, TextBoundary::Line, cx);
+    }
+
+    fn nav_down(&mut self, _: &super::Down, _w: &mut Window, cx: &mut Self::Context) {
+        // semantically equivalent to line
+        self.internal
+            .nav_linear(NavigationDirection::Forward, TextBoundary::Line, cx);
+    }
+
+    fn nav_line_start(&mut self, _: &super::Home, _w: &mut Window, cx: &mut Self::Context) {
+        // semantically equivalent to document
+        self.internal
+            .nav_linear(NavigationDirection::Back, TextBoundary::Line, cx);
+    }
+
+    fn nav_line_end(&mut self, _: &super::End, _w: &mut Window, cx: &mut Self::Context) {
+        // semantically equivalent to document
+        self.internal
+            .nav_linear(NavigationDirection::Forward, TextBoundary::Line, cx);
+    }
+
+    fn nav_start(&mut self, _: &super::MoveToBeginning, _w: &mut Window, cx: &mut Self::Context) {
+        self.internal
+            .nav_linear(NavigationDirection::Back, TextBoundary::Document, cx);
+    }
+
+    fn nav_end(&mut self, _: &super::MoveToEnd, _w: &mut Window, cx: &mut Self::Context) {
+        self.internal
+            .nav_linear(NavigationDirection::Forward, TextBoundary::Document, cx);
+    }
+
+    fn nav_left_word(&mut self, _: &super::WordLeft, _w: &mut Window, cx: &mut Self::Context) {
+        self.internal
+            .nav_linear(NavigationDirection::Back, TextBoundary::Word, cx);
+    }
+
+    fn nav_right_word(&mut self, _: &super::WordRight, _w: &mut Window, cx: &mut Self::Context) {
+        self.internal
+            .nav_linear(NavigationDirection::Forward, TextBoundary::Word, cx);
+    }
+
+    fn select_all(&mut self, _: &super::SelectAll, _w: &mut Window, cx: &mut Self::Context) {
+        self.internal.select_all(cx);
+    }
+
+    fn select_left(&mut self, _: &super::SelectLeft, _w: &mut Window, cx: &mut Self::Context) {
+        self.internal
+            .select_linear(NavigationDirection::Back, TextBoundary::Graphmeme, cx);
+    }
+
+    fn select_right(&mut self, _: &super::SelectRight, _w: &mut Window, cx: &mut Self::Context) {
+        self.internal
+            .select_linear(NavigationDirection::Forward, TextBoundary::Graphmeme, cx);
+    }
+
+    fn select_up(&mut self, _: &super::SelectUp, _w: &mut Window, cx: &mut Self::Context) {
+        // semantically equivalent to select document
+        self.internal
+            .select_linear(NavigationDirection::Back, TextBoundary::Document, cx);
+    }
+
+    fn select_down(&mut self, _: &super::SelectDown, _w: &mut Window, cx: &mut Self::Context) {
+        // semantically equivalent to select document
+        self.internal
+            .select_linear(NavigationDirection::Forward, TextBoundary::Document, cx);
+    }
+
+    fn select_start(
+        &mut self,
+        _: &super::SelectToBeginning,
+        _w: &mut Window,
+        cx: &mut Self::Context,
+    ) {
+        self.internal
+            .select_linear(NavigationDirection::Back, TextBoundary::Document, cx);
+    }
+
+    fn select_end(&mut self, _: &super::SelectToEnd, _w: &mut Window, cx: &mut Self::Context) {
+        self.internal
+            .select_linear(NavigationDirection::Forward, TextBoundary::Document, cx);
+    }
+
+    fn select_left_word(
+        &mut self,
+        _: &super::SelectWordLeft,
+        _w: &mut Window,
+        cx: &mut Self::Context,
+    ) {
+        self.internal
+            .select_linear(NavigationDirection::Back, TextBoundary::Word, cx);
+    }
+
+    fn select_right_word(
+        &mut self,
+        _: &super::SelectWordRight,
+        _w: &mut Window,
+        cx: &mut Self::Context,
+    ) {
+        self.internal
+            .select_linear(NavigationDirection::Forward, TextBoundary::Word, cx);
+    }
+
+    fn cut(&mut self, _: &super::Cut, _w: &mut Window, cx: &mut Self::Context) {
+        self.internal.cut(cx);
+    }
+
+    fn copy(&mut self, _: &super::Copy, _w: &mut Window, cx: &mut Self::Context) {
+        self.internal.copy(cx);
+    }
+
+    fn paste(&mut self, _: &super::Paste, _w: &mut Window, cx: &mut Self::Context) {
+        self.internal.paste(cx);
+    }
+
+    fn undo(&mut self, _: &super::Undo, _w: &mut Window, _cx: &mut Self::Context) {
+        // TODO: STUB
+    }
+
+    fn redo(&mut self, _: &super::Redo, _w: &mut Window, _cx: &mut Self::Context) {
+        // TODO: STUB
+    }
+
+    fn on_mouse_down(
+        &mut self,
+        event: &gpui::MouseDownEvent,
+        text_position: gpui::Point<gpui::Pixels>,
+        window: &mut Window,
+        cx: &mut Self::Context,
+    ) {
+        let character_pos = self.internal.caret_pos(); // TODO: Should be index_for_pixel_point
+        self.internal.on_mouse_down(
+            text_position,
+            character_pos,
+            event.click_count,
+            event.modifiers.shift,
+            window,
+            cx,
+        );
+    }
+
+    fn on_mouse_up(
+        &mut self,
+        _event: &gpui::MouseUpEvent,
+        _w: &mut Window,
+        _cx: &mut Self::Context,
+    ) {
+        self.internal.on_mouse_up();
+    }
+
+    fn on_mouse_move(
+        &mut self,
+        _event: &gpui::MouseMoveEvent,
+        text_position: Point<Pixels>,
+        _w: &mut Window,
+        cx: &mut Self::Context,
+    ) {
+        let character_pos = self.internal.caret_pos(); // TODO: Should be index_for_pixel_point
+        self.internal.on_mouse_move(character_pos, cx);
     }
 }

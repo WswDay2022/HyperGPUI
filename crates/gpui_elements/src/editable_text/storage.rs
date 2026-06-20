@@ -1,5 +1,17 @@
+use gpui::NavigationDirection;
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
+
+pub enum TextBoundary {
+    /// The next utf-8 character in a direction from the caret
+    Graphmeme,
+    /// The next word in a direction from the caret
+    Word,
+    /// The start/end of the current line
+    Line,
+    /// The rest of the text to the start/end of a document
+    Document,
+}
 
 pub trait UnicodeTextStorage {
     /// Returns a reference to the utf8 string.
@@ -125,6 +137,57 @@ pub trait UnicodeTextStorage {
         }
 
         len_utf8
+    }
+
+    /// Returns the utf-8 character position of first character after the first new-line preceeding the character at the provided utf-8 character position.
+    fn find_line_start(&self, position: usize) -> usize {
+        let content = self.content_utf8();
+        content[..position.min(content.len())]
+            .rfind('\n')
+            .map(|pos| pos + 1)
+            .unwrap_or(0)
+    }
+
+    /// Returns the utf-8 character position of the character immediately before the first new-line character after the character at the provided utf-8 character position.
+    fn find_line_end(&self, position: usize) -> usize {
+        let content = self.content_utf8();
+        content[position.min(content.len())..]
+            .find('\n')
+            .map(|pos| position + pos)
+            .unwrap_or(content.len())
+    }
+
+    fn range_from_caret(
+        &self,
+        caret: usize,
+        direction: NavigationDirection,
+        magnitude: TextBoundary,
+    ) -> Range<usize> {
+        let offset = self.offset_from_caret(caret, direction, magnitude);
+        match direction {
+            NavigationDirection::Back => offset..caret,
+            NavigationDirection::Forward => caret..offset,
+        }
+    }
+
+    fn offset_from_caret(
+        &self,
+        caret: usize,
+        direction: NavigationDirection,
+        magnitude: TextBoundary,
+    ) -> usize {
+        use NavigationDirection::*;
+        use TextBoundary::*;
+        match (direction, magnitude) {
+            (Back, Graphmeme) => self.previous_boundary(caret),
+            (Forward, Graphmeme) => self.next_boundary(caret),
+            (Back, Word) => self.previous_word_boundary(caret),
+            (Forward, Word) => self.next_word_boundary(caret),
+            (Back, Line) => self.find_line_start(caret),
+            (Forward, Line) => self.find_line_end(caret),
+            (Back, Document) => 0,
+            (Forward, Document) => self.content_utf8().len(),
+        }
     }
 
     fn word_range_at(&self, offset: usize) -> (usize, usize) {
