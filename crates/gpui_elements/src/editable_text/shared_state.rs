@@ -3,8 +3,8 @@ use crate::editable_text::{
     notify::{TextChanged, TextHistoryPushed},
 };
 use gpui::{
-    App, ClipboardItem, Entity, FocusHandle, Focusable, NavigationDirection, Pixels, Point,
-    UTF16Selection, Window,
+    App, Bounds, ClipboardItem, Entity, FocusHandle, Focusable, NavigationDirection, Pixels, Point,
+    ShapedLine, UTF16Selection, Window,
 };
 use std::ops::Range;
 
@@ -53,6 +53,18 @@ pub struct TextInputStateBase {
     click_count: usize,
 
     focus_handle: FocusHandle,
+
+    layout_data: TextInputLayoutData,
+}
+
+#[derive(Default)]
+pub(super) struct TextInputLayoutData {
+    /// The `ShapedLine` produced by the painter's `prepaint`.
+    /// Cached so IME `bounds_for_range` / `character_index_for_point` can evaluate without re-shaping.
+    pub lines: Vec<ShapedLine>,
+    /// The bounds of the text area, in window coordinates.
+    /// Cached for IME operations.
+    pub bounds: Bounds<Pixels>,
 }
 
 impl Focusable for TextInputStateBase {
@@ -74,6 +86,8 @@ impl TextInputStateBase {
             click_count: 0,
 
             focus_handle: cx.focus_handle(),
+
+            layout_data: TextInputLayoutData::default(),
         }
     }
 
@@ -102,6 +116,14 @@ impl TextInputStateBase {
 
     pub fn set_selected_range(&mut self, range: Range<usize>) {
         self.selected_range = range;
+    }
+
+    pub(super) fn layout_data(&self) -> &TextInputLayoutData {
+        &self.layout_data
+    }
+
+    pub(super) fn layout_data_mut(&mut self) -> &mut TextInputLayoutData {
+        &mut self.layout_data
     }
 }
 

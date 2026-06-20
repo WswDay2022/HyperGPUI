@@ -16,6 +16,19 @@ pub struct TextAreaState {
 impl EventEmitter<TextChanged> for TextAreaState {}
 impl EventEmitter<TextHistoryPushed> for TextAreaState {}
 
+impl std::ops::Deref for TextAreaState {
+    type Target = TextInputStateBase;
+
+    fn deref(&self) -> &Self::Target {
+        &self.internal
+    }
+}
+impl std::ops::DerefMut for TextAreaState {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.internal
+    }
+}
+
 impl TextAreaState {
     pub fn new(storage: impl Into<Box<dyn UnicodeTextStorage>>, cx: &mut Context<Self>) -> Self {
         let internal = TextInputStateBase::new(storage, cx);
