@@ -7,7 +7,7 @@ use gpui::{
     ElementInputHandler, Entity, FocusHandle, Focusable, Hitbox, HitboxBehavior, Hsla,
     InteractiveElement, Interactivity, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent,
     MouseUpEvent, PaintQuad, Pixels, Point, ScrollWheelEvent, ShapedLine, SharedString, Style,
-    StyleRefinement, Styled, TextRun, TextStyle, Window, fill, point, size,
+    StyleRefinement, Styled, TextAlign, TextRun, TextStyle, Window, fill, point, size,
 };
 use smallvec::SmallVec;
 
@@ -74,7 +74,11 @@ impl super::StateBackedElement for TextInputElement {
 }
 
 enum PrepaintElement {
-    Line(ShapedLine),
+    Line {
+        line: ShapedLine,
+        point: Point<Pixels>,
+        align: TextAlign,
+    },
     Quad(PaintQuad),
 }
 
@@ -94,7 +98,7 @@ pub mod element {
         pub hitbox: Option<Hitbox>,
         pub focus_handle: FocusHandle,
         pub(super) elements: SmallVec<[PrepaintElement; 3]>,
-        pub scroll_x: Pixels,
+        pub scroll_offset: Point<Pixels>,
         pub display_text: SharedString,
         pub caret_visible: bool,
     }
@@ -160,8 +164,6 @@ impl Element for TextInputElement {
         let focus_handle = input.focus_handle(cx);
         let caret_pos = input.caret_pos();
         let selection = input.selected_range();
-        // TODO: horizontal scroll
-        let scroll_x_input = Pixels::ZERO; //input.scroll_x();
         // TODO: Cursor blinking
         let cursor_visible = true; // input.cursor_visible();
 
@@ -184,6 +186,20 @@ impl Element for TextInputElement {
             }
         };
 
+        let (hitbox, scroll_offset) = self.interactivity.prepaint(
+            global_id,
+            inspector_id,
+            bounds,
+            bounds.size,
+            window,
+            cx,
+            |_style, scroll_offset, hitbox, window, _cx| {
+                let hitbox =
+                    hitbox.or_else(|| Some(window.insert_hitbox(bounds, HitboxBehavior::Normal)));
+                (hitbox, scroll_offset)
+            },
+        );
+
         let style = window.text_style();
         let font_size = style.font_size.to_pixels(window.rem_size());
         let run = TextRun {
@@ -198,27 +214,18 @@ impl Element for TextInputElement {
             .text_system()
             .shape_line(display_text.clone(), font_size, &[run], None);
 
-        let caret_x_line = line.x_for_index(caret_pos);
-        let cursor_thickness = gpui::px(2.0);
-        let max_cursor_x = (bounds.size.width - cursor_thickness).max(Pixels::ZERO);
-        let max_scroll_x = (line.width - max_cursor_x).max(Pixels::ZERO);
-        let mut scroll_x = scroll_x_input.clamp(Pixels::ZERO, max_scroll_x);
-        if caret_x_line < scroll_x {
-            scroll_x = caret_x_line;
-        } else if caret_x_line > scroll_x + max_cursor_x {
-            scroll_x = caret_x_line - max_cursor_x;
-        }
-        scroll_x = scroll_x.clamp(Pixels::ZERO, max_scroll_x);
-
         let has_selection = !selection.is_empty() && !is_empty;
         if has_selection {
             let start_x = line.x_for_index(selection.start);
             let end_x = line.x_for_index(selection.end);
             let quad = fill(
                 Bounds::from_corners(
-                    point(bounds.left() + start_x.min(end_x) - scroll_x, bounds.top()),
                     point(
-                        bounds.left() + start_x.max(end_x) - scroll_x,
+                        bounds.left() + start_x.min(end_x) - scroll_offset.x,
+                        bounds.top(),
+                    ),
+                    point(
+                        bounds.left() + start_x.max(end_x) - scroll_offset.x,
                         bounds.bottom(),
                     ),
                 ),
@@ -227,11 +234,17 @@ impl Element for TextInputElement {
             elements.push(PrepaintElement::Quad(quad));
         }
 
-        elements.push(PrepaintElement::Line(line));
+        let caret_x_line = line.x_for_index(caret_pos);
+        elements.push(PrepaintElement::Line {
+            line,
+            point: bounds.origin - point(scroll_offset.x, gpui::px(0.)),
+            align: TextAlign::Left,
+        });
 
         let is_focused = focus_handle.is_focused(window);
         if !has_selection && is_focused && cursor_visible {
-            let cursor_paint_x = bounds.left() + caret_x_line - scroll_x;
+            let cursor_thickness = gpui::px(2.0);
+            let cursor_paint_x = bounds.left() + caret_x_line - scroll_offset.x;
             let quad = fill(
                 Bounds::new(
                     point(cursor_paint_x, bounds.top()),
@@ -242,23 +255,11 @@ impl Element for TextInputElement {
             elements.push(PrepaintElement::Quad(quad));
         }
 
-        let hitbox = self.interactivity.prepaint(
-            global_id,
-            inspector_id,
-            bounds,
-            bounds.size,
-            window,
-            cx,
-            |style, scroll_offset, hitbox, window, cx| {
-                hitbox.or_else(|| Some(window.insert_hitbox(bounds, HitboxBehavior::Normal)))
-            },
-        );
-
         Self::PrepaintState {
             hitbox,
             focus_handle,
             elements,
-            scroll_x,
+            scroll_offset,
             display_text,
             caret_visible: cursor_visible,
         }
@@ -392,19 +393,12 @@ impl Element for TextInputElement {
             });
 
             layout_data = window.with_content_mask(Some(ContentMask { bounds }), |window| {
+                let line_h = window.line_height();
                 let mut lines = Vec::with_capacity(prepaint.elements.len());
                 for element in prepaint.elements.drain(..) {
                     match element {
-                        PrepaintElement::Line(line) => {
-                            let origin_x = bounds.left() - prepaint.scroll_x;
-                            let _ = line.paint(
-                                point(origin_x, bounds.top()),
-                                window.line_height(),
-                                gpui::TextAlign::Left,
-                                None,
-                                window,
-                                cx,
-                            );
+                        PrepaintElement::Line { line, point, align } => {
+                            let _ = line.paint(point, line_h, align, None, window, cx);
                             lines.push(line);
                         }
                         PrepaintElement::Quad(quad) => window.paint_quad(quad),
