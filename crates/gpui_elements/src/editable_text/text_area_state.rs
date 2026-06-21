@@ -125,19 +125,23 @@ impl EntityInputHandler for TextAreaState {
         &mut self,
         range_utf16: Range<usize>,
         bounds: Bounds<Pixels>,
-        _window: &mut Window,
+        window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
-        unimplemented!()
+        self.internal
+            .ime_bounds_for_range(range_utf16, bounds, window)
     }
 
     fn character_index_for_point(
         &mut self,
         point: Point<Pixels>,
-        _window: &mut Window,
+        window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<usize> {
-        unimplemented!()
+        let index = self
+            .internal
+            .index_for_pixel_point(point, window.line_height());
+        Some(self.internal.storage().utf_offset_8to16(index))
     }
 }
 

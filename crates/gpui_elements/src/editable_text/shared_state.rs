@@ -4,7 +4,7 @@ use crate::editable_text::{
 };
 use gpui::{
     App, Bounds, ClipboardItem, Entity, FocusHandle, Focusable, Hsla, NavigationDirection, Pixels,
-    Point, SharedString, TextRun, TextStyle, UTF16Selection, Window, WrappedLine,
+    Point, SharedString, TextRun, TextStyle, UTF16Selection, Window, WrappedLine, point,
 };
 use std::{ops::Range, sync::Arc};
 
@@ -264,6 +264,40 @@ impl TextInputStateBase {
 
         lines
     }
+
+    /// Returns the utf-8 character position of the start of the line that contains the provided pixel-point.
+    pub fn index_for_pixel_point(&self, point: Point<Pixels>, line_height: Pixels) -> usize {
+        let storage_len_utf8 = self.storage.content_utf8().len();
+        if storage_len_utf8 == 0 {
+            return 0;
+        }
+
+        for line in &self.layout_data.lines {
+            let y_offset = line.pos_y * line_height;
+            let line_height_total = line_height * line.num_visual_lines as f32;
+
+            if point.y >= y_offset && point.y < y_offset + line_height_total {
+                if line.text_range.is_empty() {
+                    return line.text_range.start;
+                }
+                let Some(wrapped) = &line.wrapped_line else {
+                    return line.text_range.start;
+                };
+
+                let relative_y = point.y - y_offset;
+                let relative_point = gpui::point(point.x, relative_y);
+
+                let closest_result =
+                    wrapped.closest_index_for_position(relative_point, line_height);
+
+                let local_idx = closest_result.unwrap_or_else(|closest| closest);
+                let clamped = local_idx.min(wrapped.text.len());
+                return line.text_range.start + clamped;
+            }
+        }
+
+        storage_len_utf8
+    }
 }
 
 impl TextInputStateBase {
@@ -383,6 +417,60 @@ impl TextInputStateBase {
                 range_overwritten.start + text_len..range_overwritten.start + text_len
             })
         };
+    }
+
+    pub fn ime_bounds_for_range(
+        &mut self,
+        range_utf16: Range<usize>,
+        bounds: Bounds<Pixels>,
+        window: &mut Window,
+    ) -> Option<Bounds<Pixels>> {
+        let range = self.storage.utf_range_16to8(&range_utf16);
+        let line_height = window.line_height();
+
+        for line in &self.layout_data.lines {
+            let y_offset = line.pos_y * line_height;
+            if line.text_range.is_empty() {
+                if range.start == line.text_range.start {
+                    return Some(Bounds::from_corners(
+                        bounds.origin + point(Pixels::ZERO, y_offset),
+                        bounds.origin + point(gpui::px(4.), y_offset + line_height),
+                    ));
+                }
+            } else if line.text_range.contains(&range.start) {
+                if let Some(wrapped) = &line.wrapped_line {
+                    let local_start = range.start - line.text_range.start;
+                    let local_end = (range.end - line.text_range.start).min(wrapped.text.len());
+
+                    let start_pos = wrapped
+                        .position_for_index(local_start, line_height)
+                        .unwrap_or(point(Pixels::ZERO, Pixels::ZERO));
+                    let end_pos = wrapped
+                        .position_for_index(local_end, line_height)
+                        .unwrap_or_else(|| {
+                            let last_line_y = line_height * (line.num_visual_lines - 1) as f32;
+                            point(wrapped.width(), last_line_y)
+                        });
+
+                    let start_visual_line = (start_pos.y / line_height).floor() as usize;
+                    let end_visual_line = (end_pos.y / line_height).floor() as usize;
+
+                    if start_visual_line == end_visual_line {
+                        return Some(Bounds::from_corners(
+                            bounds.origin + start_pos + point(Pixels::ZERO, y_offset),
+                            bounds.origin + point(end_pos.x, y_offset + start_pos.y + line_height),
+                        ));
+                    } else {
+                        return Some(Bounds::from_corners(
+                            bounds.origin + start_pos + point(Pixels::ZERO, y_offset),
+                            bounds.origin
+                                + point(wrapped.width(), y_offset + start_pos.y + line_height),
+                        ));
+                    }
+                }
+            }
+        }
+        None
     }
 }
 
