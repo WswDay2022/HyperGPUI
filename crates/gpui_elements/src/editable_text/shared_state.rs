@@ -387,8 +387,11 @@ impl TextInputStateBase {
             text_to_insert = &text_to_insert[..text_to_insert.len().min(room)];
         }
 
+        let end_pos = range.start + text_to_insert.len();
+
         self.emit_change_for_undo(cx, range.clone(), text_to_insert.len());
         self.storage.replace_range(range, text_to_insert);
+        self.selected_range = end_pos..end_pos;
         self.marked_range = None;
     }
 
