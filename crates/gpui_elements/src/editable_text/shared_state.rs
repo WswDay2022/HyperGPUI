@@ -472,7 +472,7 @@ impl TextInputStateBase {
     fn select_to(&mut self, caret_pos: usize, cx: &mut impl TextStateNotifier) {
         //cx.emit(CursorTrigger::PauseBlinkingForUserAction);
         let caret_pos = caret_pos.min(self.storage().content_utf8().len());
-        self.selected_range = caret_pos..self.selected_range.start;
+        self.selected_range.start = caret_pos;
         //self.scroll_to_cursor();
         cx.notify_changed();
     }
@@ -532,7 +532,6 @@ impl TextInputStateBase {
         let caret_pos = self
             .storage
             .offset_from_caret(self.caret_pos(), direction, boundary);
-        // TODO: this is borked, its not extending the current selection
         self.select_to(caret_pos, cx);
     }
 

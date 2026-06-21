@@ -344,9 +344,8 @@ impl Element for TextInputElement {
             }
         }
 
-        let has_selection = !selection.is_empty() && !showing_placeholder;
         let is_focused = focus_handle.is_focused(window);
-        if !has_selection && is_focused && cursor_visible {
+        if !showing_placeholder && is_focused && cursor_visible {
             const CURSOR_WIDTH: f32 = 2.0;
             let quad = fill(
                 Bounds::new(
