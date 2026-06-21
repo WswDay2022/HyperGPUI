@@ -90,7 +90,6 @@ impl EntityInputHandler for TextInputState {
         cx: &mut Context<Self>,
     ) {
         let range_utf8 = self.internal.ime_resolve_range(range_utf16);
-        println!("{range_utf8:?} {text_to_insert:?}");
         self.internal
             .replace_text_in_range_bytes(range_utf8, text_to_insert, cx);
         //self.mark_layout_dirty();

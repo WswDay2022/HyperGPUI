@@ -1,6 +1,5 @@
 use crate::editable_text::{
-    InitStorage, StateBackedElement, TextInputState, TextInputStateBase, TextLayoutWrapping,
-    TextLineSegment,
+    InitStorage, TextInputState, TextInputStateBase, TextLayoutWrapping, TextLineSegment,
     actions::{DEFAULT_INPUT_CONTEXT, EditableInputActionElement},
 };
 use gpui::{
@@ -8,20 +7,20 @@ use gpui::{
     ElementInputHandler, Entity, FocusHandle, Focusable, Hitbox, HitboxBehavior, Hsla,
     InteractiveElement, Interactivity, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent,
     MouseUpEvent, PaintQuad, Pixels, Point, ScrollWheelEvent, SharedString, Style, StyleRefinement,
-    Styled, TextAlign, TextStyle, Window, WrappedLine, fill, point, px, size,
+    Styled, TextAlign, TextStyle, WeakEntity, Window, WrappedLine, fill, point, px, size,
 };
 use smallvec::SmallVec;
 use std::{cell::RefCell, ops::Range, rc::Rc, sync::Arc};
 
 #[track_caller]
 pub fn input(id: impl Into<ElementId>) -> TextInputElement {
-    let element_id = id.into();
     let mut this = TextInputElement {
-        placeholder: None,
         interactivity: Interactivity::new(),
-        state_key: Rc::new(RefCell::new((element_id.clone(), InitStorage::default()))),
+        state_entity: Rc::new(RefCell::new(WeakEntity::new_invalid())),
+        init_storage: InitStorage::default(),
+        placeholder: None,
     };
-    this.interactivity.element_id = Some(element_id);
+    this.interactivity.element_id = Some(id.into());
 
     this = this.key_context(DEFAULT_INPUT_CONTEXT);
     this.register_actions();
@@ -31,9 +30,13 @@ pub fn input(id: impl Into<ElementId>) -> TextInputElement {
 
 // TODO: Disabled flag/state?
 pub struct TextInputElement {
-    placeholder: Option<SharedString>,
     interactivity: Interactivity,
-    state_key: Rc<RefCell<(ElementId, InitStorage)>>,
+    // Populated on first render with an entity stored/attached to the view.
+    // This reference is shared with the action handlers, which are processed between renders
+    // and therefore cannot otherwise access state attached to the view.
+    state_entity: Rc<RefCell<WeakEntity<TextInputState>>>,
+    init_storage: InitStorage,
+    placeholder: Option<SharedString>,
 }
 
 impl InteractiveElement for TextInputElement {
@@ -55,28 +58,10 @@ impl IntoElement for TextInputElement {
     }
 }
 
-impl EditableInputActionElement for TextInputElement {}
-impl super::StateBackedElement for TextInputElement {
+impl EditableInputActionElement for TextInputElement {
     type State = TextInputState;
-    type InitProps = Rc<RefCell<(ElementId, InitStorage)>>;
-
-    fn init_props(&self) -> Self::InitProps {
-        self.state_key.clone()
-    }
-
-    fn get_or_init_state(
-        init_props: &Self::InitProps,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> Entity<TextInputState> {
-        let (element_id, init_storage) = init_props.borrow().clone();
-        println!("get_or_init_state {element_id:?}");
-        // TODO: This can only be called during layout, prepaint, or paint. It cannot be called during an action handler, which occurs between frames.
-        // Get the state from the app using the element's id as the key.
-        // If it doesnt exist, initialize a new state with the user's desired storage medium.
-        window.use_keyed_state(element_id, cx, |_window, cx| {
-            TextInputState::new(init_storage.exec(cx), cx)
-        })
+    fn state_entity_rc(&self) -> &Rc<RefCell<WeakEntity<Self::State>>> {
+        &self.state_entity
     }
 }
 
@@ -103,9 +88,8 @@ impl PrepaintElement {
 }
 
 pub mod element {
-    use smallvec::SmallVec;
-
     use super::*;
+    use smallvec::SmallVec;
 
     #[doc(hidden)]
     pub struct LayoutState {
@@ -142,9 +126,21 @@ impl Element for TextInputElement {
         window: &mut gpui::Window,
         cx: &mut gpui::App,
     ) -> (gpui::LayoutId, Self::RequestLayoutState) {
-        let mut resolved_text_style = None;
+        // Fetches or initializes the internal state of the field
+        let state = match &self.interactivity.element_id {
+            None => unimplemented!("all input elements must be assigned an id"),
+            Some(element_id) => {
+                let state = window.use_keyed_state(element_id.clone(), cx, |_window, cx| {
+                    println!("init input state {:?}", cx.weak_entity());
+                    TextInputState::new(self.init_storage.exec(cx), cx)
+                });
+                // store a reference to the entity owned by the element for access in action handlers
+                *self.state_entity.borrow_mut() = state.downgrade();
+                state
+            }
+        };
 
-        let state = self.get_state(window, cx);
+        let mut resolved_text_style = None;
 
         self.interactivity
             .track_focus(state.read(cx).focus_handle(cx));

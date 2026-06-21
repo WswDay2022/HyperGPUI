@@ -1,29 +1,37 @@
 use crate::editable_text::{
-    InitStorage, StateBackedElement, TextAreaState, actions::EditableInputActionElement,
+    InitStorage, TextAreaState,
+    actions::{DEFAULT_INPUT_CONTEXT, EditableInputActionElement},
 };
 use gpui::{
-    App, Element, ElementId, Entity, Hitbox, InteractiveElement, Interactivity, IntoElement,
-    SharedString, StyleRefinement, Styled, TextStyle, Window,
+    Element, ElementId, Entity, Hitbox, InteractiveElement, Interactivity, IntoElement,
+    SharedString, StyleRefinement, Styled, TextStyle, WeakEntity,
 };
+use std::{cell::RefCell, rc::Rc};
 
 pub fn text_area(id: impl Into<ElementId>) -> TextAreaElement {
     let mut this = TextAreaElement {
-        id: id.into(),
-        placeholder: None,
         interactivity: Interactivity::new(),
+        state_entity: Rc::new(RefCell::new(WeakEntity::new_invalid())),
         init_storage: InitStorage::default(),
+        placeholder: None,
     };
-    this = this.key_context(super::actions::DEFAULT_INPUT_CONTEXT);
+    this.interactivity.element_id = Some(id.into());
+
+    this = this.key_context(DEFAULT_INPUT_CONTEXT);
     this.register_actions();
+
     this
 }
 
 // TODO: Disabled flag/state?
 pub struct TextAreaElement {
-    id: ElementId,
-    placeholder: Option<SharedString>,
     interactivity: Interactivity,
+    // Populated on first render with an entity stored/attached to the view.
+    // This reference is shared with the action handlers, which are processed between renders
+    // and therefore cannot otherwise access state attached to the view.
+    state_entity: Rc<RefCell<WeakEntity<TextAreaState>>>,
     init_storage: InitStorage,
+    placeholder: Option<SharedString>,
 }
 
 impl InteractiveElement for TextAreaElement {
@@ -45,25 +53,10 @@ impl IntoElement for TextAreaElement {
     }
 }
 
-impl EditableInputActionElement for TextAreaElement {}
-impl super::StateBackedElement for TextAreaElement {
+impl EditableInputActionElement for TextAreaElement {
     type State = TextAreaState;
-    type InitProps = (ElementId, InitStorage);
-
-    fn init_props(&self) -> Self::InitProps {
-        (self.id.clone(), self.init_storage.clone())
-    }
-
-    fn get_or_init_state(
-        init_props: &Self::InitProps,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> Entity<Self::State> {
-        // Get the state from the app using the element's id as the key.
-        // If it doesnt exist, initialize a new state with the user's desired storage medium.
-        window.use_keyed_state(init_props.0.clone(), cx, |_window, cx| {
-            TextAreaState::new(init_props.1.exec(cx), cx)
-        })
+    fn state_entity_rc(&self) -> &Rc<RefCell<WeakEntity<Self::State>>> {
+        &self.state_entity
     }
 }
 
@@ -101,9 +94,20 @@ impl Element for TextAreaElement {
         window: &mut gpui::Window,
         cx: &mut gpui::App,
     ) -> (gpui::LayoutId, Self::RequestLayoutState) {
-        let mut resolved_text_style = None;
+        // Fetches or initializes the internal state of the field
+        let state = match &self.interactivity.element_id {
+            None => unimplemented!("all input elements must be assigned an id"),
+            Some(element_id) => {
+                let state = window.use_keyed_state(element_id.clone(), cx, |_window, cx| {
+                    TextAreaState::new(self.init_storage.exec(cx), cx)
+                });
+                // store a reference to the entity owned by the element for access in action handlers
+                *self.state_entity.borrow_mut() = state.downgrade();
+                state
+            }
+        };
 
-        let state = self.get_state(window, cx);
+        let mut resolved_text_style = None;
 
         let layout_id = self.interactivity.request_layout(
             global_id,

@@ -1,4 +1,6 @@
-use gpui::{Action, AppContext, Context, InteractiveElement, Window};
+use std::{cell::RefCell, rc::Rc};
+
+use gpui::{Action, AppContext, Context, InteractiveElement, WeakEntity, Window};
 
 /// The key context used for input element keybindings.
 pub const DEFAULT_INPUT_CONTEXT: &str = "Input";
@@ -234,133 +236,83 @@ pub trait EditableTextActionHandler<'app>: Sized {
     }
 }
 
-pub(super) trait EditableInputActionElement: super::StateBackedElement {
-    fn register_action<A: Action>(
+pub(super) trait EditableInputActionElement {
+    type State: 'static;
+
+    fn state_entity_rc(&self) -> &Rc<RefCell<WeakEntity<Self::State>>>;
+
+    fn register_action<ActionType>(
         &mut self,
-        init_props: Self::InitProps,
-        listener: fn(&mut Self::State, &A, &mut Window, &mut Context<Self::State>),
+        listener: fn(&mut Self::State, &ActionType, &mut Window, &mut Context<Self::State>),
     ) where
         Self: InteractiveElement,
+        ActionType: Action + std::fmt::Debug,
     {
+        let entity_rc = self.state_entity_rc().clone();
         self.interactivity()
-            .on_action::<A>(move |action, window, cx| {
-                let state = Self::get_or_init_state(&init_props, window, cx);
-                state.update(cx, |state, cx| {
-                    listener(state, action, window, cx);
-                });
+            .on_action::<ActionType>(move |action, window, cx| {
+                let weak_entity = entity_rc.borrow();
+                if let Some(entity) = weak_entity.upgrade() {
+                    entity.update(cx, |state, cx| {
+                        listener(state, action, window, cx);
+                    });
+                }
             });
     }
 
     fn register_actions(&mut self)
     where
         Self: InteractiveElement,
-        Self::InitProps: Clone,
         Self::State:
             for<'app> EditableTextActionHandler<'app, Context = gpui::Context<'app, Self::State>>,
     {
         use super::actions::*;
-        let init_props = self.init_props();
-        self.register_action(init_props.clone(), |state, action, window, cx| {
-            state.escape(action, window, cx)
-        });
-        self.register_action(init_props.clone(), |state, action, window, cx| {
-            state.insert_enter(action, window, cx)
-        });
-        self.register_action(init_props.clone(), |state, action, window, cx| {
-            state.insert_tab(action, window, cx)
-        });
-        self.register_action(init_props.clone(), |state, action, window, cx| {
-            println!("backspace");
-            state.backspace(action, window, cx)
-        });
-        self.register_action(init_props.clone(), |state, action, window, cx| {
-            state.delete(action, window, cx)
-        });
-        self.register_action(init_props.clone(), |state, action, window, cx| {
+        self.register_action(|state, action, window, cx| state.escape(action, window, cx));
+        self.register_action(|state, action, window, cx| state.insert_enter(action, window, cx));
+        self.register_action(|state, action, window, cx| state.insert_tab(action, window, cx));
+        self.register_action(|state, action, window, cx| state.backspace(action, window, cx));
+        self.register_action(|state, action, window, cx| state.delete(action, window, cx));
+        self.register_action(|state, action, window, cx| {
             state.delete_word_left(action, window, cx)
         });
-        self.register_action(init_props.clone(), |state, action, window, cx| {
+        self.register_action(|state, action, window, cx| {
             state.delete_word_right(action, window, cx)
         });
-        self.register_action(init_props.clone(), |state, action, window, cx| {
+        self.register_action(|state, action, window, cx| {
             state.delete_to_line_start(action, window, cx)
         });
-        self.register_action(init_props.clone(), |state, action, window, cx| {
+        self.register_action(|state, action, window, cx| {
             state.delete_to_line_end(action, window, cx)
         });
-        self.register_action(init_props.clone(), |state, action, window, cx| {
-            state.nav_left(action, window, cx)
-        });
-        self.register_action(init_props.clone(), |state, action, window, cx| {
-            state.nav_right(action, window, cx)
-        });
-        self.register_action(init_props.clone(), |state, action, window, cx| {
-            state.nav_up(action, window, cx)
-        });
-        self.register_action(init_props.clone(), |state, action, window, cx| {
-            state.nav_down(action, window, cx)
-        });
-        self.register_action(init_props.clone(), |state, action, window, cx| {
-            state.nav_line_start(action, window, cx)
-        });
-        self.register_action(init_props.clone(), |state, action, window, cx| {
-            state.nav_line_end(action, window, cx)
-        });
-        self.register_action(init_props.clone(), |state, action, window, cx| {
-            state.nav_start(action, window, cx)
-        });
-        self.register_action(init_props.clone(), |state, action, window, cx| {
-            state.nav_end(action, window, cx)
-        });
-        self.register_action(init_props.clone(), |state, action, window, cx| {
-            state.nav_left_word(action, window, cx)
-        });
-        self.register_action(init_props.clone(), |state, action, window, cx| {
-            state.nav_right_word(action, window, cx)
-        });
-        self.register_action(init_props.clone(), |state, action, window, cx| {
-            state.select_all(action, window, cx)
-        });
-        self.register_action(init_props.clone(), |state, action, window, cx| {
-            state.select_left(action, window, cx)
-        });
-        self.register_action(init_props.clone(), |state, action, window, cx| {
-            state.select_right(action, window, cx)
-        });
-        self.register_action(init_props.clone(), |state, action, window, cx| {
-            state.select_up(action, window, cx)
-        });
-        self.register_action(init_props.clone(), |state, action, window, cx| {
-            state.select_down(action, window, cx)
-        });
-        self.register_action(init_props.clone(), |state, action, window, cx| {
-            state.select_start(action, window, cx)
-        });
-        self.register_action(init_props.clone(), |state, action, window, cx| {
-            state.select_end(action, window, cx)
-        });
-        self.register_action(init_props.clone(), |state, action, window, cx| {
+        self.register_action(|state, action, window, cx| state.nav_left(action, window, cx));
+        self.register_action(|state, action, window, cx| state.nav_right(action, window, cx));
+        self.register_action(|state, action, window, cx| state.nav_up(action, window, cx));
+        self.register_action(|state, action, window, cx| state.nav_down(action, window, cx));
+        self.register_action(|state, action, window, cx| state.nav_line_start(action, window, cx));
+        self.register_action(|state, action, window, cx| state.nav_line_end(action, window, cx));
+        self.register_action(|state, action, window, cx| state.nav_start(action, window, cx));
+        self.register_action(|state, action, window, cx| state.nav_end(action, window, cx));
+        self.register_action(|state, action, window, cx| state.nav_left_word(action, window, cx));
+        self.register_action(|state, action, window, cx| state.nav_right_word(action, window, cx));
+        self.register_action(|state, action, window, cx| state.select_all(action, window, cx));
+        self.register_action(|state, action, window, cx| state.select_left(action, window, cx));
+        self.register_action(|state, action, window, cx| state.select_right(action, window, cx));
+        self.register_action(|state, action, window, cx| state.select_up(action, window, cx));
+        self.register_action(|state, action, window, cx| state.select_down(action, window, cx));
+        self.register_action(|state, action, window, cx| state.select_start(action, window, cx));
+        self.register_action(|state, action, window, cx| state.select_end(action, window, cx));
+        self.register_action(|state, action, window, cx| {
             state.select_left_word(action, window, cx)
         });
-        self.register_action(init_props.clone(), |state, action, window, cx| {
+        self.register_action(|state, action, window, cx| {
             state.select_right_word(action, window, cx)
         });
-        self.register_action(init_props.clone(), |state, action, window, cx| {
-            state.cut(action, window, cx)
-        });
-        self.register_action(init_props.clone(), |state, action, window, cx| {
-            state.copy(action, window, cx)
-        });
-        self.register_action(init_props.clone(), |state, action, window, cx| {
-            state.paste(action, window, cx)
-        });
-        self.register_action(init_props.clone(), |state, action, window, cx| {
-            state.undo(action, window, cx)
-        });
-        self.register_action(init_props.clone(), |state, action, window, cx| {
-            state.redo(action, window, cx)
-        });
-        self.register_action(init_props.clone(), |state, action, window, cx| {
+        self.register_action(|state, action, window, cx| state.cut(action, window, cx));
+        self.register_action(|state, action, window, cx| state.copy(action, window, cx));
+        self.register_action(|state, action, window, cx| state.paste(action, window, cx));
+        self.register_action(|state, action, window, cx| state.undo(action, window, cx));
+        self.register_action(|state, action, window, cx| state.redo(action, window, cx));
+        self.register_action(|state, action, window, cx| {
             state.show_character_palette(action, window, cx)
         });
     }
