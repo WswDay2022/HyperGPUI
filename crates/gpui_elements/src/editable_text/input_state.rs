@@ -330,7 +330,9 @@ impl<'app> EditableTextActionHandler<'app> for TextInputState {
         window: &mut Window,
         cx: &mut Self::Context,
     ) {
-        let character_pos = self.internal.caret_pos(); // TODO: Should be index_for_pixel_point
+        let character_pos = self
+            .internal
+            .index_for_pixel_point(text_position, window.line_height());
         self.internal.on_mouse_down(
             text_position,
             character_pos,
@@ -354,10 +356,12 @@ impl<'app> EditableTextActionHandler<'app> for TextInputState {
         &mut self,
         _event: &gpui::MouseMoveEvent,
         text_position: Point<Pixels>,
-        _w: &mut Window,
+        window: &mut Window,
         cx: &mut Self::Context,
     ) {
-        let character_pos = self.internal.caret_pos(); // TODO: Should be index_for_pixel_point
+        let character_pos = self
+            .internal
+            .index_for_pixel_point(text_position, window.line_height());
         self.internal.on_mouse_move(character_pos, cx);
     }
 }

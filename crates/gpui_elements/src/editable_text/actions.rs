@@ -270,6 +270,7 @@ pub(super) trait EditableInputActionElement: super::StateBackedElement {
             state.insert_tab(action, window, cx)
         });
         self.register_action(init_props.clone(), |state, action, window, cx| {
+            println!("backspace");
             state.backspace(action, window, cx)
         });
         self.register_action(init_props.clone(), |state, action, window, cx| {

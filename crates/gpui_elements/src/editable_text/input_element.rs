@@ -14,9 +14,8 @@ use smallvec::SmallVec;
 use std::{ops::Range, sync::Arc};
 
 #[track_caller]
-pub fn input(id: impl Into<ElementId>) -> TextInputElement {
+pub fn input() -> TextInputElement {
     let mut this = TextInputElement {
-        id: id.into(),
         placeholder: None,
         interactivity: Interactivity::new(),
         init_storage: InitStorage::default(),
@@ -28,7 +27,6 @@ pub fn input(id: impl Into<ElementId>) -> TextInputElement {
 
 // TODO: Disabled flag/state?
 pub struct TextInputElement {
-    id: ElementId,
     placeholder: Option<SharedString>,
     interactivity: Interactivity,
     init_storage: InitStorage,
@@ -56,10 +54,11 @@ impl IntoElement for TextInputElement {
 impl EditableInputActionElement for TextInputElement {}
 impl super::StateBackedElement for TextInputElement {
     type State = TextInputState;
-    type InitProps = (ElementId, InitStorage);
+    type InitProps = (Option<ElementId>, InitStorage);
 
     fn init_props(&self) -> Self::InitProps {
-        (self.id.clone(), self.init_storage.clone())
+        let element_id = self.interactivity.element_id.clone();
+        (element_id, self.init_storage.clone())
     }
 
     fn get_or_init_state(
@@ -69,7 +68,12 @@ impl super::StateBackedElement for TextInputElement {
     ) -> Entity<TextInputState> {
         // Get the state from the app using the element's id as the key.
         // If it doesnt exist, initialize a new state with the user's desired storage medium.
-        window.use_keyed_state(init_props.0.clone(), cx, |_window, cx| {
+        // TODO: how to best garuntee an element id?
+        let element_id = init_props
+            .0
+            .clone()
+            .expect("user MUST assign an element id");
+        window.use_keyed_state(element_id, cx, |_window, cx| {
             TextInputState::new(init_props.1.exec(cx), cx)
         })
     }
