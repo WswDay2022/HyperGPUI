@@ -4,7 +4,7 @@ use crate::editable_text::{
 };
 use gpui::{
     App, Bounds, ClipboardItem, Entity, FocusHandle, Focusable, Hsla, NavigationDirection, Pixels,
-    Point, ShapedLine, SharedString, TextRun, TextStyle, UTF16Selection, Window, WrappedLine,
+    Point, SharedString, TextRun, TextStyle, UTF16Selection, Window, WrappedLine,
 };
 use std::{ops::Range, sync::Arc};
 
@@ -58,25 +58,32 @@ pub struct TextInputStateBase {
     pub(super) layout_data: TextInputLayoutData,
 }
 
-#[derive(Default)]
+#[derive(PartialEq)]
 pub(super) struct TextLayoutWrapping {
     text_style: TextStyle,
     wrap_width: Option<Pixels>,
-    dirty: bool,
+    last_seen_storage_version: u16,
+}
+impl Default for TextLayoutWrapping {
+    fn default() -> Self {
+        Self {
+            text_style: Default::default(),
+            wrap_width: Default::default(),
+            last_seen_storage_version: u16::MAX,
+        }
+    }
 }
 impl TextLayoutWrapping {
-    pub fn new(text_style: TextStyle, wrap_width: Option<Pixels>) -> Self {
+    pub fn new(text_style: TextStyle, wrap_width: Option<Pixels>, storage_version: u16) -> Self {
         Self {
             text_style,
             wrap_width,
-            dirty: false,
+            last_seen_storage_version: storage_version,
         }
     }
 
     pub fn integrate(&mut self, other: Self) -> bool {
-        let dirty = self.dirty
-            || self.wrap_width != other.wrap_width
-            || self.text_style != other.text_style;
+        let dirty = *self != other;
         *self = other;
         dirty
     }
@@ -125,10 +132,7 @@ impl TextInputStateBase {
 
             focus_handle: cx.focus_handle(),
 
-            layout_wrapping: TextLayoutWrapping {
-                dirty: true,
-                ..TextLayoutWrapping::default()
-            },
+            layout_wrapping: TextLayoutWrapping::default(),
             layout_data: TextInputLayoutData::default(),
         }
     }
@@ -166,11 +170,11 @@ impl TextInputStateBase {
 }
 
 impl TextInputStateBase {
-    pub fn line_segments(&self) -> &Vec<TextLineSegment> {
+    pub(super) fn line_segments(&self) -> &Vec<TextLineSegment> {
         &self.layout_data.lines
     }
 
-    pub fn build_wrapped_lines(
+    pub(super) fn build_wrapped_lines(
         content: &str,
         wrapping: &TextLayoutWrapping,
         window: &Window,

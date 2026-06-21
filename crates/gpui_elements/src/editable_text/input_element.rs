@@ -206,8 +206,12 @@ impl Element for TextInputElement {
 
         // TODO: no wrapping in single-line
         let wrap_width = Some(bounds.size.width);
-        let wrapping = TextLayoutWrapping::new(request_layout.text_style.clone(), wrap_width);
         let showing_placeholder = request_layout.state.update(cx, |state, _cx| {
+            let wrapping = TextLayoutWrapping::new(
+                request_layout.text_style.clone(),
+                wrap_width,
+                state.storage().version(),
+            );
             let show_placeholder = state.storage().content_utf8().is_empty();
             state.layout_data.bounds = bounds;
             if state.layout_wrapping.integrate(wrapping) {

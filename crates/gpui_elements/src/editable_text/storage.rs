@@ -18,13 +18,15 @@ pub(super) struct InitStorage(Option<Rc<dyn Fn(&mut App) -> Box<dyn UnicodeTextS
 impl InitStorage {
     pub fn exec(&self, cx: &mut App) -> Box<dyn UnicodeTextStorage> {
         match &self.0 {
-            None => Box::new(String::new()),
+            None => Box::new(StringStorage::default()),
             Some(init) => (*init)(cx),
         }
     }
 }
 
 pub trait UnicodeTextStorage {
+    fn version(&self) -> u16;
+
     /// Returns a reference to the utf8 string.
     fn content_utf8(&self) -> &str;
 
@@ -215,16 +217,34 @@ pub trait UnicodeTextStorage {
     }
 }
 
-impl UnicodeTextStorage for String {
+#[derive(Default)]
+pub struct StringStorage {
+    value: String,
+    version: u16,
+}
+impl From<String> for StringStorage {
+    fn from(value: String) -> Self {
+        Self {
+            value,
+            version: u16::default(),
+        }
+    }
+}
+impl UnicodeTextStorage for StringStorage {
+    fn version(&self) -> u16 {
+        self.version
+    }
+
     fn content_utf8(&self) -> &str {
-        self.as_str()
+        self.value.as_str()
     }
 
     fn len_utf16(&self) -> usize {
-        self.len()
+        self.value.chars().map(|c| c.len_utf16()).sum()
     }
 
     fn replace_range(&mut self, range: Range<usize>, text: &str) {
-        self.replace_range(range, &text);
+        self.value.replace_range(range, &text);
+        self.version = self.version.wrapping_add(1);
     }
 }
