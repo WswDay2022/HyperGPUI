@@ -41,6 +41,11 @@ impl TextInputElement {
         self.placeholder = Some(text.into());
         self
     }
+
+    pub fn with_storage(mut self, fn_init: impl Into<InitStorage>) -> Self {
+        self.init_storage = fn_init.into();
+        self
+    }
 }
 
 impl InteractiveElement for TextInputElement {
