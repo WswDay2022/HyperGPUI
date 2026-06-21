@@ -2,6 +2,7 @@ pub mod actions;
 mod input_element;
 mod input_state;
 pub mod notify;
+mod shared_element;
 mod shared_state;
 mod storage;
 mod text_area_element;

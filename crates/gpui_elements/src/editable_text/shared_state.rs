@@ -1,10 +1,12 @@
 use crate::editable_text::{
     TextBoundary, UnicodeTextStorage,
+    actions::EditableTextActionHandler,
     notify::{TextChanged, TextHistoryPushed},
 };
 use gpui::{
-    App, Bounds, ClipboardItem, FocusHandle, Focusable, Hsla, NavigationDirection, Pixels, Point,
-    SharedString, TextRun, TextStyle, UTF16Selection, Window, WrappedLine, point,
+    App, Bounds, ClipboardItem, EntityInputHandler, FocusHandle, Focusable, Hsla,
+    NavigationDirection, Pixels, Point, SharedString, TextRun, TextStyle, UTF16Selection, Window,
+    WrappedLine, point,
 };
 use std::{ops::Range, sync::Arc};
 
@@ -12,6 +14,14 @@ pub trait TextStateNotifier {
     fn notify_changed(&mut self);
     fn emit_text_changed(&mut self, event: TextChanged);
     fn emit_history(&mut self, event: TextHistoryPushed);
+}
+
+pub trait StateBackedEditableText {
+    type State: 'static
+        + std::ops::Deref<Target = TextInputStateBase>
+        + std::ops::DerefMut
+        + EntityInputHandler
+        + for<'app> EditableTextActionHandler<'app>;
 }
 
 pub struct TextInputStateBase {

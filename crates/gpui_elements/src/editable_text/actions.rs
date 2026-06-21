@@ -2,6 +2,8 @@ use std::{cell::RefCell, rc::Rc};
 
 use gpui::{Action, AppContext, Context, InteractiveElement, WeakEntity, Window};
 
+use crate::editable_text::StateBackedEditableText;
+
 /// The key context used for input element keybindings.
 pub const DEFAULT_INPUT_CONTEXT: &str = "Input";
 
@@ -236,9 +238,7 @@ pub trait EditableTextActionHandler<'app>: Sized {
     }
 }
 
-pub(super) trait EditableInputActionElement {
-    type State: 'static;
-
+pub(super) trait EditableInputActionElement: StateBackedEditableText {
     fn state_entity_rc(&self) -> &Rc<RefCell<WeakEntity<Self::State>>>;
 
     fn register_action<ActionType>(
