@@ -461,20 +461,20 @@ impl TextInputStateBase {
 }
 
 impl TextInputStateBase {
-    fn move_to(&mut self, caret_pos: usize) {
+    fn move_to(&mut self, caret_pos: usize, cx: &mut impl TextStateNotifier) {
         //cx.emit(CursorTrigger::PauseBlinkingForUserAction);
         let caret_pos = caret_pos.min(self.storage.content_utf8().len());
         self.selected_range = caret_pos..caret_pos;
         //self.scroll_to_cursor();
-        //cx.notify_changed();
+        cx.notify_changed();
     }
 
-    fn select_to(&mut self, caret_pos: usize) {
+    fn select_to(&mut self, caret_pos: usize, cx: &mut impl TextStateNotifier) {
         //cx.emit(CursorTrigger::PauseBlinkingForUserAction);
         let caret_pos = caret_pos.min(self.storage().content_utf8().len());
         self.selected_range = caret_pos..self.selected_range.start;
         //self.scroll_to_cursor();
-        //cx.notify_changed();
+        cx.notify_changed();
     }
 
     pub fn delete(
@@ -504,7 +504,7 @@ impl TextInputStateBase {
         &mut self,
         direction: NavigationDirection,
         boundary: TextBoundary,
-        _cx: &mut impl TextStateNotifier,
+        cx: &mut impl TextStateNotifier,
     ) {
         let caret_pos = match self.selected_range.is_empty() {
             false => match direction {
@@ -515,23 +515,25 @@ impl TextInputStateBase {
                 .storage
                 .offset_from_caret(self.caret_pos(), direction, boundary),
         };
-        self.move_to(caret_pos);
+        self.move_to(caret_pos, cx);
     }
 
-    pub fn select_all(&mut self, _cx: &mut impl TextStateNotifier) {
+    pub fn select_all(&mut self, cx: &mut impl TextStateNotifier) {
         self.selected_range = 0..self.storage.content_utf8().len();
+        cx.notify_changed();
     }
 
     pub fn select_linear(
         &mut self,
         direction: NavigationDirection,
         boundary: TextBoundary,
-        _cx: &mut impl TextStateNotifier,
+        cx: &mut impl TextStateNotifier,
     ) {
         let caret_pos = self
             .storage
             .offset_from_caret(self.caret_pos(), direction, boundary);
-        self.select_to(caret_pos);
+        // TODO: this is borked, its not extending the current selection
+        self.select_to(caret_pos, cx);
     }
 
     pub fn cut<T>(&mut self, cx: &mut T)
@@ -630,7 +632,7 @@ impl TextInputStateBase {
             2 => {
                 let (word_start, word_end) = self.storage.word_range_at(character_pos);
                 self.selected_range = word_start..word_end;
-                //cx.notify();
+                cx.notify_changed();
             }
             3 => {
                 let line_start = self.storage.find_line_start(character_pos);
@@ -641,13 +643,13 @@ impl TextInputStateBase {
                     line_end
                 };
                 self.selected_range = line_start..line_end_with_newline;
-                //cx.notify();
+                cx.notify_changed();
             }
             _ => {
                 if shift {
-                    self.select_to(character_pos);
+                    self.select_to(character_pos, cx);
                 } else {
-                    self.move_to(character_pos);
+                    self.move_to(character_pos, cx);
                 }
             }
         }
@@ -657,9 +659,9 @@ impl TextInputStateBase {
         self.is_selecting = false;
     }
 
-    pub fn on_mouse_move(&mut self, character_pos: usize, _cx: &mut impl TextStateNotifier) {
+    pub fn on_mouse_move(&mut self, character_pos: usize, cx: &mut impl TextStateNotifier) {
         if self.is_selecting && self.click_count == 1 {
-            self.select_to(character_pos);
+            self.select_to(character_pos, cx);
         }
     }
 }
