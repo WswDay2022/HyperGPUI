@@ -1,6 +1,5 @@
 use crate::editable_text::{
-    EditableTextActionHandler, TextBoundary, TextInputStateBase, TextStateNotifier,
-    UnicodeTextStorage,
+    TextBoundary, TextInputStateBase, TextStateNotifier, UnicodeTextStorage,
     notify::{TextChanged, TextHistoryPushed},
 };
 use gpui::{
@@ -142,57 +141,48 @@ impl EntityInputHandler for TextAreaState {
     }
 }
 
+use super::actions::*;
 impl<'app> EditableTextActionHandler<'app> for TextAreaState {
     type Context = gpui::Context<'app, Self>;
 
-    fn escape(&mut self, _: &super::Escape, window: &mut Window, cx: &mut Self::Context) {
+    fn escape(&mut self, _: &Escape, window: &mut Window, cx: &mut Self::Context) {
         self.internal.set_selected_range(0..0);
         cx.notify();
 
         window.blur();
     }
 
-    fn insert_enter(&mut self, _: &super::Enter, window: &mut Window, cx: &mut Self::Context) {
+    fn insert_enter(&mut self, _: &Enter, window: &mut Window, cx: &mut Self::Context) {
         self.replace_text_in_range(None, "\n", window, cx);
     }
 
-    fn insert_tab(&mut self, _: &super::Tab, window: &mut Window, cx: &mut Self::Context) {
+    fn insert_tab(&mut self, _: &Tab, window: &mut Window, cx: &mut Self::Context) {
         self.replace_text_in_range(None, "\t", window, cx);
     }
 
-    fn backspace(&mut self, _: &super::Backspace, _w: &mut Window, cx: &mut Self::Context) {
+    fn backspace(&mut self, _: &Backspace, _w: &mut Window, cx: &mut Self::Context) {
         self.internal
             .delete(NavigationDirection::Back, TextBoundary::Graphmeme, cx);
     }
 
-    fn delete(&mut self, _: &super::Delete, _w: &mut Window, cx: &mut Self::Context) {
+    fn delete(&mut self, _: &Delete, _w: &mut Window, cx: &mut Self::Context) {
         self.internal
             .delete(NavigationDirection::Forward, TextBoundary::Graphmeme, cx);
     }
 
-    fn delete_word_left(
-        &mut self,
-        _: &super::DeleteWordLeft,
-        _w: &mut Window,
-        cx: &mut Self::Context,
-    ) {
+    fn delete_word_left(&mut self, _: &DeleteWordLeft, _w: &mut Window, cx: &mut Self::Context) {
         self.internal
             .delete(NavigationDirection::Back, TextBoundary::Word, cx);
     }
 
-    fn delete_word_right(
-        &mut self,
-        _: &super::DeleteWordRight,
-        _w: &mut Window,
-        cx: &mut Self::Context,
-    ) {
+    fn delete_word_right(&mut self, _: &DeleteWordRight, _w: &mut Window, cx: &mut Self::Context) {
         self.internal
             .delete(NavigationDirection::Forward, TextBoundary::Word, cx);
     }
 
     fn delete_to_line_start(
         &mut self,
-        _: &super::DeleteToBeginningOfLine,
+        _: &DeleteToBeginningOfLine,
         _w: &mut Window,
         cx: &mut Self::Context,
     ) {
@@ -202,7 +192,7 @@ impl<'app> EditableTextActionHandler<'app> for TextAreaState {
 
     fn delete_to_line_end(
         &mut self,
-        _: &super::DeleteToEndOfLine,
+        _: &DeleteToEndOfLine,
         _w: &mut Window,
         cx: &mut Self::Context,
     ) {
@@ -210,128 +200,113 @@ impl<'app> EditableTextActionHandler<'app> for TextAreaState {
             .delete(NavigationDirection::Forward, TextBoundary::Line, cx);
     }
 
-    fn nav_left(&mut self, _: &super::Left, _w: &mut Window, cx: &mut Self::Context) {
+    fn nav_left(&mut self, _: &Left, _w: &mut Window, cx: &mut Self::Context) {
         self.internal
             .nav_linear(NavigationDirection::Back, TextBoundary::Graphmeme, cx);
     }
 
-    fn nav_right(&mut self, _: &super::Right, _w: &mut Window, cx: &mut Self::Context) {
+    fn nav_right(&mut self, _: &Right, _w: &mut Window, cx: &mut Self::Context) {
         self.internal
             .nav_linear(NavigationDirection::Forward, TextBoundary::Graphmeme, cx);
     }
 
-    fn nav_up(&mut self, _: &super::Up, _w: &mut Window, cx: &mut Self::Context) {
+    fn nav_up(&mut self, _: &Up, _w: &mut Window, cx: &mut Self::Context) {
         // TODO: implement
     }
 
-    fn nav_down(&mut self, _: &super::Down, _w: &mut Window, cx: &mut Self::Context) {
+    fn nav_down(&mut self, _: &Down, _w: &mut Window, cx: &mut Self::Context) {
         // TODO: implement
     }
 
-    fn nav_line_start(&mut self, _: &super::Home, _w: &mut Window, cx: &mut Self::Context) {
+    fn nav_line_start(&mut self, _: &Home, _w: &mut Window, cx: &mut Self::Context) {
         self.internal
             .nav_linear(NavigationDirection::Back, TextBoundary::Line, cx);
     }
 
-    fn nav_line_end(&mut self, _: &super::End, _w: &mut Window, cx: &mut Self::Context) {
+    fn nav_line_end(&mut self, _: &End, _w: &mut Window, cx: &mut Self::Context) {
         self.internal
             .nav_linear(NavigationDirection::Forward, TextBoundary::Line, cx);
     }
 
-    fn nav_start(&mut self, _: &super::MoveToBeginning, _w: &mut Window, cx: &mut Self::Context) {
+    fn nav_start(&mut self, _: &MoveToBeginning, _w: &mut Window, cx: &mut Self::Context) {
         self.internal
             .nav_linear(NavigationDirection::Back, TextBoundary::Document, cx);
     }
 
-    fn nav_end(&mut self, _: &super::MoveToEnd, _w: &mut Window, cx: &mut Self::Context) {
+    fn nav_end(&mut self, _: &MoveToEnd, _w: &mut Window, cx: &mut Self::Context) {
         self.internal
             .nav_linear(NavigationDirection::Forward, TextBoundary::Document, cx);
     }
 
-    fn nav_left_word(&mut self, _: &super::WordLeft, _w: &mut Window, cx: &mut Self::Context) {
+    fn nav_left_word(&mut self, _: &WordLeft, _w: &mut Window, cx: &mut Self::Context) {
         self.internal
             .nav_linear(NavigationDirection::Back, TextBoundary::Word, cx);
     }
 
-    fn nav_right_word(&mut self, _: &super::WordRight, _w: &mut Window, cx: &mut Self::Context) {
+    fn nav_right_word(&mut self, _: &WordRight, _w: &mut Window, cx: &mut Self::Context) {
         self.internal
             .nav_linear(NavigationDirection::Forward, TextBoundary::Word, cx);
     }
 
-    fn select_all(&mut self, _: &super::SelectAll, _w: &mut Window, cx: &mut Self::Context) {
+    fn select_all(&mut self, _: &SelectAll, _w: &mut Window, cx: &mut Self::Context) {
         self.internal.select_all(cx);
     }
 
-    fn select_left(&mut self, _: &super::SelectLeft, _w: &mut Window, cx: &mut Self::Context) {
+    fn select_left(&mut self, _: &SelectLeft, _w: &mut Window, cx: &mut Self::Context) {
         self.internal
             .select_linear(NavigationDirection::Back, TextBoundary::Graphmeme, cx);
     }
 
-    fn select_right(&mut self, _: &super::SelectRight, _w: &mut Window, cx: &mut Self::Context) {
+    fn select_right(&mut self, _: &SelectRight, _w: &mut Window, cx: &mut Self::Context) {
         self.internal
             .select_linear(NavigationDirection::Forward, TextBoundary::Graphmeme, cx);
     }
 
-    fn select_up(&mut self, _: &super::SelectUp, _w: &mut Window, cx: &mut Self::Context) {
+    fn select_up(&mut self, _: &SelectUp, _w: &mut Window, cx: &mut Self::Context) {
         // TODO: implement
     }
 
-    fn select_down(&mut self, _: &super::SelectDown, _w: &mut Window, cx: &mut Self::Context) {
+    fn select_down(&mut self, _: &SelectDown, _w: &mut Window, cx: &mut Self::Context) {
         // TODO: implement
     }
 
-    fn select_start(
-        &mut self,
-        _: &super::SelectToBeginning,
-        _w: &mut Window,
-        cx: &mut Self::Context,
-    ) {
+    fn select_start(&mut self, _: &SelectToBeginning, _w: &mut Window, cx: &mut Self::Context) {
         self.internal
             .select_linear(NavigationDirection::Back, TextBoundary::Document, cx);
     }
 
-    fn select_end(&mut self, _: &super::SelectToEnd, _w: &mut Window, cx: &mut Self::Context) {
+    fn select_end(&mut self, _: &SelectToEnd, _w: &mut Window, cx: &mut Self::Context) {
         self.internal
             .select_linear(NavigationDirection::Forward, TextBoundary::Document, cx);
     }
 
-    fn select_left_word(
-        &mut self,
-        _: &super::SelectWordLeft,
-        _w: &mut Window,
-        cx: &mut Self::Context,
-    ) {
+    fn select_left_word(&mut self, _: &SelectWordLeft, _w: &mut Window, cx: &mut Self::Context) {
         self.internal
             .select_linear(NavigationDirection::Back, TextBoundary::Word, cx);
     }
 
-    fn select_right_word(
-        &mut self,
-        _: &super::SelectWordRight,
-        _w: &mut Window,
-        cx: &mut Self::Context,
-    ) {
+    fn select_right_word(&mut self, _: &SelectWordRight, _w: &mut Window, cx: &mut Self::Context) {
         self.internal
             .select_linear(NavigationDirection::Forward, TextBoundary::Word, cx);
     }
 
-    fn cut(&mut self, _: &super::Cut, _w: &mut Window, cx: &mut Self::Context) {
+    fn cut(&mut self, _: &Cut, _w: &mut Window, cx: &mut Self::Context) {
         self.internal.cut(cx);
     }
 
-    fn copy(&mut self, _: &super::Copy, _w: &mut Window, cx: &mut Self::Context) {
+    fn copy(&mut self, _: &Copy, _w: &mut Window, cx: &mut Self::Context) {
         self.internal.copy(cx);
     }
 
-    fn paste(&mut self, _: &super::Paste, _w: &mut Window, cx: &mut Self::Context) {
+    fn paste(&mut self, _: &Paste, _w: &mut Window, cx: &mut Self::Context) {
         self.internal.paste(cx);
     }
 
-    fn undo(&mut self, _: &super::Undo, _w: &mut Window, _cx: &mut Self::Context) {
+    fn undo(&mut self, _: &Undo, _w: &mut Window, _cx: &mut Self::Context) {
         // TODO: STUB
     }
 
-    fn redo(&mut self, _: &super::Redo, _w: &mut Window, _cx: &mut Self::Context) {
+    fn redo(&mut self, _: &Redo, _w: &mut Window, _cx: &mut Self::Context) {
         // TODO: STUB
     }
 

@@ -1,4 +1,3 @@
-pub mod actions;
 mod colors;
 mod cursor;
 mod element;

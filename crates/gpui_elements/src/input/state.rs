@@ -1,4 +1,4 @@
-use super::actions::*;
+use crate::editable_text::actions::*;
 use crate::input::{InputLayoutStyle, InputStorage};
 use gpui::{
     App, ClipboardItem, Context, EntityId, EntityInputHandler, EventEmitter, FocusHandle,

@@ -1,5 +1,5 @@
 use crate::editable_text::{
-    EditableInputActionElement, InitStorage, StateBackedElement, TextAreaState,
+    InitStorage, StateBackedElement, TextAreaState, actions::EditableInputActionElement,
 };
 use gpui::{
     App, Element, ElementId, Entity, Hitbox, InteractiveElement, Interactivity, IntoElement,
@@ -13,7 +13,7 @@ pub fn text_area(id: impl Into<ElementId>) -> TextAreaElement {
         interactivity: Interactivity::new(),
         init_storage: InitStorage::default(),
     };
-    this = this.key_context(super::DEFAULT_INPUT_CONTEXT);
+    this = this.key_context(super::actions::DEFAULT_INPUT_CONTEXT);
     this.register_actions();
     this
 }

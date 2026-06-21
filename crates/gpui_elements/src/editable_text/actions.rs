@@ -1,4 +1,4 @@
-use gpui::{Action, App, AppContext, Context, InteractiveElement, Window};
+use gpui::{Action, AppContext, Context, InteractiveElement, Window};
 
 /// The key context used for input element keybindings.
 pub const DEFAULT_INPUT_CONTEXT: &str = "Input";
@@ -234,7 +234,7 @@ pub trait EditableTextActionHandler<'app>: Sized {
     }
 }
 
-pub trait EditableInputActionElement: super::StateBackedElement {
+pub(super) trait EditableInputActionElement: super::StateBackedElement {
     fn register_action<A: Action>(
         &mut self,
         init_props: Self::InitProps,

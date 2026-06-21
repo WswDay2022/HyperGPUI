@@ -31,7 +31,7 @@ impl Input {
         };
         input.register_actions();
         input
-            .key_context(super::actions::DEFAULT_INPUT_CONTEXT)
+            .key_context(crate::editable_text::actions::DEFAULT_INPUT_CONTEXT)
             .track_focus(&focus_handle)
     }
 
@@ -122,7 +122,7 @@ impl Input {
         register_action(&mut self.interactivity, &self.input, InputState::redo);
 
         self.interactivity
-            .on_action::<super::actions::Escape>(|_action, window, _cx| {
+            .on_action::<crate::editable_text::actions::Escape>(|_action, window, _cx| {
                 window.blur();
             });
     }

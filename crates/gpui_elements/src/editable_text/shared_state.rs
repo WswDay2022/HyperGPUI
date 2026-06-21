@@ -54,8 +54,8 @@ pub struct TextInputStateBase {
 
     focus_handle: FocusHandle,
 
-    layout_wrapping: TextLayoutWrapping,
-    layout_data: TextInputLayoutData,
+    pub(super) layout_wrapping: TextLayoutWrapping,
+    pub(super) layout_data: TextInputLayoutData,
 }
 
 #[derive(Default)]
@@ -71,6 +71,14 @@ impl TextLayoutWrapping {
             wrap_width,
             dirty: false,
         }
+    }
+
+    pub fn integrate(&mut self, other: Self) -> bool {
+        let dirty = self.dirty
+            || self.wrap_width != other.wrap_width
+            || self.text_style != other.text_style;
+        *self = other;
+        dirty
     }
 }
 
@@ -155,38 +163,20 @@ impl TextInputStateBase {
     pub fn marked_range(&self) -> Option<Range<usize>> {
         self.marked_range.clone()
     }
-
-    pub(super) fn layout_data(&self) -> &TextInputLayoutData {
-        &self.layout_data
-    }
-
-    pub(super) fn layout_data_mut(&mut self) -> &mut TextInputLayoutData {
-        &mut self.layout_data
-    }
 }
 
 impl TextInputStateBase {
-    pub fn apply_wrapping(
-        &mut self,
-        wrapping: TextLayoutWrapping,
-        display_text: &str,
-        window: &Window,
-    ) {
-        let dirty = self.layout_wrapping.dirty
-            || self.layout_wrapping.wrap_width != wrapping.wrap_width
-            || self.layout_wrapping.text_style != wrapping.text_style;
-        self.layout_wrapping = wrapping;
-        if dirty {
-            self.layout_data.lines = self.build_wrapped_lines(display_text, window);
-        }
-    }
-
     pub fn line_segments(&self) -> &Vec<TextLineSegment> {
         &self.layout_data.lines
     }
 
-    fn build_wrapped_lines(&self, content: &str, window: &Window) -> Vec<TextLineSegment> {
-        let text_style = &self.layout_wrapping.text_style;
+    pub fn build_wrapped_lines(
+        content: &str,
+        wrapping: &TextLayoutWrapping,
+        window: &Window,
+        color: Hsla,
+    ) -> Vec<TextLineSegment> {
+        let text_style = &wrapping.text_style;
         let font_size = text_style.font_size.to_pixels(window.rem_size());
         let mut lines = Vec::new();
 
@@ -223,9 +213,7 @@ impl TextInputStateBase {
                 let run = TextRun {
                     len: line_slice.len(),
                     font: text_style.font(),
-                    // TODO: This is the actual text color that is stored in WrappedLine,
-                    // needs to reflect the style color provided by paint
-                    color: Hsla::default(),
+                    color,
                     background_color: None,
                     underline: None,
                     strikethrough: None,
@@ -237,7 +225,7 @@ impl TextInputStateBase {
                         SharedString::from(line_slice.to_string()),
                         font_size,
                         &[run],
-                        self.layout_wrapping.wrap_width,
+                        wrapping.wrap_width,
                         None,
                     )
                     .unwrap_or_default();

@@ -1,18 +1,17 @@
-use std::{ops::Range, sync::Arc};
-
 use crate::editable_text::{
-    EditableInputActionElement, EditableTextActionHandler, InitStorage, StateBackedElement,
-    TextInputLayoutData, TextInputState, TextLayoutWrapping, TextLineSegment,
+    InitStorage, StateBackedElement, TextInputState, TextInputStateBase, TextLayoutWrapping,
+    TextLineSegment,
+    actions::{DEFAULT_INPUT_CONTEXT, EditableInputActionElement},
 };
 use gpui::{
     Along, App, Axis, Bounds, ContentMask, CursorStyle, DispatchPhase, Display, Element, ElementId,
     ElementInputHandler, Entity, FocusHandle, Focusable, Hitbox, HitboxBehavior, Hsla,
     InteractiveElement, Interactivity, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, PaintQuad, Pixels, Point, ScrollWheelEvent, ShapedLine, SharedString, Style,
-    StyleRefinement, Styled, TextAlign, TextRun, TextStyle, Window, WrappedLine, fill, point, px,
-    size,
+    MouseUpEvent, PaintQuad, Pixels, Point, ScrollWheelEvent, SharedString, Style, StyleRefinement,
+    Styled, TextAlign, TextStyle, Window, WrappedLine, fill, point, px, size,
 };
 use smallvec::SmallVec;
+use std::{ops::Range, sync::Arc};
 
 #[track_caller]
 pub fn input(id: impl Into<ElementId>) -> TextInputElement {
@@ -22,7 +21,7 @@ pub fn input(id: impl Into<ElementId>) -> TextInputElement {
         interactivity: Interactivity::new(),
         init_storage: InitStorage::default(),
     };
-    this = this.key_context(super::DEFAULT_INPUT_CONTEXT);
+    this = this.key_context(DEFAULT_INPUT_CONTEXT);
     this.register_actions();
     this
 }
@@ -174,25 +173,60 @@ impl Element for TextInputElement {
         window: &mut gpui::Window,
         cx: &mut gpui::App,
     ) -> Self::PrepaintState {
+        struct InteractivityPrepaint {
+            hitbox: Option<Hitbox>,
+            scroll_offset: Point<Pixels>,
+        }
+        // TODO: how do we enable scrolling? overflow on interactivity?
+        let prepaint = self.interactivity.prepaint(
+            global_id,
+            inspector_id,
+            bounds,
+            bounds.size,
+            window,
+            cx,
+            |_style, scroll_offset, hitbox, window, _cx| {
+                let hitbox =
+                    hitbox.or_else(|| Some(window.insert_hitbox(bounds, HitboxBehavior::Normal)));
+                InteractivityPrepaint {
+                    hitbox,
+                    scroll_offset,
+                }
+            },
+        );
+        let InteractivityPrepaint {
+            hitbox,
+            scroll_offset,
+        } = prepaint;
+
+        let text_color = request_layout.text_style.color;
+        let placeholder_color = Hsla::black().opacity(0.5); // TODO: as an element param
+        let selection_color = Hsla::blue().opacity(0.5); // TODO: as an element param
+        let caret_color = Hsla::white(); // TODO: as an element param
+
         // TODO: no wrapping in single-line
         let wrap_width = Some(bounds.size.width);
-
         let wrapping = TextLayoutWrapping::new(request_layout.text_style.clone(), wrap_width);
         let showing_placeholder = request_layout.state.update(cx, |state, _cx| {
-            let text_value = state.storage().content_utf8();
-            let is_empty = text_value.is_empty();
-            let display_text = match is_empty {
-                false => text_value,
-                true => self
-                    .placeholder
-                    .as_ref()
-                    .map(SharedString::as_str)
-                    .unwrap_or_default(),
-            };
-
-            state.layout_data_mut().bounds = bounds;
-            state.apply_wrapping(wrapping, display_text, window);
-            is_empty
+            let show_placeholder = state.storage().content_utf8().is_empty();
+            state.layout_data.bounds = bounds;
+            if state.layout_wrapping.integrate(wrapping) {
+                let (display_text, color) = match show_placeholder {
+                    false => (state.storage().content_utf8(), text_color),
+                    true => {
+                        let value = self.placeholder.as_ref();
+                        let value = value.map(SharedString::as_str).unwrap_or_default();
+                        (value, placeholder_color)
+                    }
+                };
+                state.layout_data.lines = TextInputStateBase::build_wrapped_lines(
+                    display_text,
+                    &state.layout_wrapping,
+                    window,
+                    color,
+                );
+            }
+            show_placeholder
         });
 
         let input = request_layout.state.read(cx);
@@ -204,27 +238,7 @@ impl Element for TextInputElement {
         // TODO: Cursor blinking
         let cursor_visible = true; // input.cursor_visible();
 
-        let text_color = Hsla::white(); // TODO: as an element param
-        let placeholder_color = Hsla::black().opacity(0.5); // TODO: as an element param
-        let selection_color = Hsla::blue().opacity(0.5); // TODO: as an element param
-        let caret_color = Hsla::white(); // TODO: as an element param
-
         let mut elements = SmallVec::new();
-
-        // TODO: how do we enable scrolling? overflow on interactivity?
-        let (hitbox, scroll_offset) = self.interactivity.prepaint(
-            global_id,
-            inspector_id,
-            bounds,
-            bounds.size,
-            window,
-            cx,
-            |_style, scroll_offset, hitbox, window, _cx| {
-                let hitbox =
-                    hitbox.or_else(|| Some(window.insert_hitbox(bounds, HitboxBehavior::Normal)));
-                (hitbox, scroll_offset)
-            },
-        );
 
         let line_height = window.line_height();
         let is_range_contained_by_range =
@@ -369,6 +383,7 @@ impl Element for TextInputElement {
             let ime_handler = ElementInputHandler::new(bounds, request_layout.state.clone());
             window.handle_input(&prepaint.focus_handle, ime_handler, cx);
 
+            use super::actions::EditableTextActionHandler;
             let get_relative_position = {
                 let bounds = bounds.clone();
                 move |position: Point<Pixels>| {
