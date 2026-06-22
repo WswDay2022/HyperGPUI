@@ -5,7 +5,7 @@ use crate::editable_text::{
 };
 use gpui::{
     App, Bounds, Element, ElementId, InteractiveElement, Interactivity, IntoElement, Pixels,
-    SharedString, StyleRefinement, Styled, WeakEntity, Window,
+    SharedString, StatefulInteractiveElement, StyleRefinement, Styled, WeakEntity, Window,
 };
 use std::{cell::RefCell, rc::Rc};
 
@@ -53,6 +53,8 @@ impl InteractiveElement for TextInputElement {
         &mut self.interactivity
     }
 }
+
+impl StatefulInteractiveElement for TextInputElement {}
 
 impl Styled for TextInputElement {
     fn style(&mut self) -> &mut StyleRefinement {
