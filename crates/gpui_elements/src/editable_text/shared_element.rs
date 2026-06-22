@@ -43,6 +43,7 @@ pub struct LayoutState<State> {
 #[doc(hidden)]
 pub struct PrepaintState {
     pub hitbox: Option<Hitbox>,
+    pub inner_bounds: Bounds<Pixels>,
     pub focus_handle: FocusHandle,
     pub elements: SmallVec<[PrepaintElement; 3]>,
     pub scroll_offset: Point<Pixels>,
@@ -112,6 +113,7 @@ pub trait EditableTextElement: InteractiveElement + EditableInputActionElement {
         struct InteractivityPrepaint {
             hitbox: Option<Hitbox>,
             scroll_offset: Point<Pixels>,
+            padding: gpui::Edges<Pixels>,
         }
         // TODO: how do we enable scrolling? overflow on interactivity?
         let prepaint = self.interactivity().prepaint(
@@ -121,26 +123,38 @@ pub trait EditableTextElement: InteractiveElement + EditableInputActionElement {
             bounds.size,
             window,
             cx,
-            |_style, scroll_offset, hitbox, window, _cx| {
+            |style, scroll_offset, hitbox, window, _cx| {
                 let hitbox =
                     hitbox.or_else(|| Some(window.insert_hitbox(bounds, HitboxBehavior::Normal)));
+                let padding = style
+                    .padding
+                    .to_pixels(bounds.size.into(), window.rem_size());
                 InteractivityPrepaint {
                     hitbox,
                     scroll_offset,
+                    padding,
                 }
             },
         );
         let InteractivityPrepaint {
             hitbox,
             scroll_offset,
+            padding,
         } = prepaint;
+        let inner_bounds = {
+            let mut bounds = bounds;
+            bounds.origin += point(padding.left, padding.top);
+            bounds.size.width -= padding.left + padding.right;
+            bounds.size.height -= padding.top + padding.bottom;
+            bounds
+        };
 
         let text_color = request_layout.text_style.color;
         let placeholder_color = Hsla::white().opacity(0.5); // TODO: as an element param
         let selection_color = Hsla::blue().opacity(0.5); // TODO: as an element param
         let caret_color = Hsla::white(); // TODO: as an element param
 
-        let wrap_width = self.should_wrap().then_some(bounds.size.width);
+        let wrap_width = self.should_wrap().then_some(inner_bounds.size.width);
         let showing_placeholder = request_layout.state.update(cx, |state, _cx| {
             let wrapping = TextLayoutWrapping::new(
                 request_layout.text_style.clone(),
@@ -148,7 +162,7 @@ pub trait EditableTextElement: InteractiveElement + EditableInputActionElement {
                 state.storage().version(),
             );
             let show_placeholder = state.storage().content_utf8().is_empty();
-            state.layout_data.bounds = bounds;
+            state.layout_data.bounds = inner_bounds;
             if state.layout_wrapping.integrate(wrapping) {
                 let (display_text, color) = match show_placeholder {
                     false => (state.storage().content_utf8(), text_color),
@@ -195,7 +209,7 @@ pub trait EditableTextElement: InteractiveElement + EditableInputActionElement {
             let line_distance_from_top = segment.pos_y * line_height;
             let line_y = line_distance_from_top - scroll_offset.y;
             let line_bottom = line_y + line_height * segment.num_visual_lines as f32;
-            let line_visible = line_bottom >= Pixels::ZERO && line_y <= bounds.size.height;
+            let line_visible = line_bottom >= Pixels::ZERO && line_y <= inner_bounds.size.height;
             if !line_visible {
                 continue;
             }
@@ -203,7 +217,7 @@ pub trait EditableTextElement: InteractiveElement + EditableInputActionElement {
             // TODO: First render all lines (underlines for IME), then all selections, then cursor if no selection
 
             if let Some(wrapped) = &segment.wrapped_line {
-                let point = bounds.origin + point(Pixels::ZERO, line_y);
+                let point = inner_bounds.origin + point(Pixels::ZERO, line_y);
                 elements.push(PrepaintElement::Line {
                     line: wrapped.clone(),
                     point,
@@ -218,8 +232,9 @@ pub trait EditableTextElement: InteractiveElement + EditableInputActionElement {
                     const EMPTY_LINE_SELECTION_WIDTH: Pixels = px(6.);
                     elements.push(PrepaintElement::Quad(fill(
                         Bounds::from_corners(
-                            bounds.origin + point(Pixels::ZERO, line_y),
-                            bounds.origin + point(EMPTY_LINE_SELECTION_WIDTH, line_y + line_height),
+                            inner_bounds.origin + point(Pixels::ZERO, line_y),
+                            inner_bounds.origin
+                                + point(EMPTY_LINE_SELECTION_WIDTH, line_y + line_height),
                         ),
                         selection_color,
                     )));
@@ -233,7 +248,7 @@ pub trait EditableTextElement: InteractiveElement + EditableInputActionElement {
                     );
                     elements.extend(PrepaintElement::build_quads(
                         offset_corners,
-                        bounds.origin,
+                        inner_bounds.origin,
                         selection_color,
                     ));
                 }
@@ -256,7 +271,7 @@ pub trait EditableTextElement: InteractiveElement + EditableInputActionElement {
                     );
                     elements.extend(PrepaintElement::build_quads(
                         offset_corners,
-                        bounds.origin,
+                        inner_bounds.origin,
                         selection_color,
                     ));
                 }
@@ -281,7 +296,7 @@ pub trait EditableTextElement: InteractiveElement + EditableInputActionElement {
             const CURSOR_WIDTH: f32 = 2.0;
             let quad = fill(
                 Bounds::new(
-                    bounds.origin + carent_point - scroll_offset,
+                    inner_bounds.origin + carent_point - scroll_offset,
                     size(gpui::px(CURSOR_WIDTH), line_height),
                 ),
                 caret_color,
@@ -291,6 +306,7 @@ pub trait EditableTextElement: InteractiveElement + EditableInputActionElement {
 
         PrepaintState {
             hitbox,
+            inner_bounds,
             focus_handle,
             elements,
             scroll_offset,
@@ -315,24 +331,23 @@ pub trait EditableTextElement: InteractiveElement + EditableInputActionElement {
             window.set_cursor_style(CursorStyle::IBeam, hitbox);
         }
 
+        let inner_bounds = prepaint.inner_bounds;
+        let bounds_origin = bounds.origin;
         let perform_paint = |style: &Style, window: &mut Window, cx: &mut App| {
             if style.display == Display::None {
                 return;
             }
 
             // NOTE: Skip when disabled
-            let ime_handler = ElementInputHandler::new(bounds, request_layout.state.clone());
+            let ime_handler = ElementInputHandler::new(inner_bounds, request_layout.state.clone());
             window.handle_input(&prepaint.focus_handle, ime_handler, cx);
 
-            let get_relative_position = {
-                let bounds = bounds.clone();
-                move |position: Point<Pixels>| {
-                    // Converts a screen position to a position relative to the text area origin,
-                    // adjusted for scroll offset.
-                    let scroll_distance = gpui::px(0.); // TODO: STUB
-                    (position - bounds.origin)
-                        .apply_along(Axis::Horizontal, |pos| pos + scroll_distance)
-                }
+            let get_relative_position = move |position: Point<Pixels>| {
+                // Converts a screen position to a position relative to the text area origin,
+                // adjusted for scroll offset.
+                let scroll_distance = gpui::px(0.); // TODO: STUB
+                (position - bounds_origin)
+                    .apply_along(Axis::Horizontal, |pos| pos + scroll_distance)
             };
             window.on_mouse_event({
                 let state = request_layout.state.clone();
@@ -400,7 +415,7 @@ pub trait EditableTextElement: InteractiveElement + EditableInputActionElement {
                     if phase != DispatchPhase::Bubble {
                         return;
                     }
-                    if !bounds.contains(&event.position) {
+                    if !inner_bounds.contains(&event.position) {
                         return;
                     }
 
@@ -427,7 +442,10 @@ pub trait EditableTextElement: InteractiveElement + EditableInputActionElement {
                 }
             });
 
-            window.with_content_mask(Some(ContentMask { bounds }), |window| {
+            let inner_bounds_mask = Some(ContentMask {
+                bounds: inner_bounds,
+            });
+            window.with_content_mask(inner_bounds_mask, |window| {
                 let line_h = window.line_height();
                 let mut lines = Vec::with_capacity(prepaint.elements.len());
                 for element in prepaint.elements.drain(..) {
