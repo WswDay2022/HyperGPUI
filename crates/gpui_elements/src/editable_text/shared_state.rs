@@ -4,9 +4,8 @@ use crate::editable_text::{
     notify::{TextChanged, TextHistoryPushed},
 };
 use gpui::{
-    App, Bounds, ClipboardItem, EntityInputHandler, FocusHandle, Focusable, Hsla,
-    NavigationDirection, Pixels, Point, SharedString, TextRun, TextStyle, UTF16Selection, Window,
-    WrappedLine, point,
+    App, Bounds, ClipboardItem, EntityInputHandler, FocusHandle, Focusable, NavigationDirection,
+    Pixels, Point, Size, UTF16Selection, Window, WrappedLine, point,
 };
 use std::{ops::Range, sync::Arc};
 
@@ -47,49 +46,21 @@ pub struct TextInputStateBase {
 
     focus_handle: FocusHandle,
 
-    pub(super) layout_wrapping: TextLayoutWrapping,
     pub(super) layout_data: TextInputLayoutData,
-}
-
-#[derive(PartialEq)]
-pub(super) struct TextLayoutWrapping {
-    text_style: TextStyle,
-    wrap_width: Option<Pixels>,
-    last_seen_storage_version: u16,
-}
-impl Default for TextLayoutWrapping {
-    fn default() -> Self {
-        Self {
-            text_style: Default::default(),
-            wrap_width: Default::default(),
-            last_seen_storage_version: u16::MAX,
-        }
-    }
-}
-impl TextLayoutWrapping {
-    pub fn new(text_style: TextStyle, wrap_width: Option<Pixels>, storage_version: u16) -> Self {
-        Self {
-            text_style,
-            wrap_width,
-            last_seen_storage_version: storage_version,
-        }
-    }
-
-    pub fn integrate(&mut self, other: Self) -> bool {
-        let dirty = *self != other;
-        *self = other;
-        dirty
-    }
 }
 
 #[derive(Default)]
 pub(super) struct TextInputLayoutData {
+    /// The last known width at which the lines were wrapped.
+    pub wrap_width: Option<Pixels>,
+    /// The last known size of the text, as generated during layout.
+    pub size: Option<Size<Pixels>>,
+    /// The last seen version of `storage` (for tracking when lines need to be reprocessed during layout)
+    pub last_seen_storage_version: u16,
     /// The `ShapedLine` produced by the painter's `prepaint`.
     /// Cached so IME `bounds_for_range` / `character_index_for_point` can evaluate without re-shaping.
     pub lines: Vec<TextLineSegment>,
-    /// The bounds of the text area, in window coordinates.
-    /// Cached for IME operations.
-    pub bounds: Bounds<Pixels>,
+    pub lines_represent_placeholder: bool,
 }
 pub(super) struct TextLineSegment {
     /// The utf8 byte range in the content string that this line covers.
@@ -125,7 +96,6 @@ impl TextInputStateBase {
 
             focus_handle: cx.focus_handle(),
 
-            layout_wrapping: TextLayoutWrapping::default(),
             layout_data: TextInputLayoutData::default(),
         }
     }
@@ -163,101 +133,6 @@ impl TextInputStateBase {
 }
 
 impl TextInputStateBase {
-    pub(super) fn line_segments(&self) -> &Vec<TextLineSegment> {
-        &self.layout_data.lines
-    }
-
-    pub(super) fn build_wrapped_lines(
-        content: &str,
-        wrapping: &TextLayoutWrapping,
-        window: &Window,
-        color: Hsla,
-    ) -> Vec<TextLineSegment> {
-        let text_style = &wrapping.text_style;
-        let font_size = text_style.font_size.to_pixels(window.rem_size());
-        let mut lines = Vec::new();
-
-        if content.is_empty() {
-            lines.push(TextLineSegment {
-                text_range: 0..0,
-                wrapped_line: None,
-                pos_y: 0,
-                num_visual_lines: 1,
-            });
-            return lines;
-        }
-
-        let mut pos_y = 0;
-        let mut current_pos = 0;
-
-        while current_pos < content.len() {
-            let line_end = content[current_pos..]
-                .find('\n')
-                .map(|pos| current_pos + pos)
-                .unwrap_or(content.len());
-
-            let line_slice = &content[current_pos..line_end];
-
-            if line_slice.is_empty() {
-                lines.push(TextLineSegment {
-                    text_range: current_pos..current_pos,
-                    wrapped_line: None,
-                    pos_y,
-                    num_visual_lines: 1,
-                });
-                pos_y += 1;
-            } else {
-                let run = TextRun {
-                    len: line_slice.len(),
-                    font: text_style.font(),
-                    color,
-                    background_color: None,
-                    underline: None,
-                    strikethrough: None,
-                };
-
-                let wrapped_lines = window
-                    .text_system()
-                    .shape_text(
-                        SharedString::from(line_slice.to_string()),
-                        font_size,
-                        &[run],
-                        wrapping.wrap_width,
-                        None,
-                    )
-                    .unwrap_or_default();
-
-                for wrapped in wrapped_lines {
-                    let num_visual_lines = wrapped.wrap_boundaries().len() + 1;
-                    lines.push(TextLineSegment {
-                        text_range: current_pos..line_end,
-                        wrapped_line: Some(Arc::new(wrapped)),
-                        pos_y,
-                        num_visual_lines,
-                    });
-                    pos_y += num_visual_lines;
-                }
-            }
-
-            current_pos = if line_end < content.len() {
-                line_end + 1
-            } else {
-                content.len()
-            };
-        }
-
-        if content.ends_with('\n') {
-            lines.push(TextLineSegment {
-                text_range: content.len()..content.len(),
-                wrapped_line: None,
-                pos_y,
-                num_visual_lines: 1,
-            });
-        }
-
-        lines
-    }
-
     /// Returns the utf-8 character position of the start of the line that contains the provided pixel-point.
     pub fn index_for_pixel_point(&self, point: Point<Pixels>, line_height: Pixels) -> usize {
         let storage_len_utf8 = self.storage.content_utf8().len();

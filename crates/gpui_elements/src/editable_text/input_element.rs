@@ -85,10 +85,6 @@ impl EditableTextElement for TextInputElement {
     fn placeholder(&self) -> &Option<SharedString> {
         &self.placeholder
     }
-
-    fn should_wrap(&self) -> bool {
-        false
-    }
 }
 
 impl Element for TextInputElement {

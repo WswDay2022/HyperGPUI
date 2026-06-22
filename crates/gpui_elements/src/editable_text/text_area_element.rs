@@ -4,8 +4,8 @@ use crate::editable_text::{
     shared_element::{self, EditableTextElement},
 };
 use gpui::{
-    App, Bounds, Element, ElementId, Entity, Hitbox, InteractiveElement, Interactivity,
-    IntoElement, Pixels, SharedString, StyleRefinement, Styled, TextStyle, WeakEntity, Window,
+    App, Bounds, Element, ElementId, InteractiveElement, Interactivity, IntoElement, Pixels,
+    SharedString, StyleRefinement, Styled, WeakEntity, Window,
 };
 use std::{cell::RefCell, rc::Rc};
 
@@ -83,10 +83,6 @@ impl EditableTextElement for TextAreaElement {
 
     fn placeholder(&self) -> &Option<SharedString> {
         &self.placeholder
-    }
-
-    fn should_wrap(&self) -> bool {
-        true
     }
 }
 
