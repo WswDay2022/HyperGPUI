@@ -157,6 +157,7 @@ impl<'app> EditableTextActionHandler<'app> for TextAreaState {
     }
 
     fn insert_enter(&mut self, _: &Enter, window: &mut Window, cx: &mut Self::Context) {
+        // TODO: Why is the cursor appearing at the start of the entire field instead of on the new line?
         self.replace_text_in_range(None, "\n", window, cx);
     }
 
@@ -214,12 +215,22 @@ impl<'app> EditableTextActionHandler<'app> for TextAreaState {
             .nav_linear(NavigationDirection::Forward, TextBoundary::Graphmeme, cx);
     }
 
-    fn nav_up(&mut self, _: &Up, _w: &mut Window, cx: &mut Self::Context) {
-        // TODO: implement
+    fn nav_up(&mut self, _: &Up, window: &mut Window, cx: &mut Self::Context) {
+        if let Some(caret_pos) = self
+            .internal
+            .find_position_in_vertical_direction(-1, window.line_height())
+        {
+            self.internal.move_to(caret_pos, cx);
+        }
     }
 
-    fn nav_down(&mut self, _: &Down, _w: &mut Window, cx: &mut Self::Context) {
-        // TODO: implement
+    fn nav_down(&mut self, _: &Down, window: &mut Window, cx: &mut Self::Context) {
+        if let Some(caret_pos) = self
+            .internal
+            .find_position_in_vertical_direction(1, window.line_height())
+        {
+            self.internal.move_to(caret_pos, cx);
+        }
     }
 
     fn nav_line_start(&mut self, _: &Home, _w: &mut Window, cx: &mut Self::Context) {
@@ -266,12 +277,26 @@ impl<'app> EditableTextActionHandler<'app> for TextAreaState {
             .select_linear(NavigationDirection::Forward, TextBoundary::Graphmeme, cx);
     }
 
-    fn select_up(&mut self, _: &SelectUp, _w: &mut Window, cx: &mut Self::Context) {
-        // TODO: implement
+    fn select_up(&mut self, _: &SelectUp, window: &mut Window, cx: &mut Self::Context) {
+        if let Some(caret_pos) = self
+            .internal
+            .find_position_in_vertical_direction(-1, window.line_height())
+        {
+            self.internal.select_to(caret_pos, cx);
+            //self.scroll_to_cursor();
+            cx.notify_changed();
+        }
     }
 
-    fn select_down(&mut self, _: &SelectDown, _w: &mut Window, cx: &mut Self::Context) {
-        // TODO: implement
+    fn select_down(&mut self, _: &SelectDown, window: &mut Window, cx: &mut Self::Context) {
+        if let Some(caret_pos) = self
+            .internal
+            .find_position_in_vertical_direction(1, window.line_height())
+        {
+            self.internal.select_to(caret_pos, cx);
+            //self.scroll_to_cursor();
+            cx.notify_changed();
+        }
     }
 
     fn select_start(&mut self, _: &SelectToBeginning, _w: &mut Window, cx: &mut Self::Context) {

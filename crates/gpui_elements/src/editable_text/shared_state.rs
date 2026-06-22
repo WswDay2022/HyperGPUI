@@ -73,7 +73,17 @@ pub(super) struct TextLineSegment {
     pub pos_y: usize,
     /// The number of segments up to and including this segment in the literal line that has been wrapped.
     /// There may be other segments after this one with a larger counter.
+    /// TODO: Deprecated in favor of `wrap_boundaries`
     pub num_visual_lines: usize,
+}
+impl TextLineSegment {
+    pub fn wrap_boundaries(&self) -> usize {
+        let count = self
+            .wrapped_line
+            .as_ref()
+            .map(|line| line.wrap_boundaries().len());
+        count.unwrap_or_default() + 1
+    }
 }
 
 impl Focusable for TextInputStateBase {
@@ -346,7 +356,7 @@ impl TextInputStateBase {
 }
 
 impl TextInputStateBase {
-    fn move_to(&mut self, caret_pos: usize, cx: &mut impl TextStateNotifier) {
+    pub fn move_to(&mut self, caret_pos: usize, cx: &mut impl TextStateNotifier) {
         //cx.emit(CursorTrigger::PauseBlinkingForUserAction);
         let caret_pos = caret_pos.min(self.storage.content_utf8().len());
         self.selected_range = caret_pos..caret_pos;
@@ -354,7 +364,7 @@ impl TextInputStateBase {
         cx.notify_changed();
     }
 
-    fn select_to(&mut self, caret_pos: usize, cx: &mut impl TextStateNotifier) {
+    pub fn select_to(&mut self, caret_pos: usize, cx: &mut impl TextStateNotifier) {
         //cx.emit(CursorTrigger::PauseBlinkingForUserAction);
         let caret_pos = caret_pos.min(self.storage().content_utf8().len());
         self.selected_range.start = caret_pos;
@@ -401,6 +411,82 @@ impl TextInputStateBase {
                 .offset_from_caret(self.caret_pos(), direction, boundary),
         };
         self.move_to(caret_pos, cx);
+    }
+
+    pub fn line_index_and_point_at_caret(&self, line_height: Pixels) -> (usize, Point<Pixels>) {
+        if self.layout_data.lines.is_empty() {
+            return (0, Point::default());
+        }
+
+        let pos = self.caret_pos();
+
+        // accumulated vertical line count (not literal lines, since they can be wrapped)
+        let mut segment_index = 0;
+        for segment in &self.layout_data.lines {
+            if segment.text_range.is_empty() {
+                if pos == segment.text_range.start {
+                    return (segment_index, Point::default());
+                }
+            }
+
+            if segment.text_range.contains(&pos) {
+                if let Some(wrapped) = &segment.wrapped_line {
+                    let pos_in_segment = (pos - segment.text_range.start).min(wrapped.text.len());
+                    if let Some(point) = wrapped.position_for_index(pos_in_segment, line_height) {
+                        let visual_line_within = (point.y / line_height).floor() as usize;
+                        return (segment_index + visual_line_within, point);
+                    }
+                }
+                return (segment_index, Point::default());
+            }
+
+            segment_index += segment.wrap_boundaries();
+        }
+
+        (segment_index.saturating_sub(1), Point::default())
+    }
+
+    pub fn find_position_in_vertical_direction(
+        &self,
+        direction: i32,
+        line_height: Pixels,
+    ) -> Option<usize> {
+        let (line_index, point) = self.line_index_and_point_at_caret(line_height);
+        println!("{line_index:?} {point:?}");
+        let line_index = line_index.saturating_add_signed(direction as isize);
+
+        let mut current_visual_line = 0;
+        for segment in &self.layout_data.lines {
+            let wrap_boundary_len = segment.wrap_boundaries();
+
+            if line_index < current_visual_line + wrap_boundary_len {
+                let visual_line_within_layout = line_index - current_visual_line;
+
+                if segment.text_range.is_empty() {
+                    return Some(segment.text_range.start);
+                }
+
+                if let Some(wrapped) = &segment.wrapped_line {
+                    let y_within_wrapped = line_height * visual_line_within_layout as f32;
+                    let target_point = gpui::point(point.x, y_within_wrapped);
+
+                    let closest_result =
+                        wrapped.closest_index_for_position(target_point, line_height);
+
+                    let closest_idx = closest_result.unwrap_or_else(|closest| closest);
+                    let clamped = closest_idx.min(wrapped.text.len());
+                    let result = segment.text_range.start + clamped;
+                    println!("{result:?}");
+                    return Some(result);
+                }
+
+                return Some(segment.text_range.start);
+            }
+
+            current_visual_line += wrap_boundary_len;
+        }
+
+        (direction > 0).then(|| self.storage.content_utf8().len())
     }
 
     pub fn select_all(&mut self, cx: &mut impl TextStateNotifier) {

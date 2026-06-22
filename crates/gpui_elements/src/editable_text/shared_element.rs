@@ -167,6 +167,7 @@ pub trait EditableTextElement: InteractiveElement + EditableInputActionElement {
                                 &runs,
                                 cx,
                             );
+                            let text_len = text.len();
 
                             let wrapped_lines = window
                                 .text_system()
@@ -178,6 +179,17 @@ pub trait EditableTextElement: InteractiveElement + EditableInputActionElement {
                                     text_style.line_clamp,
                                 )
                                 .unwrap_or_default();
+
+                            let line_ranges = wrapped_lines.iter().fold(
+                                Vec::<Range<usize>>::new(),
+                                |mut ranges, line| {
+                                    let prev_end =
+                                        ranges.last().map(|range| range.end).unwrap_or_default();
+                                    ranges.push(prev_end..prev_end + line.len());
+                                    ranges
+                                },
+                            );
+                            println!("{line_ranges:?}");
 
                             // Build the size of the text and convert the wrapped_lines into
                             // lines that will be cached in state and painted.
@@ -191,7 +203,13 @@ pub trait EditableTextElement: InteractiveElement + EditableInputActionElement {
                                 size.width = size.width.max(line_size.width).ceil();
 
                                 let num_visual_lines = line.wrap_boundaries().len() + 1;
-                                let line_len = line.len();
+                                let mut line_len = line.len();
+                                if line_len < text_len {
+                                    // to offset for new-line characters that are
+                                    // omitted from WrappedLine range
+                                    line_len += 1;
+                                }
+
                                 lines.push(TextLineSegment {
                                     text_range: line_start..line_start + line_len,
                                     wrapped_line: Some(Arc::new(line)),
@@ -382,6 +400,9 @@ pub trait EditableTextElement: InteractiveElement + EditableInputActionElement {
                 segment.text_range.contains(&caret_pos) || caret_pos == segment.text_range.end
             };
             if is_cursor_in_line && let Some(wrapped) = &segment.wrapped_line {
+                // TODO: when the cursor is functionally at a character that is on the next line
+                // (a line that spans multiple rows), the cursor displays at the end of the previous
+                // row instead of the start of the next row.
                 let local_offset = caret_pos.saturating_sub(segment.text_range.start);
                 let caret_px = wrapped
                     .position_for_index(local_offset, line_height)
