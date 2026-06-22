@@ -37,7 +37,6 @@ impl PrepaintElement {
 #[doc(hidden)]
 pub struct LayoutState<State> {
     pub state: Entity<State>,
-    pub text_style: TextStyle,
 }
 
 #[doc(hidden)]
@@ -74,30 +73,26 @@ pub trait EditableTextElement: InteractiveElement + EditableInputActionElement {
             }
         };
 
-        let mut resolved_text_style = None;
-
+        // TODO: This required a gpui api change in order to sync the focus handle between Interactivity and TextInputStateBase
         self.interactivity()
             .track_focus(state.read(cx).focus_handle(cx));
+
         let layout_id = self.interactivity().request_layout(
             global_id,
             inspector_id,
             window,
             cx,
-            |element_style, window, cx| {
-                window.with_text_style(element_style.text_style().cloned(), |window| {
-                    resolved_text_style = Some(window.text_style());
+            |style, window, cx| {
+                window.with_text_style(style.text_style().cloned(), |window| {
+                    //let text_style = window.text_style();
 
-                    let style = element_style.clone();
-                    // TODO: Does this need to propagate the line_height as the element's height?
-                    window.request_layout(style, None, cx)
+                    // TODO: allocate the interior text layout and provide it as a child to the interactivity layout
+                    window.request_layout(style.clone(), None, cx)
                 })
             },
         );
 
-        let layout_state = LayoutState {
-            state,
-            text_style: resolved_text_style.unwrap_or_else(|| window.text_style()),
-        };
+        let layout_state = LayoutState { state };
         (layout_id, layout_state)
     }
 
@@ -149,11 +144,12 @@ pub trait EditableTextElement: InteractiveElement + EditableInputActionElement {
             bounds
         };
 
-        let text_color = request_layout.text_style.color;
+        //let text_color = request_layout.text_style.color;
         let placeholder_color = Hsla::white().opacity(0.5); // TODO: as an element param
         let selection_color = Hsla::blue().opacity(0.5); // TODO: as an element param
         let caret_color = Hsla::white(); // TODO: as an element param
 
+        /*
         let wrap_width = self.should_wrap().then_some(inner_bounds.size.width);
         let showing_placeholder = request_layout.state.update(cx, |state, _cx| {
             let wrapping = TextLayoutWrapping::new(
@@ -181,6 +177,8 @@ pub trait EditableTextElement: InteractiveElement + EditableInputActionElement {
             }
             show_placeholder
         });
+        */
+        let showing_placeholder = false;
 
         let input = request_layout.state.read(cx);
 
