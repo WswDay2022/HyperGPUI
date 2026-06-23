@@ -5531,6 +5531,16 @@ impl Window {
         self.platform_window.gpu_context()
     }
 
+    /// Whether the GPU device backing this window has been lost (recovery
+    /// happens on a subsequent platform draw). `None` when the backend
+    /// cannot know. Embedders that captured the device from
+    /// [`Self::gpu_context`] should stop submitting while this is
+    /// `Some(true)` and re-acquire the device once it reads `Some(false)`.
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    pub fn gpu_device_lost(&self) -> Option<bool> {
+        self.platform_window.gpu_device_lost()
+    }
+
     /// Perform titlebar double-click action.
     /// This is macOS specific.
     pub fn titlebar_double_click(&self) {

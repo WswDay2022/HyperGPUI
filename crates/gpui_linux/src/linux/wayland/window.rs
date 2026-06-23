@@ -1569,6 +1569,12 @@ impl PlatformWindow for WaylandWindow {
         Some(Box::new((device, queue)))
     }
 
+    fn gpu_device_lost(&self) -> Option<bool> {
+        // Only loads an atomic flag — safe even mid-recovery, when
+        // `gpu_context` would panic on the torn-down resources.
+        Some(self.borrow().renderer.device_lost())
+    }
+
     fn play_system_bell(&self) {
         let state = self.borrow();
         let surface = if state.surface_state.toplevel().is_some() {

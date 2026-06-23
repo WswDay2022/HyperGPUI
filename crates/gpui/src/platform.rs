@@ -725,6 +725,17 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
         None
     }
 
+    /// Whether this window's GPU device has been lost (the platform renderer
+    /// recovers it on a subsequent draw). `None` when the backend cannot
+    /// know. Safe to call mid-recovery, unlike `gpu_context`. Embedders that
+    /// captured the device from `gpu_context` should stop submitting while
+    /// this is `Some(true)` and re-acquire the device once it reads
+    /// `Some(false)` again.
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    fn gpu_device_lost(&self) -> Option<bool> {
+        None
+    }
+
     fn update_ime_position(&self, _bounds: Bounds<Pixels>);
 
     fn play_system_bell(&self) {}
