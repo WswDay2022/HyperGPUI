@@ -1,6 +1,6 @@
 use crate::editable_text::{
-    InitStorage, StateBackedEditableText, TextInputState,
-    actions::{DEFAULT_INPUT_CONTEXT, EditableInputActionElement},
+    EditableTextInputState, InitStorage, StateBackedEditableText,
+    actions::{DEFAULT_INPUT_CONTEXT, EditableTextActionElement},
     shared_element::{self, EditableTextElement},
 };
 use gpui::{
@@ -31,7 +31,7 @@ pub struct TextInputElement {
     // Populated on first render with an entity stored/attached to the view.
     // This reference is shared with the action handlers, which are processed between renders
     // and therefore cannot otherwise access state attached to the view.
-    state_entity: Rc<RefCell<WeakEntity<TextInputState>>>,
+    state_entity: Rc<RefCell<WeakEntity<EditableTextInputState>>>,
     init_storage: InitStorage,
     placeholder: Option<SharedString>,
 }
@@ -54,6 +54,7 @@ impl InteractiveElement for TextInputElement {
     }
 }
 
+// forced implementation since the API for the element doesnt use Stateful<Element>
 impl StatefulInteractiveElement for TextInputElement {}
 
 impl Styled for TextInputElement {
@@ -70,10 +71,10 @@ impl IntoElement for TextInputElement {
 }
 
 impl StateBackedEditableText for TextInputElement {
-    type State = TextInputState;
+    type State = EditableTextInputState;
 }
 
-impl EditableInputActionElement for TextInputElement {
+impl EditableTextActionElement for TextInputElement {
     fn state_entity_rc(&self) -> &Rc<RefCell<WeakEntity<Self::State>>> {
         &self.state_entity
     }
@@ -90,7 +91,7 @@ impl EditableTextElement for TextInputElement {
 }
 
 impl Element for TextInputElement {
-    type RequestLayoutState = shared_element::LayoutState<TextInputState>;
+    type RequestLayoutState = shared_element::LayoutState<EditableTextInputState>;
     type PrepaintState = shared_element::PrepaintState;
 
     fn id(&self) -> Option<ElementId> {

@@ -1,13 +1,12 @@
 use crate::editable_text::{
     TextInputLayoutData, TextLineSegment,
-    actions::{EditableInputActionElement, EditableTextActionHandler},
+    actions::{EditableTextActionElement, EditableTextActionHandler},
 };
 use gpui::{
-    Along, App, Axis, Bounds, ContentMask, Context, CursorStyle, DispatchPhase, Display,
-    ElementInputHandler, Entity, FocusHandle, Focusable, Hitbox, HitboxBehavior, Hsla,
-    InteractiveElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad,
-    Pixels, Point, ScrollWheelEvent, SharedString, Size, Style, TextAlign, TextLayout, Window,
-    WrappedLine, fill, point, px, size,
+    App, Bounds, Context, CursorStyle, DispatchPhase, Display, ElementInputHandler, Entity,
+    FocusHandle, Focusable, Hitbox, HitboxBehavior, Hsla, InteractiveElement, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, SharedString, Size,
+    Style, TextAlign, TextLayout, Window, WrappedLine, fill, point, px, size,
 };
 use smallvec::SmallVec;
 use std::{ops::Range, sync::Arc};
@@ -49,7 +48,7 @@ pub struct PrepaintState {
     pub caret_visible: bool,
 }
 
-pub trait EditableTextElement: InteractiveElement + EditableInputActionElement {
+pub trait EditableTextElement: InteractiveElement + EditableTextActionElement {
     fn init_state(&self, cx: &mut Context<Self::State>) -> Self::State;
     fn placeholder(&self) -> &Option<SharedString>;
 
@@ -214,7 +213,6 @@ pub trait EditableTextElement: InteractiveElement + EditableInputActionElement {
                                 size: Some(size),
                                 last_seen_storage_version,
                                 lines,
-                                lines_represent_placeholder: show_placeholder,
                             };
 
                             // Update the state for use in prepaint, paint, and action handlers.

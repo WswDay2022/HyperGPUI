@@ -17,7 +17,6 @@ pub use text_area_state::*;
 
 /* TODO list
 - default-value
-- naming clean up (EditableText)
 - remove gpuikit based input
 - cursor blinking
 - color styling configs
@@ -25,4 +24,5 @@ pub use text_area_state::*;
 - text sanitation
 - test IME (char palette only available on macos)
 - unit tests
+- disabled input/area
 */

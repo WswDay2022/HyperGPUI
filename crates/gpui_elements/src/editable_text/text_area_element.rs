@@ -1,6 +1,6 @@
 use crate::editable_text::{
-    InitStorage, StateBackedEditableText, TextAreaState,
-    actions::{DEFAULT_INPUT_CONTEXT, EditableInputActionElement},
+    EditableTextAreaState, InitStorage, StateBackedEditableText,
+    actions::{DEFAULT_INPUT_CONTEXT, EditableTextActionElement},
     shared_element::{self, EditableTextElement},
 };
 use gpui::{
@@ -9,8 +9,8 @@ use gpui::{
 };
 use std::{cell::RefCell, rc::Rc};
 
-pub fn text_area(id: impl Into<ElementId>) -> TextAreaElement {
-    let mut this = TextAreaElement {
+pub fn text_area(id: impl Into<ElementId>) -> EditableTextAreaElement {
+    let mut this = EditableTextAreaElement {
         interactivity: Interactivity::new(),
         state_entity: Rc::new(RefCell::new(WeakEntity::new_invalid())),
         init_storage: InitStorage::default(),
@@ -25,17 +25,17 @@ pub fn text_area(id: impl Into<ElementId>) -> TextAreaElement {
 }
 
 // TODO: Disabled flag/state?
-pub struct TextAreaElement {
+pub struct EditableTextAreaElement {
     interactivity: Interactivity,
     // Populated on first render with an entity stored/attached to the view.
     // This reference is shared with the action handlers, which are processed between renders
     // and therefore cannot otherwise access state attached to the view.
-    state_entity: Rc<RefCell<WeakEntity<TextAreaState>>>,
+    state_entity: Rc<RefCell<WeakEntity<EditableTextAreaState>>>,
     init_storage: InitStorage,
     placeholder: Option<SharedString>,
 }
 
-impl TextAreaElement {
+impl EditableTextAreaElement {
     pub fn placeholder(mut self, text: impl Into<SharedString>) -> Self {
         self.placeholder = Some(text.into());
         self
@@ -47,38 +47,39 @@ impl TextAreaElement {
     }
 }
 
-impl InteractiveElement for TextAreaElement {
+impl InteractiveElement for EditableTextAreaElement {
     fn interactivity(&mut self) -> &mut Interactivity {
         &mut self.interactivity
     }
 }
 
-impl StatefulInteractiveElement for TextAreaElement {}
+// forced implementation since the API for the element doesnt use Stateful<Element>
+impl StatefulInteractiveElement for EditableTextAreaElement {}
 
-impl Styled for TextAreaElement {
+impl Styled for EditableTextAreaElement {
     fn style(&mut self) -> &mut StyleRefinement {
         &mut self.interactivity.base_style
     }
 }
 
-impl IntoElement for TextAreaElement {
+impl IntoElement for EditableTextAreaElement {
     type Element = Self;
     fn into_element(self) -> Self::Element {
         self
     }
 }
 
-impl StateBackedEditableText for TextAreaElement {
-    type State = TextAreaState;
+impl StateBackedEditableText for EditableTextAreaElement {
+    type State = EditableTextAreaState;
 }
 
-impl EditableInputActionElement for TextAreaElement {
+impl EditableTextActionElement for EditableTextAreaElement {
     fn state_entity_rc(&self) -> &Rc<RefCell<WeakEntity<Self::State>>> {
         &self.state_entity
     }
 }
 
-impl EditableTextElement for TextAreaElement {
+impl EditableTextElement for EditableTextAreaElement {
     fn init_state(&self, cx: &mut gpui::prelude::Context<Self::State>) -> Self::State {
         Self::State::new(self.init_storage.exec(cx), cx)
     }
@@ -88,8 +89,8 @@ impl EditableTextElement for TextAreaElement {
     }
 }
 
-impl Element for TextAreaElement {
-    type RequestLayoutState = shared_element::LayoutState<TextAreaState>;
+impl Element for EditableTextAreaElement {
+    type RequestLayoutState = shared_element::LayoutState<EditableTextAreaState>;
     type PrepaintState = shared_element::PrepaintState;
 
     fn id(&self) -> Option<ElementId> {

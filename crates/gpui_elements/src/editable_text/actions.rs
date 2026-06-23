@@ -238,7 +238,7 @@ pub trait EditableTextActionHandler<'app>: Sized {
     }
 }
 
-pub(super) trait EditableInputActionElement: StateBackedEditableText {
+pub(super) trait EditableTextActionElement: StateBackedEditableText {
     fn state_entity_rc(&self) -> &Rc<RefCell<WeakEntity<Self::State>>>;
 
     fn register_action<ActionType>(

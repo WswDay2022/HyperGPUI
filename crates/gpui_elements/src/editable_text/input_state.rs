@@ -1,6 +1,7 @@
 use super::notify::TextHistoryPushed;
 use crate::editable_text::{
-    TextBoundary, TextInputStateBase, TextStateNotifier, UnicodeTextStorage, notify::TextChanged,
+    EditableTextStateBase, EditableTextStateNotifier, TextBoundary, UnicodeTextStorage,
+    notify::TextChanged,
 };
 use gpui::{
     Bounds, Context, EntityInputHandler, EventEmitter, NavigationDirection, Pixels, Point,
@@ -8,34 +9,34 @@ use gpui::{
 };
 use std::ops::Range;
 
-pub struct TextInputState {
-    internal: TextInputStateBase,
+pub struct EditableTextInputState {
+    internal: EditableTextStateBase,
 }
 
-impl EventEmitter<TextChanged> for TextInputState {}
-impl EventEmitter<TextHistoryPushed> for TextInputState {}
+impl EventEmitter<TextChanged> for EditableTextInputState {}
+impl EventEmitter<TextHistoryPushed> for EditableTextInputState {}
 
-impl std::ops::Deref for TextInputState {
-    type Target = TextInputStateBase;
+impl std::ops::Deref for EditableTextInputState {
+    type Target = EditableTextStateBase;
 
     fn deref(&self) -> &Self::Target {
         &self.internal
     }
 }
-impl std::ops::DerefMut for TextInputState {
+impl std::ops::DerefMut for EditableTextInputState {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.internal
     }
 }
 
-impl TextInputState {
+impl EditableTextInputState {
     pub fn new(storage: impl Into<Box<dyn UnicodeTextStorage>>, cx: &mut Context<Self>) -> Self {
-        let internal = TextInputStateBase::new(storage, cx);
+        let internal = EditableTextStateBase::new(storage, cx);
         Self { internal }
     }
 }
 
-impl TextStateNotifier for Context<'_, TextInputState> {
+impl EditableTextStateNotifier for Context<'_, EditableTextInputState> {
     fn notify_changed(&mut self) {
         self.notify();
     }
@@ -49,7 +50,7 @@ impl TextStateNotifier for Context<'_, TextInputState> {
     }
 }
 
-impl EntityInputHandler for TextInputState {
+impl EntityInputHandler for EditableTextInputState {
     fn text_for_range(
         &mut self,
         range_utf16: Range<usize>,
@@ -92,7 +93,6 @@ impl EntityInputHandler for TextInputState {
         let range_utf8 = self.internal.ime_resolve_range(range_utf16);
         self.internal
             .replace_text_in_range_bytes(range_utf8, text_to_insert, cx);
-        //self.mark_layout_dirty();
         //cx.emit(CursorTrigger::PauseBlinkingForUserAction);
         cx.emit_text_changed(TextChanged);
         cx.notify_changed();
@@ -116,7 +116,6 @@ impl EntityInputHandler for TextInputState {
             &new_selected_range_utf16,
             text_to_insert.len(),
         );
-        //self.mark_layout_dirty();
         cx.emit_text_changed(TextChanged);
         cx.notify_changed();
     }
@@ -146,7 +145,7 @@ impl EntityInputHandler for TextInputState {
 }
 
 use super::actions::*;
-impl<'app> EditableTextActionHandler<'app> for TextInputState {
+impl<'app> EditableTextActionHandler<'app> for EditableTextInputState {
     type Context = gpui::Context<'app, Self>;
 
     fn escape(&mut self, _: &Escape, window: &mut Window, cx: &mut Self::Context) {

@@ -9,7 +9,7 @@ use gpui::{
 };
 use std::{ops::Range, sync::Arc};
 
-pub trait TextStateNotifier {
+pub trait EditableTextStateNotifier {
     fn notify_changed(&mut self);
     fn emit_text_changed(&mut self, event: TextChanged);
     fn emit_history(&mut self, event: TextHistoryPushed);
@@ -17,13 +17,13 @@ pub trait TextStateNotifier {
 
 pub trait StateBackedEditableText {
     type State: 'static
-        + std::ops::Deref<Target = TextInputStateBase>
+        + std::ops::Deref<Target = EditableTextStateBase>
         + std::ops::DerefMut
         + EntityInputHandler
         + for<'app> EditableTextActionHandler<'app>;
 }
 
-pub struct TextInputStateBase {
+pub struct EditableTextStateBase {
     storage: Box<dyn UnicodeTextStorage>,
 
     /// The utf-8 character range that is currently selected by the user.
@@ -60,7 +60,6 @@ pub(super) struct TextInputLayoutData {
     /// The `ShapedLine` produced by the painter's `prepaint`.
     /// Cached so IME `bounds_for_range` / `character_index_for_point` can evaluate without re-shaping.
     pub lines: Vec<TextLineSegment>,
-    pub lines_represent_placeholder: bool,
 }
 pub(super) struct TextLineSegment {
     /// The utf8 byte range in the content string that this line covers.
@@ -86,13 +85,13 @@ impl TextLineSegment {
     }
 }
 
-impl Focusable for TextInputStateBase {
+impl Focusable for EditableTextStateBase {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus_handle.clone()
     }
 }
 
-impl TextInputStateBase {
+impl EditableTextStateBase {
     pub fn new(storage: impl Into<Box<dyn UnicodeTextStorage>>, cx: &mut App) -> Self {
         Self {
             storage: storage.into(),
@@ -142,7 +141,7 @@ impl TextInputStateBase {
     }
 }
 
-impl TextInputStateBase {
+impl EditableTextStateBase {
     /// Returns the utf-8 character position of the start of the line that contains the provided pixel-point.
     pub fn index_for_pixel_point(&self, point: Point<Pixels>, line_height: Pixels) -> usize {
         let storage_len_utf8 = self.storage.content_utf8().len();
@@ -178,7 +177,7 @@ impl TextInputStateBase {
     }
 }
 
-impl TextInputStateBase {
+impl EditableTextStateBase {
     pub fn ime_text_for_range(
         &self,
         range_utf16: Range<usize>,
@@ -233,7 +232,7 @@ impl TextInputStateBase {
 
     fn emit_change_for_undo(
         &self,
-        cx: &mut impl TextStateNotifier,
+        cx: &mut impl EditableTextStateNotifier,
         range: Range<usize>,
         length: usize,
     ) {
@@ -249,7 +248,7 @@ impl TextInputStateBase {
         &mut self,
         range: Range<usize>,
         mut text_to_insert: &str,
-        cx: &mut impl TextStateNotifier,
+        cx: &mut impl EditableTextStateNotifier,
     ) {
         // TODO: Apply text sanitization
         // single-line fields should prune \n and \r
@@ -355,8 +354,8 @@ impl TextInputStateBase {
     }
 }
 
-impl TextInputStateBase {
-    pub fn move_to(&mut self, caret_pos: usize, cx: &mut impl TextStateNotifier) {
+impl EditableTextStateBase {
+    pub fn move_to(&mut self, caret_pos: usize, cx: &mut impl EditableTextStateNotifier) {
         //cx.emit(CursorTrigger::PauseBlinkingForUserAction);
         let caret_pos = caret_pos.min(self.storage.content_utf8().len());
         self.selected_range = caret_pos..caret_pos;
@@ -364,7 +363,7 @@ impl TextInputStateBase {
         cx.notify_changed();
     }
 
-    pub fn select_to(&mut self, caret_pos: usize, cx: &mut impl TextStateNotifier) {
+    pub fn select_to(&mut self, caret_pos: usize, cx: &mut impl EditableTextStateNotifier) {
         //cx.emit(CursorTrigger::PauseBlinkingForUserAction);
         let caret_pos = caret_pos.min(self.storage().content_utf8().len());
         self.selected_range.start = caret_pos;
@@ -376,7 +375,7 @@ impl TextInputStateBase {
         &mut self,
         direction: NavigationDirection,
         boundary: TextBoundary,
-        cx: &mut impl TextStateNotifier,
+        cx: &mut impl EditableTextStateNotifier,
     ) {
         let range = self.selected_range();
         let range = match range.is_empty() {
@@ -399,7 +398,7 @@ impl TextInputStateBase {
         &mut self,
         direction: NavigationDirection,
         boundary: TextBoundary,
-        cx: &mut impl TextStateNotifier,
+        cx: &mut impl EditableTextStateNotifier,
     ) {
         let caret_pos = match self.selected_range.is_empty() {
             false => match direction {
@@ -489,7 +488,7 @@ impl TextInputStateBase {
         (direction > 0).then(|| self.storage.content_utf8().len())
     }
 
-    pub fn select_all(&mut self, cx: &mut impl TextStateNotifier) {
+    pub fn select_all(&mut self, cx: &mut impl EditableTextStateNotifier) {
         self.selected_range = 0..self.storage.content_utf8().len();
         cx.notify_changed();
     }
@@ -498,7 +497,7 @@ impl TextInputStateBase {
         &mut self,
         direction: NavigationDirection,
         boundary: TextBoundary,
-        cx: &mut impl TextStateNotifier,
+        cx: &mut impl EditableTextStateNotifier,
     ) {
         let caret_pos = self
             .storage
@@ -508,7 +507,7 @@ impl TextInputStateBase {
 
     pub fn cut<T>(&mut self, cx: &mut T)
     where
-        T: TextStateNotifier + std::ops::Deref<Target = App>,
+        T: EditableTextStateNotifier + std::ops::Deref<Target = App>,
     {
         if !self.selected_range.is_empty() {
             // Cut selected text
@@ -559,7 +558,7 @@ impl TextInputStateBase {
 
     pub fn paste<T>(&mut self, cx: &mut T)
     where
-        T: TextStateNotifier + std::ops::Deref<Target = App>,
+        T: EditableTextStateNotifier + std::ops::Deref<Target = App>,
     {
         let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
             return;
@@ -578,7 +577,7 @@ impl TextInputStateBase {
         window: &mut Window,
         cx: &mut Context,
     ) where
-        Context: TextStateNotifier + std::ops::DerefMut<Target = App>,
+        Context: EditableTextStateNotifier + std::ops::DerefMut<Target = App>,
     {
         window.focus(&self.focus_handle, cx);
         self.is_selecting = true;
@@ -629,7 +628,7 @@ impl TextInputStateBase {
         self.is_selecting = false;
     }
 
-    pub fn on_mouse_move(&mut self, character_pos: usize, cx: &mut impl TextStateNotifier) {
+    pub fn on_mouse_move(&mut self, character_pos: usize, cx: &mut impl EditableTextStateNotifier) {
         if self.is_selecting && self.click_count == 1 {
             self.select_to(character_pos, cx);
         }
