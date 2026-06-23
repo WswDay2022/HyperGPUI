@@ -16,18 +16,24 @@ pub enum TextBoundary {
 #[derive(Clone, Default)]
 pub struct InitStorage(Option<Rc<dyn Fn(&mut App) -> Box<dyn UnicodeTextStorage>>>);
 
-// TODO: Doesnt yet compile in practice "implementation of Fn is not general enough"
-// InitStorage::from(|_cx| Box::new(StringStorage::default()) as Box<dyn UnicodeTextStorage>);
-impl<F> From<F> for InitStorage
-where
-    F: 'static + for<'app> Fn(&'app mut App) -> Box<dyn UnicodeTextStorage>,
-{
-    fn from(value: F) -> Self {
-        Self(Some(Rc::new(value)))
-    }
-}
-
 impl InitStorage {
+    pub fn new_generic<F>(f: F) -> Self
+    where
+        F: 'static + Fn(&mut App) -> Box<dyn UnicodeTextStorage>,
+    {
+        Self(Some(Rc::new(f)))
+    }
+
+    pub fn new_typed<F, R>(f: F) -> Self
+    where
+        F: 'static + Fn(&mut App) -> R,
+        R: 'static + UnicodeTextStorage,
+    {
+        Self(Some(Rc::new(move |cx| {
+            Box::new(f(cx)) as Box<dyn UnicodeTextStorage>
+        })))
+    }
+
     pub(super) fn exec(&self, cx: &mut App) -> Box<dyn UnicodeTextStorage> {
         match &self.0 {
             None => Box::new(StringStorage::default()),
@@ -229,7 +235,7 @@ pub trait UnicodeTextStorage {
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct StringStorage {
     value: String,
     version: u16,

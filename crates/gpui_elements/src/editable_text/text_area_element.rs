@@ -41,8 +41,19 @@ impl EditableTextAreaElement {
         self
     }
 
+    /// Swaps the default storage container (standard String) with a custom initializer of [`UnicodeTextStorage`].
     pub fn with_storage(mut self, fn_init: impl Into<InitStorage>) -> Self {
         self.init_storage = fn_init.into();
+        self
+    }
+
+    /// Swaps the default storage container. The new initializer is a standard String using the provided value.
+    ///
+    /// Incompatible with [`with_storage`] (they establish the same internal value).
+    /// If you initialize custom storage, you should be able to initialize its default value.
+    pub fn default_value(mut self, value: impl Into<String>) -> Self {
+        let storage = super::StringStorage::from(value.into());
+        self.init_storage = InitStorage::new_typed(move |_cx| storage.clone());
         self
     }
 }
