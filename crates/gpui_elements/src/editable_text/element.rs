@@ -1,15 +1,112 @@
 use crate::editable_text::{
-    TextInputLayoutData, TextLineSegment,
-    actions::{EditableTextActionElement, EditableTextActionHandler},
+    EditableTextState, InitStorage, TextInputLayoutData, TextLineSegment,
+    actions::{DEFAULT_INPUT_CONTEXT, EditableTextActionElement, EditableTextActionHandler},
 };
 use gpui::{
-    App, Bounds, Context, CursorStyle, DispatchPhase, Display, ElementInputHandler, Entity,
-    FocusHandle, Focusable, Hitbox, HitboxBehavior, Hsla, InteractiveElement, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, SharedString, Size,
-    Style, TextAlign, TextLayout, Window, WrappedLine, fill, point, px, size,
+    App, Bounds, CursorStyle, DispatchPhase, Display, Element, ElementId, ElementInputHandler,
+    Entity, FocusHandle, Focusable, Hitbox, HitboxBehavior, Hsla, InteractiveElement,
+    Interactivity, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    PaintQuad, Pixels, Point, SharedString, Size, StatefulInteractiveElement, Style,
+    StyleRefinement, Styled, TextAlign, TextLayout, WeakEntity, Window, WrappedLine, fill, point,
+    px, size,
 };
 use smallvec::SmallVec;
-use std::{ops::Range, sync::Arc};
+use std::{cell::RefCell, ops::Range, rc::Rc, sync::Arc};
+
+#[track_caller]
+pub fn editable_text(id: impl Into<ElementId>) -> EditableTextElement {
+    let mut this = EditableTextElement {
+        interactivity: Interactivity::new(),
+        state_entity: Rc::new(RefCell::new(WeakEntity::new_invalid())),
+        supports_multiline: true,
+        init_storage: InitStorage::default(),
+        placeholder: None,
+    };
+    this.interactivity.element_id = Some(id.into());
+
+    this = this.key_context(DEFAULT_INPUT_CONTEXT);
+    this.register_actions();
+
+    this
+}
+
+#[track_caller]
+pub fn text_input(id: impl Into<ElementId>) -> EditableTextElement {
+    editable_text(id).multiline(false)
+}
+
+#[track_caller]
+pub fn text_area(id: impl Into<ElementId>) -> EditableTextElement {
+    editable_text(id).multiline(true)
+}
+
+// TODO: Disabled flag/state?
+pub struct EditableTextElement {
+    interactivity: Interactivity,
+    // Populated on first render with an entity stored/attached to the view.
+    // This reference is shared with the action handlers, which are processed between renders
+    // and therefore cannot otherwise access state attached to the view.
+    state_entity: Rc<RefCell<WeakEntity<EditableTextState>>>,
+    init_storage: InitStorage,
+    supports_multiline: bool,
+    placeholder: Option<SharedString>,
+}
+
+impl EditableTextElement {
+    pub fn multiline(mut self, enabled: bool) -> Self {
+        self.supports_multiline = enabled;
+        self
+    }
+
+    pub fn placeholder(mut self, text: impl Into<SharedString>) -> Self {
+        self.placeholder = Some(text.into());
+        self
+    }
+
+    /// Swaps the default storage container (standard String) with a custom initializer of [`UnicodeTextStorage`].
+    pub fn with_storage(mut self, fn_init: impl Into<InitStorage>) -> Self {
+        self.init_storage = fn_init.into();
+        self
+    }
+
+    /// Swaps the default storage container. The new initializer is a standard String using the provided value.
+    ///
+    /// Incompatible with [`with_storage`] (they establish the same internal value).
+    /// If you initialize custom storage, you should be able to initialize its default value.
+    pub fn default_value(mut self, value: impl Into<String>) -> Self {
+        let storage = super::StringStorage::from(value.into());
+        self.init_storage = InitStorage::new_typed(move |_cx| storage.clone());
+        self
+    }
+}
+
+impl InteractiveElement for EditableTextElement {
+    fn interactivity(&mut self) -> &mut Interactivity {
+        &mut self.interactivity
+    }
+}
+
+// forced implementation since the API for the element doesnt use Stateful<Element>
+impl StatefulInteractiveElement for EditableTextElement {}
+
+impl Styled for EditableTextElement {
+    fn style(&mut self) -> &mut StyleRefinement {
+        &mut self.interactivity.base_style
+    }
+}
+
+impl IntoElement for EditableTextElement {
+    type Element = Self;
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl EditableTextActionElement<EditableTextState> for EditableTextElement {
+    fn state_entity_rc(&self) -> &Rc<RefCell<WeakEntity<EditableTextState>>> {
+        &self.state_entity
+    }
+}
 
 pub enum PrepaintElement {
     Line {
@@ -48,23 +145,32 @@ pub struct PrepaintState {
     pub caret_visible: bool,
 }
 
-pub trait EditableTextElement: InteractiveElement + EditableTextActionElement {
-    fn init_state(&self, cx: &mut Context<Self::State>) -> Self::State;
-    fn placeholder(&self) -> &Option<SharedString>;
+impl Element for EditableTextElement {
+    type RequestLayoutState = LayoutState<EditableTextState>;
+    type PrepaintState = PrepaintState;
 
-    fn shared_request_layout(
+    fn id(&self) -> Option<ElementId> {
+        self.interactivity.element_id.clone()
+    }
+
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        self.interactivity.source_location()
+    }
+
+    fn request_layout(
         &mut self,
         global_id: Option<&gpui::GlobalElementId>,
         inspector_id: Option<&gpui::InspectorElementId>,
-        window: &mut gpui::Window,
-        cx: &mut gpui::App,
-    ) -> (gpui::LayoutId, LayoutState<Self::State>) {
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (gpui::LayoutId, Self::RequestLayoutState) {
         // Fetches or initializes the internal state of the field
         let state = match &self.interactivity().element_id {
             None => unimplemented!("all input elements must be assigned an id"),
             Some(element_id) => {
-                let state = window
-                    .use_keyed_state(element_id.clone(), cx, |_window, cx| self.init_state(cx));
+                let state = window.use_keyed_state(element_id.clone(), cx, |_window, cx| {
+                    EditableTextState::new(self.init_storage.exec(cx), cx)
+                });
                 // store a reference to the entity owned by the element for access in action handlers
                 *self.state_entity_rc().borrow_mut() = state.downgrade();
                 state
@@ -84,8 +190,9 @@ pub trait EditableTextElement: InteractiveElement + EditableTextActionElement {
         // TODO: This required a gpui api change in order to sync the focus handle between Interactivity and TextInputStateBase
         self.interactivity().track_focus(focus_handle);
 
-        let placeholder = self.placeholder().clone();
+        let placeholder = self.placeholder.clone();
         let placeholder_color = Hsla::white().opacity(0.5); // TODO: as an element param
+        let supports_multiline = self.supports_multiline;
         let layout_id = self.interactivity().request_layout(
             global_id,
             inspector_id,
@@ -209,6 +316,7 @@ pub trait EditableTextElement: InteractiveElement + EditableTextActionElement {
                             }
 
                             let layout_data = TextInputLayoutData {
+                                supports_multiline,
                                 wrap_width,
                                 size: Some(size),
                                 last_seen_storage_version,
@@ -235,15 +343,15 @@ pub trait EditableTextElement: InteractiveElement + EditableTextActionElement {
         (layout_id, layout_state)
     }
 
-    fn shared_prepaint(
+    fn prepaint(
         &mut self,
         global_id: Option<&gpui::GlobalElementId>,
         inspector_id: Option<&gpui::InspectorElementId>,
-        bounds: gpui::Bounds<gpui::Pixels>,
-        request_layout: &mut LayoutState<Self::State>,
-        window: &mut gpui::Window,
-        cx: &mut gpui::App,
-    ) -> PrepaintState {
+        bounds: Bounds<Pixels>,
+        request_layout: &mut Self::RequestLayoutState,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Self::PrepaintState {
         // should reflect the text content layout size of the stored text,
         // so that scrolling can take it into account during prepaint.
         let content_size = {
@@ -430,19 +538,16 @@ pub trait EditableTextElement: InteractiveElement + EditableTextActionElement {
         }
     }
 
-    fn shared_paint(
+    fn paint(
         &mut self,
         global_id: Option<&gpui::GlobalElementId>,
         inspector_id: Option<&gpui::InspectorElementId>,
-        bounds: gpui::Bounds<gpui::Pixels>,
-        request_layout: &mut LayoutState<Self::State>,
-        prepaint: &mut PrepaintState,
-        window: &mut gpui::Window,
-        cx: &mut gpui::App,
-    ) where
-        Self::State:
-            for<'app> EditableTextActionHandler<'app, Context = Context<'app, Self::State>>,
-    {
+        bounds: Bounds<Pixels>,
+        request_layout: &mut Self::RequestLayoutState,
+        prepaint: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
         if let Some(hitbox) = &prepaint.hitbox {
             window.set_cursor_style(CursorStyle::IBeam, hitbox);
         }

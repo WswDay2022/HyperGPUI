@@ -4,26 +4,12 @@ use crate::editable_text::{
     notify::{TextChanged, TextHistoryPushed},
 };
 use gpui::{
-    App, Bounds, ClipboardItem, EntityInputHandler, FocusHandle, Focusable, NavigationDirection,
-    Pixels, Point, Size, UTF16Selection, Window, WrappedLine, point,
+    App, Bounds, ClipboardItem, Context, EntityInputHandler, EventEmitter, FocusHandle, Focusable,
+    NavigationDirection, Pixels, Point, Size, UTF16Selection, Window, WrappedLine, point,
 };
 use std::{ops::Range, sync::Arc};
 
-pub trait EditableTextStateNotifier {
-    fn notify_changed(&mut self);
-    fn emit_text_changed(&mut self, event: TextChanged);
-    fn emit_history(&mut self, event: TextHistoryPushed);
-}
-
-pub trait StateBackedEditableText {
-    type State: 'static
-        + std::ops::Deref<Target = EditableTextStateBase>
-        + std::ops::DerefMut
-        + EntityInputHandler
-        + for<'app> EditableTextActionHandler<'app>;
-}
-
-pub struct EditableTextStateBase {
+pub struct EditableTextState {
     storage: Box<dyn UnicodeTextStorage>,
 
     /// The utf-8 character range that is currently selected by the user.
@@ -51,6 +37,7 @@ pub struct EditableTextStateBase {
 
 #[derive(Default)]
 pub(super) struct TextInputLayoutData {
+    pub supports_multiline: bool,
     /// The last known width at which the lines were wrapped.
     pub wrap_width: Option<Pixels>,
     /// The last known size of the text, as generated during layout.
@@ -85,14 +72,17 @@ impl TextLineSegment {
     }
 }
 
-impl Focusable for EditableTextStateBase {
+impl EventEmitter<TextChanged> for EditableTextState {}
+impl EventEmitter<TextHistoryPushed> for EditableTextState {}
+
+impl Focusable for EditableTextState {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus_handle.clone()
     }
 }
 
-impl EditableTextStateBase {
-    pub fn new(storage: impl Into<Box<dyn UnicodeTextStorage>>, cx: &mut App) -> Self {
+impl EditableTextState {
+    pub fn new(storage: impl Into<Box<dyn UnicodeTextStorage>>, cx: &mut Context<Self>) -> Self {
         Self {
             storage: storage.into(),
 
@@ -141,7 +131,7 @@ impl EditableTextStateBase {
     }
 }
 
-impl EditableTextStateBase {
+impl EditableTextState {
     /// Returns the utf-8 character position of the start of the line that contains the provided pixel-point.
     pub fn index_for_pixel_point(&self, point: Point<Pixels>, line_height: Pixels) -> usize {
         let storage_len_utf8 = self.storage.content_utf8().len();
@@ -177,39 +167,8 @@ impl EditableTextStateBase {
     }
 }
 
-impl EditableTextStateBase {
-    pub fn ime_text_for_range(
-        &self,
-        range_utf16: Range<usize>,
-        adjusted_range: &mut Option<Range<usize>>,
-    ) -> Option<String> {
-        let range = self.storage.utf_range_16to8(&range_utf16);
-        let storage_len_utf8 = self.storage.content_utf8().len();
-        let clamped_range = range.start.min(storage_len_utf8)..range.end.min(storage_len_utf8);
-        adjusted_range.replace(self.storage.utf_range_8to16(&clamped_range));
-        Some(self.storage.content_utf8()[clamped_range].to_string())
-    }
-
-    pub fn ime_selected_text_range(&self, _ignore_disabled_input: bool) -> Option<UTF16Selection> {
-        let selection_range = self.selected_range();
-        let direction = self.selection_direction();
-        Some(UTF16Selection {
-            range: self.storage.utf_range_8to16(&selection_range),
-            reversed: direction == Some(NavigationDirection::Back),
-        })
-    }
-
-    pub fn ime_marked_text_range(&self) -> Option<Range<usize>> {
-        self.marked_range
-            .as_ref()
-            .map(|range| self.storage.utf_range_8to16(range))
-    }
-
-    pub fn ime_unmark_text(&mut self) {
-        self.marked_range = None;
-    }
-
-    pub fn ime_resolve_range(&self, range_utf16: Option<Range<usize>>) -> Range<usize> {
+impl EditableTextState {
+    fn ime_resolve_range(&self, range_utf16: Option<Range<usize>>) -> Range<usize> {
         // Use a series of fallbacks to pick the range to operate on.
         // Fallback order: IME provided range, active IME marked range, selection
         let range = range_utf16.map(|range_utf16| self.storage.utf_range_16to8(&range_utf16));
@@ -230,13 +189,8 @@ impl EditableTextStateBase {
         self.selected_range = new_caret..new_caret;
     }
 
-    fn emit_change_for_undo(
-        &self,
-        cx: &mut impl EditableTextStateNotifier,
-        range: Range<usize>,
-        length: usize,
-    ) {
-        cx.emit_history(TextHistoryPushed::new(
+    fn emit_change_for_undo(&self, cx: &mut Context<Self>, range: Range<usize>, length: usize) {
+        cx.emit(TextHistoryPushed::new(
             range.clone(),
             length,
             &*self.storage,
@@ -248,7 +202,7 @@ impl EditableTextStateBase {
         &mut self,
         range: Range<usize>,
         mut text_to_insert: &str,
-        cx: &mut impl EditableTextStateNotifier,
+        cx: &mut Context<Self>,
     ) {
         // TODO: Apply text sanitization
         // single-line fields should prune \n and \r
@@ -272,14 +226,14 @@ impl EditableTextStateBase {
         self.marked_range = None;
     }
 
-    pub fn ime_mark_text_in_range(&mut self, range: &Range<usize>, text_len: usize) {
+    fn ime_mark_text_in_range(&mut self, range: &Range<usize>, text_len: usize) {
         self.marked_range = match text_len {
             0 => None,
             _ => Some(range.start..range.start + text_len),
         };
     }
 
-    pub fn ime_mark_selected_range(
+    fn ime_mark_selected_range(
         &mut self,
         range_overwritten: &Range<usize>,
         new_selected_range_utf16: &Option<Range<usize>>,
@@ -298,84 +252,30 @@ impl EditableTextStateBase {
             })
         };
     }
-
-    pub fn ime_bounds_for_range(
-        &mut self,
-        range_utf16: Range<usize>,
-        bounds: Bounds<Pixels>,
-        window: &mut Window,
-    ) -> Option<Bounds<Pixels>> {
-        let range = self.storage.utf_range_16to8(&range_utf16);
-        let line_height = window.line_height();
-
-        for line in &self.layout_data.lines {
-            let y_offset = line.pos_y * line_height;
-            if line.text_range.is_empty() {
-                if range.start == line.text_range.start {
-                    return Some(Bounds::from_corners(
-                        bounds.origin + point(Pixels::ZERO, y_offset),
-                        bounds.origin + point(gpui::px(4.), y_offset + line_height),
-                    ));
-                }
-            } else if line.text_range.contains(&range.start) {
-                if let Some(wrapped) = &line.wrapped_line {
-                    let local_start = range.start - line.text_range.start;
-                    let local_end = (range.end - line.text_range.start).min(wrapped.text.len());
-
-                    let start_pos = wrapped
-                        .position_for_index(local_start, line_height)
-                        .unwrap_or(point(Pixels::ZERO, Pixels::ZERO));
-                    let end_pos = wrapped
-                        .position_for_index(local_end, line_height)
-                        .unwrap_or_else(|| {
-                            let last_line_y = line_height * (line.num_visual_lines - 1) as f32;
-                            point(wrapped.width(), last_line_y)
-                        });
-
-                    let start_visual_line = (start_pos.y / line_height).floor() as usize;
-                    let end_visual_line = (end_pos.y / line_height).floor() as usize;
-
-                    if start_visual_line == end_visual_line {
-                        return Some(Bounds::from_corners(
-                            bounds.origin + start_pos + point(Pixels::ZERO, y_offset),
-                            bounds.origin + point(end_pos.x, y_offset + start_pos.y + line_height),
-                        ));
-                    } else {
-                        return Some(Bounds::from_corners(
-                            bounds.origin + start_pos + point(Pixels::ZERO, y_offset),
-                            bounds.origin
-                                + point(wrapped.width(), y_offset + start_pos.y + line_height),
-                        ));
-                    }
-                }
-            }
-        }
-        None
-    }
 }
 
-impl EditableTextStateBase {
-    pub fn move_to(&mut self, caret_pos: usize, cx: &mut impl EditableTextStateNotifier) {
+impl EditableTextState {
+    pub fn move_to(&mut self, caret_pos: usize, cx: &mut Context<Self>) {
         //cx.emit(CursorTrigger::PauseBlinkingForUserAction);
         let caret_pos = caret_pos.min(self.storage.content_utf8().len());
         self.selected_range = caret_pos..caret_pos;
         //self.scroll_to_cursor();
-        cx.notify_changed();
+        cx.notify();
     }
 
-    pub fn select_to(&mut self, caret_pos: usize, cx: &mut impl EditableTextStateNotifier) {
+    pub fn select_to(&mut self, caret_pos: usize, cx: &mut Context<Self>) {
         //cx.emit(CursorTrigger::PauseBlinkingForUserAction);
         let caret_pos = caret_pos.min(self.storage().content_utf8().len());
         self.selected_range.start = caret_pos;
         //self.scroll_to_cursor();
-        cx.notify_changed();
+        cx.notify();
     }
 
-    pub fn delete(
+    pub fn delete_linear(
         &mut self,
         direction: NavigationDirection,
         boundary: TextBoundary,
-        cx: &mut impl EditableTextStateNotifier,
+        cx: &mut Context<Self>,
     ) {
         let range = self.selected_range();
         let range = match range.is_empty() {
@@ -390,15 +290,15 @@ impl EditableTextStateBase {
         self.replace_text(&range, "");
         self.marked_range = None;
 
-        cx.emit_text_changed(TextChanged);
-        cx.notify_changed();
+        cx.emit(TextChanged);
+        cx.notify();
     }
 
     pub fn nav_linear(
         &mut self,
         direction: NavigationDirection,
         boundary: TextBoundary,
-        cx: &mut impl EditableTextStateNotifier,
+        cx: &mut Context<Self>,
     ) {
         let caret_pos = match self.selected_range.is_empty() {
             false => match direction {
@@ -488,27 +388,359 @@ impl EditableTextStateBase {
         (direction > 0).then(|| self.storage.content_utf8().len())
     }
 
-    pub fn select_all(&mut self, cx: &mut impl EditableTextStateNotifier) {
+    pub fn select_document(&mut self, cx: &mut Context<Self>) {
         self.selected_range = 0..self.storage.content_utf8().len();
-        cx.notify_changed();
+        cx.notify();
     }
 
     pub fn select_linear(
         &mut self,
         direction: NavigationDirection,
         boundary: TextBoundary,
-        cx: &mut impl EditableTextStateNotifier,
+        cx: &mut Context<Self>,
     ) {
         let caret_pos = self
             .storage
             .offset_from_caret(self.caret_pos(), direction, boundary);
         self.select_to(caret_pos, cx);
     }
+}
 
-    pub fn cut<T>(&mut self, cx: &mut T)
-    where
-        T: EditableTextStateNotifier + std::ops::Deref<Target = App>,
-    {
+impl EntityInputHandler for EditableTextState {
+    fn text_for_range(
+        &mut self,
+        range_utf16: Range<usize>,
+        adjusted_range: &mut Option<Range<usize>>,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<String> {
+        let range = self.storage.utf_range_16to8(&range_utf16);
+        let storage_len_utf8 = self.storage.content_utf8().len();
+        let clamped_range = range.start.min(storage_len_utf8)..range.end.min(storage_len_utf8);
+        adjusted_range.replace(self.storage.utf_range_8to16(&clamped_range));
+        Some(self.storage.content_utf8()[clamped_range].to_string())
+    }
+
+    fn selected_text_range(
+        &mut self,
+        _ignore_disabled_input: bool,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<UTF16Selection> {
+        let selection_range = self.selected_range();
+        let direction = self.selection_direction();
+        Some(UTF16Selection {
+            range: self.storage.utf_range_8to16(&selection_range),
+            reversed: direction == Some(NavigationDirection::Back),
+        })
+    }
+
+    fn marked_text_range(
+        &self,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<Range<usize>> {
+        self.marked_range
+            .as_ref()
+            .map(|range| self.storage.utf_range_8to16(range))
+    }
+
+    fn unmark_text(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
+        self.marked_range = None;
+    }
+
+    fn replace_text_in_range(
+        &mut self,
+        range_utf16: Option<Range<usize>>,
+        text_to_insert: &str,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let range_utf8 = self.ime_resolve_range(range_utf16);
+        self.replace_text_in_range_bytes(range_utf8, text_to_insert, cx);
+        //cx.emit(CursorTrigger::PauseBlinkingForUserAction);
+        cx.emit(TextChanged);
+        cx.notify();
+    }
+
+    fn replace_and_mark_text_in_range(
+        &mut self,
+        range_utf16: Option<Range<usize>>,
+        text_to_insert: &str,
+        new_selected_range_utf16: Option<Range<usize>>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let range = self.ime_resolve_range(range_utf16);
+        self.replace_text_in_range_bytes(range.clone(), text_to_insert, cx);
+        self.ime_mark_text_in_range(&range, text_to_insert.len());
+        self.ime_mark_selected_range(&range, &new_selected_range_utf16, text_to_insert.len());
+        cx.emit(TextChanged);
+        cx.notify();
+    }
+
+    fn bounds_for_range(
+        &mut self,
+        range_utf16: Range<usize>,
+        bounds: Bounds<Pixels>,
+        window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<Bounds<Pixels>> {
+        let range = self.storage.utf_range_16to8(&range_utf16);
+        let line_height = window.line_height();
+
+        for line in &self.layout_data.lines {
+            let y_offset = line.pos_y * line_height;
+            if line.text_range.is_empty() {
+                if range.start == line.text_range.start {
+                    return Some(Bounds::from_corners(
+                        bounds.origin + point(Pixels::ZERO, y_offset),
+                        bounds.origin + point(gpui::px(4.), y_offset + line_height),
+                    ));
+                }
+            } else if line.text_range.contains(&range.start) {
+                if let Some(wrapped) = &line.wrapped_line {
+                    let local_start = range.start - line.text_range.start;
+                    let local_end = (range.end - line.text_range.start).min(wrapped.text.len());
+
+                    let start_pos = wrapped
+                        .position_for_index(local_start, line_height)
+                        .unwrap_or(point(Pixels::ZERO, Pixels::ZERO));
+                    let end_pos = wrapped
+                        .position_for_index(local_end, line_height)
+                        .unwrap_or_else(|| {
+                            let last_line_y = line_height * (line.num_visual_lines - 1) as f32;
+                            point(wrapped.width(), last_line_y)
+                        });
+
+                    let start_visual_line = (start_pos.y / line_height).floor() as usize;
+                    let end_visual_line = (end_pos.y / line_height).floor() as usize;
+
+                    if start_visual_line == end_visual_line {
+                        return Some(Bounds::from_corners(
+                            bounds.origin + start_pos + point(Pixels::ZERO, y_offset),
+                            bounds.origin + point(end_pos.x, y_offset + start_pos.y + line_height),
+                        ));
+                    } else {
+                        return Some(Bounds::from_corners(
+                            bounds.origin + start_pos + point(Pixels::ZERO, y_offset),
+                            bounds.origin
+                                + point(wrapped.width(), y_offset + start_pos.y + line_height),
+                        ));
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    fn character_index_for_point(
+        &mut self,
+        point: Point<Pixels>,
+        window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<usize> {
+        let index = self.index_for_pixel_point(point, window.line_height());
+        Some(self.storage().utf_offset_8to16(index))
+    }
+}
+
+use super::actions::*;
+impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState {
+    fn escape(&mut self, _: &Escape, window: &mut Window, cx: &mut Context<'app, Self>) {
+        self.set_selected_range(0..0);
+        cx.notify();
+
+        window.blur();
+    }
+
+    fn insert_enter(&mut self, _: &Enter, window: &mut Window, cx: &mut Context<'app, Self>) {
+        if self.layout_data.supports_multiline {
+            // TODO: Why is the cursor appearing at the start of the entire field instead of on the new line?
+            self.replace_text_in_range(None, "\n", window, cx);
+        }
+    }
+
+    fn insert_tab(&mut self, _: &Tab, window: &mut Window, cx: &mut Context<'app, Self>) {
+        self.replace_text_in_range(None, "\t", window, cx);
+    }
+
+    fn backspace(&mut self, _: &Backspace, _: &mut Window, cx: &mut Context<'app, Self>) {
+        self.delete_linear(NavigationDirection::Back, TextBoundary::Graphmeme, cx);
+    }
+
+    fn delete(&mut self, _: &Delete, _w: &mut Window, cx: &mut Context<'app, Self>) {
+        self.delete_linear(NavigationDirection::Forward, TextBoundary::Graphmeme, cx);
+    }
+
+    fn delete_word_left(
+        &mut self,
+        _: &DeleteWordLeft,
+        _w: &mut Window,
+        cx: &mut Context<'app, Self>,
+    ) {
+        self.delete_linear(NavigationDirection::Back, TextBoundary::Word, cx);
+    }
+
+    fn delete_word_right(
+        &mut self,
+        _: &DeleteWordRight,
+        _w: &mut Window,
+        cx: &mut Context<'app, Self>,
+    ) {
+        self.delete_linear(NavigationDirection::Forward, TextBoundary::Word, cx);
+    }
+
+    fn delete_to_line_start(
+        &mut self,
+        _: &DeleteToBeginningOfLine,
+        _w: &mut Window,
+        cx: &mut Context<'app, Self>,
+    ) {
+        self.delete_linear(NavigationDirection::Back, TextBoundary::Line, cx);
+    }
+
+    fn delete_to_line_end(
+        &mut self,
+        _: &DeleteToEndOfLine,
+        _w: &mut Window,
+        cx: &mut Context<'app, Self>,
+    ) {
+        self.delete_linear(NavigationDirection::Forward, TextBoundary::Line, cx);
+    }
+
+    fn nav_left(&mut self, _: &Left, _w: &mut Window, cx: &mut Context<'app, Self>) {
+        self.nav_linear(NavigationDirection::Back, TextBoundary::Graphmeme, cx);
+    }
+
+    fn nav_right(&mut self, _: &Right, _w: &mut Window, cx: &mut Context<'app, Self>) {
+        self.nav_linear(NavigationDirection::Forward, TextBoundary::Graphmeme, cx);
+    }
+
+    fn nav_up(&mut self, _: &Up, window: &mut Window, cx: &mut Context<'app, Self>) {
+        if !self.layout_data.supports_multiline {
+            // semantically equivalent to line
+            self.nav_linear(NavigationDirection::Back, TextBoundary::Line, cx);
+            return;
+        }
+
+        if let Some(caret_pos) = self.find_position_in_vertical_direction(-1, window.line_height())
+        {
+            self.move_to(caret_pos, cx);
+        }
+    }
+
+    fn nav_down(&mut self, _: &Down, window: &mut Window, cx: &mut Context<'app, Self>) {
+        if !self.layout_data.supports_multiline {
+            // semantically equivalent to line
+            self.nav_linear(NavigationDirection::Forward, TextBoundary::Line, cx);
+            return;
+        }
+
+        if let Some(caret_pos) = self.find_position_in_vertical_direction(1, window.line_height()) {
+            self.move_to(caret_pos, cx);
+        }
+    }
+
+    fn nav_line_start(&mut self, _: &Home, _w: &mut Window, cx: &mut Context<'app, Self>) {
+        // [when not multiline] semantically equivalent to document
+        self.nav_linear(NavigationDirection::Back, TextBoundary::Line, cx);
+    }
+
+    fn nav_line_end(&mut self, _: &End, _w: &mut Window, cx: &mut Context<'app, Self>) {
+        // [when not multiline] semantically equivalent to document
+        self.nav_linear(NavigationDirection::Forward, TextBoundary::Line, cx);
+    }
+
+    fn nav_start(&mut self, _: &MoveToBeginning, _w: &mut Window, cx: &mut Context<'app, Self>) {
+        self.nav_linear(NavigationDirection::Back, TextBoundary::Document, cx);
+    }
+
+    fn nav_end(&mut self, _: &MoveToEnd, _w: &mut Window, cx: &mut Context<'app, Self>) {
+        self.nav_linear(NavigationDirection::Forward, TextBoundary::Document, cx);
+    }
+
+    fn nav_left_word(&mut self, _: &WordLeft, _w: &mut Window, cx: &mut Context<'app, Self>) {
+        self.nav_linear(NavigationDirection::Back, TextBoundary::Word, cx);
+    }
+
+    fn nav_right_word(&mut self, _: &WordRight, _w: &mut Window, cx: &mut Context<'app, Self>) {
+        self.nav_linear(NavigationDirection::Forward, TextBoundary::Word, cx);
+    }
+
+    fn select_all(&mut self, _: &SelectAll, _w: &mut Window, cx: &mut Context<'app, Self>) {
+        self.select_document(cx);
+    }
+
+    fn select_left(&mut self, _: &SelectLeft, _w: &mut Window, cx: &mut Context<'app, Self>) {
+        self.select_linear(NavigationDirection::Back, TextBoundary::Graphmeme, cx);
+    }
+
+    fn select_right(&mut self, _: &SelectRight, _w: &mut Window, cx: &mut Context<'app, Self>) {
+        self.select_linear(NavigationDirection::Forward, TextBoundary::Graphmeme, cx);
+    }
+
+    fn select_up(&mut self, _: &SelectUp, window: &mut Window, cx: &mut Context<'app, Self>) {
+        if !self.layout_data.supports_multiline {
+            // semantically equivalent to select document
+            self.select_linear(NavigationDirection::Back, TextBoundary::Document, cx);
+            return;
+        }
+
+        if let Some(caret_pos) = self.find_position_in_vertical_direction(-1, window.line_height())
+        {
+            self.select_to(caret_pos, cx);
+            //self.scroll_to_cursor();
+            cx.notify();
+        }
+    }
+
+    fn select_down(&mut self, _: &SelectDown, window: &mut Window, cx: &mut Context<'app, Self>) {
+        if !self.layout_data.supports_multiline {
+            // semantically equivalent to select document
+            self.select_linear(NavigationDirection::Forward, TextBoundary::Document, cx);
+            return;
+        }
+
+        if let Some(caret_pos) = self.find_position_in_vertical_direction(1, window.line_height()) {
+            self.select_to(caret_pos, cx);
+            //self.scroll_to_cursor();
+            cx.notify();
+        }
+    }
+
+    fn select_start(
+        &mut self,
+        _: &SelectToBeginning,
+        _w: &mut Window,
+        cx: &mut Context<'app, Self>,
+    ) {
+        self.select_linear(NavigationDirection::Back, TextBoundary::Document, cx);
+    }
+
+    fn select_end(&mut self, _: &SelectToEnd, _w: &mut Window, cx: &mut Context<'app, Self>) {
+        self.select_linear(NavigationDirection::Forward, TextBoundary::Document, cx);
+    }
+
+    fn select_left_word(
+        &mut self,
+        _: &SelectWordLeft,
+        _w: &mut Window,
+        cx: &mut Context<'app, Self>,
+    ) {
+        self.select_linear(NavigationDirection::Back, TextBoundary::Word, cx);
+    }
+
+    fn select_right_word(
+        &mut self,
+        _: &SelectWordRight,
+        _w: &mut Window,
+        cx: &mut Context<'app, Self>,
+    ) {
+        self.select_linear(NavigationDirection::Forward, TextBoundary::Word, cx);
+    }
+
+    fn cut(&mut self, _: &Cut, _w: &mut Window, cx: &mut Context<'app, Self>) {
         if !self.selected_range.is_empty() {
             // Cut selected text
             let slice = &self.storage.content_utf8()[self.selected_range.clone()];
@@ -545,40 +777,43 @@ impl EditableTextStateBase {
 
             self.replace_text_in_range_bytes(self.selected_range.clone(), "", cx);
         }
-        cx.emit_text_changed(TextChanged);
-        cx.notify_changed();
+        cx.emit(TextChanged);
+        cx.notify();
     }
 
-    pub fn copy(&mut self, app: &mut App) {
+    fn copy(&mut self, _: &Copy, _w: &mut Window, cx: &mut Context<'app, Self>) {
         if !self.selected_range.is_empty() {
             let slice = &self.storage.content_utf8()[self.selected_range.clone()];
-            app.write_to_clipboard(ClipboardItem::new_string(slice.to_string()));
+            cx.write_to_clipboard(ClipboardItem::new_string(slice.to_string()));
         }
     }
 
-    pub fn paste<T>(&mut self, cx: &mut T)
-    where
-        T: EditableTextStateNotifier + std::ops::Deref<Target = App>,
-    {
+    fn paste(&mut self, _: &Paste, _w: &mut Window, cx: &mut Context<'app, Self>) {
         let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
             return;
         };
         self.replace_text_in_range_bytes(self.ime_resolve_range(None), &text, cx);
-        cx.emit_text_changed(TextChanged);
-        cx.notify_changed();
+        cx.emit(TextChanged);
+        cx.notify();
     }
 
-    pub fn on_mouse_down<Context>(
+    fn undo(&mut self, _: &Undo, _w: &mut Window, _cx: &mut Context<'app, Self>) {
+        // TODO: STUB
+    }
+
+    fn redo(&mut self, _: &Redo, _w: &mut Window, _cx: &mut Context<'app, Self>) {
+        // TODO: STUB
+    }
+
+    fn on_mouse_down(
         &mut self,
-        position: Point<Pixels>,
-        character_pos: usize,
-        click_count: usize,
-        shift: bool,
+        event: &gpui::MouseDownEvent,
+        text_position: gpui::Point<gpui::Pixels>,
         window: &mut Window,
-        cx: &mut Context,
-    ) where
-        Context: EditableTextStateNotifier + std::ops::DerefMut<Target = App>,
-    {
+        cx: &mut Context<'app, Self>,
+    ) {
+        let character_pos = self.index_for_pixel_point(text_position, window.line_height());
+
         window.focus(&self.focus_handle, cx);
         self.is_selecting = true;
 
@@ -586,22 +821,23 @@ impl EditableTextStateBase {
             .last_click_position
             .map(|last| {
                 let threshold = gpui::px(4.);
-                (position.x - last.x).abs() < threshold && (position.y - last.y).abs() < threshold
+                (text_position.x - last.x).abs() < threshold
+                    && (text_position.y - last.y).abs() < threshold
             })
             .unwrap_or(false);
 
-        if is_same_position && click_count > 1 {
-            self.click_count = click_count;
+        if is_same_position && event.click_count > 1 {
+            self.click_count = event.click_count;
         } else {
             self.click_count = 1;
         }
-        self.last_click_position = Some(position);
+        self.last_click_position = Some(text_position);
 
         match self.click_count {
             2 => {
                 let (word_start, word_end) = self.storage.word_range_at(character_pos);
                 self.selected_range = word_start..word_end;
-                cx.notify_changed();
+                cx.notify();
             }
             3 => {
                 let line_start = self.storage.find_line_start(character_pos);
@@ -612,10 +848,10 @@ impl EditableTextStateBase {
                     line_end
                 };
                 self.selected_range = line_start..line_end_with_newline;
-                cx.notify_changed();
+                cx.notify();
             }
             _ => {
-                if shift {
+                if event.modifiers.shift {
                     self.select_to(character_pos, cx);
                 } else {
                     self.move_to(character_pos, cx);
@@ -624,11 +860,23 @@ impl EditableTextStateBase {
         }
     }
 
-    pub fn on_mouse_up(&mut self) {
+    fn on_mouse_up(
+        &mut self,
+        _event: &gpui::MouseUpEvent,
+        _w: &mut Window,
+        _cx: &mut Context<'app, Self>,
+    ) {
         self.is_selecting = false;
     }
 
-    pub fn on_mouse_move(&mut self, character_pos: usize, cx: &mut impl EditableTextStateNotifier) {
+    fn on_mouse_move(
+        &mut self,
+        _event: &gpui::MouseMoveEvent,
+        text_position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<'app, Self>,
+    ) {
+        let character_pos = self.index_for_pixel_point(text_position, window.line_height());
         if self.is_selecting && self.click_count == 1 {
             self.select_to(character_pos, cx);
         }

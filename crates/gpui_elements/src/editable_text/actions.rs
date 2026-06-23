@@ -1,8 +1,5 @@
+use gpui::{Action, Context, InteractiveElement, WeakEntity, Window};
 use std::{cell::RefCell, rc::Rc};
-
-use gpui::{Action, AppContext, Context, InteractiveElement, WeakEntity, Window};
-
-use crate::editable_text::StateBackedEditableText;
 
 /// The key context used for input element keybindings.
 pub const DEFAULT_INPUT_CONTEXT: &str = "Input";
@@ -146,69 +143,59 @@ pub fn default_bindings() -> gpui::ActionBindingCollection {
     bindings
 }
 
-pub trait EditableTextActionHandler<'app>: Sized {
-    type Context: AppContext;
+pub trait EditableTextActionHandler<Context>: Sized {
+    fn escape(&mut self, _: &Escape, _w: &mut Window, _cx: &mut Context) {}
 
-    fn escape(&mut self, _: &Escape, _w: &mut Window, _cx: &mut Self::Context) {}
+    fn insert_enter(&mut self, _: &Enter, _w: &mut Window, _cx: &mut Context) {}
+    fn insert_tab(&mut self, _: &Tab, _w: &mut Window, _cx: &mut Context) {}
 
-    fn insert_enter(&mut self, _: &Enter, _w: &mut Window, _cx: &mut Self::Context) {}
-    fn insert_tab(&mut self, _: &Tab, _w: &mut Window, _cx: &mut Self::Context) {}
+    fn backspace(&mut self, _: &Backspace, _w: &mut Window, _cx: &mut Context) {}
+    fn delete(&mut self, _: &Delete, _w: &mut Window, _cx: &mut Context) {}
 
-    fn backspace(&mut self, _: &Backspace, _w: &mut Window, _cx: &mut Self::Context) {}
-    fn delete(&mut self, _: &Delete, _w: &mut Window, _cx: &mut Self::Context) {}
-
-    fn delete_word_left(&mut self, _: &DeleteWordLeft, _w: &mut Window, _cx: &mut Self::Context) {}
-    fn delete_word_right(&mut self, _: &DeleteWordRight, _w: &mut Window, _cx: &mut Self::Context) {
-    }
+    fn delete_word_left(&mut self, _: &DeleteWordLeft, _w: &mut Window, _cx: &mut Context) {}
+    fn delete_word_right(&mut self, _: &DeleteWordRight, _w: &mut Window, _cx: &mut Context) {}
     fn delete_to_line_start(
         &mut self,
         _: &DeleteToBeginningOfLine,
         _w: &mut Window,
-        _cx: &mut Self::Context,
+        _cx: &mut Context,
     ) {
     }
-    fn delete_to_line_end(
-        &mut self,
-        _: &DeleteToEndOfLine,
-        _w: &mut Window,
-        _cx: &mut Self::Context,
-    ) {
-    }
+    fn delete_to_line_end(&mut self, _: &DeleteToEndOfLine, _w: &mut Window, _cx: &mut Context) {}
 
-    fn nav_left(&mut self, _: &Left, _w: &mut Window, _cx: &mut Self::Context) {}
-    fn nav_right(&mut self, _: &Right, _w: &mut Window, _cx: &mut Self::Context) {}
-    fn nav_up(&mut self, _: &Up, _w: &mut Window, _cx: &mut Self::Context) {}
-    fn nav_down(&mut self, _: &Down, _w: &mut Window, _cx: &mut Self::Context) {}
-    fn nav_line_start(&mut self, _: &Home, _w: &mut Window, _cx: &mut Self::Context) {}
-    fn nav_line_end(&mut self, _: &End, _w: &mut Window, _cx: &mut Self::Context) {}
-    fn nav_start(&mut self, _: &MoveToBeginning, _w: &mut Window, _cx: &mut Self::Context) {}
-    fn nav_end(&mut self, _: &MoveToEnd, _w: &mut Window, _cx: &mut Self::Context) {}
-    fn nav_left_word(&mut self, _: &WordLeft, _w: &mut Window, _cx: &mut Self::Context) {}
-    fn nav_right_word(&mut self, _: &WordRight, _w: &mut Window, _cx: &mut Self::Context) {}
+    fn nav_left(&mut self, _: &Left, _w: &mut Window, _cx: &mut Context) {}
+    fn nav_right(&mut self, _: &Right, _w: &mut Window, _cx: &mut Context) {}
+    fn nav_up(&mut self, _: &Up, _w: &mut Window, _cx: &mut Context) {}
+    fn nav_down(&mut self, _: &Down, _w: &mut Window, _cx: &mut Context) {}
+    fn nav_line_start(&mut self, _: &Home, _w: &mut Window, _cx: &mut Context) {}
+    fn nav_line_end(&mut self, _: &End, _w: &mut Window, _cx: &mut Context) {}
+    fn nav_start(&mut self, _: &MoveToBeginning, _w: &mut Window, _cx: &mut Context) {}
+    fn nav_end(&mut self, _: &MoveToEnd, _w: &mut Window, _cx: &mut Context) {}
+    fn nav_left_word(&mut self, _: &WordLeft, _w: &mut Window, _cx: &mut Context) {}
+    fn nav_right_word(&mut self, _: &WordRight, _w: &mut Window, _cx: &mut Context) {}
 
-    fn select_all(&mut self, _: &SelectAll, _w: &mut Window, _cx: &mut Self::Context) {}
-    fn select_left(&mut self, _: &SelectLeft, _w: &mut Window, _cx: &mut Self::Context) {}
-    fn select_right(&mut self, _: &SelectRight, _w: &mut Window, _cx: &mut Self::Context) {}
-    fn select_up(&mut self, _: &SelectUp, _w: &mut Window, _cx: &mut Self::Context) {}
-    fn select_down(&mut self, _: &SelectDown, _w: &mut Window, _cx: &mut Self::Context) {}
-    fn select_start(&mut self, _: &SelectToBeginning, _w: &mut Window, _cx: &mut Self::Context) {}
-    fn select_end(&mut self, _: &SelectToEnd, _w: &mut Window, _cx: &mut Self::Context) {}
-    fn select_left_word(&mut self, _: &SelectWordLeft, _w: &mut Window, _cx: &mut Self::Context) {}
-    fn select_right_word(&mut self, _: &SelectWordRight, _w: &mut Window, _cx: &mut Self::Context) {
-    }
+    fn select_all(&mut self, _: &SelectAll, _w: &mut Window, _cx: &mut Context) {}
+    fn select_left(&mut self, _: &SelectLeft, _w: &mut Window, _cx: &mut Context) {}
+    fn select_right(&mut self, _: &SelectRight, _w: &mut Window, _cx: &mut Context) {}
+    fn select_up(&mut self, _: &SelectUp, _w: &mut Window, _cx: &mut Context) {}
+    fn select_down(&mut self, _: &SelectDown, _w: &mut Window, _cx: &mut Context) {}
+    fn select_start(&mut self, _: &SelectToBeginning, _w: &mut Window, _cx: &mut Context) {}
+    fn select_end(&mut self, _: &SelectToEnd, _w: &mut Window, _cx: &mut Context) {}
+    fn select_left_word(&mut self, _: &SelectWordLeft, _w: &mut Window, _cx: &mut Context) {}
+    fn select_right_word(&mut self, _: &SelectWordRight, _w: &mut Window, _cx: &mut Context) {}
 
-    fn cut(&mut self, _: &Cut, _w: &mut Window, _cx: &mut Self::Context) {}
-    fn copy(&mut self, _: &Copy, _w: &mut Window, _cx: &mut Self::Context) {}
-    fn paste(&mut self, _: &Paste, _w: &mut Window, _cx: &mut Self::Context) {}
+    fn cut(&mut self, _: &Cut, _w: &mut Window, _cx: &mut Context) {}
+    fn copy(&mut self, _: &Copy, _w: &mut Window, _cx: &mut Context) {}
+    fn paste(&mut self, _: &Paste, _w: &mut Window, _cx: &mut Context) {}
 
-    fn undo(&mut self, _: &Undo, _w: &mut Window, _cx: &mut Self::Context) {}
-    fn redo(&mut self, _: &Redo, _w: &mut Window, _cx: &mut Self::Context) {}
+    fn undo(&mut self, _: &Undo, _w: &mut Window, _cx: &mut Context) {}
+    fn redo(&mut self, _: &Redo, _w: &mut Window, _cx: &mut Context) {}
 
     fn show_character_palette(
         &mut self,
         _: &ShowCharacterPalette,
         window: &mut Window,
-        _cx: &mut Self::Context,
+        _cx: &mut Context,
     ) {
         window.show_character_palette();
     }
@@ -218,35 +205,30 @@ pub trait EditableTextActionHandler<'app>: Sized {
         _event: &gpui::MouseDownEvent,
         _text_position: gpui::Point<gpui::Pixels>,
         _w: &mut Window,
-        _cx: &mut Self::Context,
+        _cx: &mut Context,
     ) {
     }
-    fn on_mouse_up(
-        &mut self,
-        _event: &gpui::MouseUpEvent,
-        _w: &mut Window,
-        _cx: &mut Self::Context,
-    ) {
-    }
+    fn on_mouse_up(&mut self, _event: &gpui::MouseUpEvent, _w: &mut Window, _cx: &mut Context) {}
     fn on_mouse_move(
         &mut self,
         _event: &gpui::MouseMoveEvent,
         _text_position: gpui::Point<gpui::Pixels>,
         _w: &mut Window,
-        _cx: &mut Self::Context,
+        _cx: &mut Context,
     ) {
     }
 }
 
-pub(super) trait EditableTextActionElement: StateBackedEditableText {
-    fn state_entity_rc(&self) -> &Rc<RefCell<WeakEntity<Self::State>>>;
+pub(super) trait EditableTextActionElement<State> {
+    fn state_entity_rc(&self) -> &Rc<RefCell<WeakEntity<State>>>;
 
     fn register_action<ActionType>(
         &mut self,
-        listener: fn(&mut Self::State, &ActionType, &mut Window, &mut Context<Self::State>),
+        listener: fn(&mut State, &ActionType, &mut Window, &mut Context<State>),
     ) where
         Self: InteractiveElement,
         ActionType: Action + std::fmt::Debug,
+        State: 'static,
     {
         let entity_rc = self.state_entity_rc().clone();
         self.interactivity()
@@ -263,10 +245,9 @@ pub(super) trait EditableTextActionElement: StateBackedEditableText {
     fn register_actions(&mut self)
     where
         Self: InteractiveElement,
-        Self::State:
-            for<'app> EditableTextActionHandler<'app, Context = gpui::Context<'app, Self::State>>,
+        State: for<'app> EditableTextActionHandler<gpui::Context<'app, State>>,
+        State: 'static,
     {
-        use super::actions::*;
         self.register_action(|state, action, window, cx| state.escape(action, window, cx));
         self.register_action(|state, action, window, cx| state.insert_enter(action, window, cx));
         self.register_action(|state, action, window, cx| state.insert_tab(action, window, cx));
