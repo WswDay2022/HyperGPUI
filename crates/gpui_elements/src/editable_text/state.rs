@@ -38,6 +38,7 @@ pub struct EditableTextState {
 #[derive(Default)]
 pub(super) struct TextInputLayoutData {
     pub supports_multiline: bool,
+    pub accepts_input: bool,
     /// The last known width at which the lines were wrapped.
     pub wrap_width: Option<Pixels>,
     /// The last known size of the text, as generated during layout.
@@ -277,6 +278,10 @@ impl EditableTextState {
         boundary: TextBoundary,
         cx: &mut Context<Self>,
     ) {
+        if !self.layout_data.accepts_input {
+            return;
+        }
+
         let range = self.selected_range();
         let range = match range.is_empty() {
             false => range,
@@ -555,13 +560,20 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
     }
 
     fn insert_enter(&mut self, _: &Enter, window: &mut Window, cx: &mut Context<'app, Self>) {
-        if self.layout_data.supports_multiline {
-            // TODO: Why is the cursor appearing at the start of the entire field instead of on the new line?
-            self.replace_text_in_range(None, "\n", window, cx);
+        if !self.layout_data.supports_multiline {
+            return;
         }
+        if !self.layout_data.accepts_input {
+            return;
+        }
+        // TODO: Why is the cursor appearing at the start of the entire field instead of on the new line?
+        self.replace_text_in_range(None, "\n", window, cx);
     }
 
     fn insert_tab(&mut self, _: &Tab, window: &mut Window, cx: &mut Context<'app, Self>) {
+        if !self.layout_data.accepts_input {
+            return;
+        }
         self.replace_text_in_range(None, "\t", window, cx);
     }
 
@@ -741,6 +753,10 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
     }
 
     fn cut(&mut self, _: &Cut, _w: &mut Window, cx: &mut Context<'app, Self>) {
+        if !self.layout_data.accepts_input {
+            return;
+        }
+
         if !self.selected_range.is_empty() {
             // Cut selected text
             let slice = &self.storage.content_utf8()[self.selected_range.clone()];
@@ -789,6 +805,10 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
     }
 
     fn paste(&mut self, _: &Paste, _w: &mut Window, cx: &mut Context<'app, Self>) {
+        if !self.layout_data.accepts_input {
+            return;
+        }
+
         let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
             return;
         };

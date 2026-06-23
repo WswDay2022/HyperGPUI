@@ -21,6 +21,7 @@ pub fn editable_text(id: impl Into<ElementId>) -> EditableTextElement {
         supports_multiline: true,
         init_storage: InitStorage::default(),
         placeholder: None,
+        accepts_input: true,
     };
     this.interactivity.element_id = Some(id.into());
 
@@ -40,7 +41,6 @@ pub fn text_area(id: impl Into<ElementId>) -> EditableTextElement {
     editable_text(id).multiline(true)
 }
 
-// TODO: Disabled flag/state?
 pub struct EditableTextElement {
     interactivity: Interactivity,
     // Populated on first render with an entity stored/attached to the view.
@@ -50,6 +50,7 @@ pub struct EditableTextElement {
     init_storage: InitStorage,
     supports_multiline: bool,
     placeholder: Option<SharedString>,
+    accepts_input: bool,
 }
 
 impl EditableTextElement {
@@ -76,6 +77,12 @@ impl EditableTextElement {
     pub fn default_value(mut self, value: impl Into<String>) -> Self {
         let storage = super::StringStorage::from(value.into());
         self.init_storage = InitStorage::new_typed(move |_cx| storage.clone());
+        self
+    }
+
+    /// Configures whether the element can accept input (effectively is the element currently enabled).
+    pub fn accepts_input(mut self, enabled: bool) -> Self {
+        self.accepts_input = enabled;
         self
     }
 }
@@ -193,6 +200,7 @@ impl Element for EditableTextElement {
         let placeholder = self.placeholder.clone();
         let placeholder_color = Hsla::white().opacity(0.5); // TODO: as an element param
         let supports_multiline = self.supports_multiline;
+        let accepts_input = self.accepts_input;
         let layout_id = self.interactivity().request_layout(
             global_id,
             inspector_id,
@@ -317,6 +325,7 @@ impl Element for EditableTextElement {
 
                             let layout_data = TextInputLayoutData {
                                 supports_multiline,
+                                accepts_input,
                                 wrap_width,
                                 size: Some(size),
                                 last_seen_storage_version,
@@ -552,6 +561,7 @@ impl Element for EditableTextElement {
             window.set_cursor_style(CursorStyle::IBeam, hitbox);
         }
 
+        let accepts_input = self.accepts_input;
         let inner_bounds = prepaint.inner_bounds;
         let to_local_position = -(bounds.origin + prepaint.scroll_offset);
         let perform_paint = |style: &Style, window: &mut Window, cx: &mut App| {
@@ -559,9 +569,11 @@ impl Element for EditableTextElement {
                 return;
             }
 
-            // NOTE: Skip when disabled
-            let ime_handler = ElementInputHandler::new(inner_bounds, request_layout.state.clone());
-            window.handle_input(&prepaint.focus_handle, ime_handler, cx);
+            if accepts_input {
+                let ime_handler =
+                    ElementInputHandler::new(inner_bounds, request_layout.state.clone());
+                window.handle_input(&prepaint.focus_handle, ime_handler, cx);
+            }
 
             window.on_mouse_event({
                 let state = request_layout.state.clone();

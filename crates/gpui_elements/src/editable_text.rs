@@ -9,7 +9,6 @@ pub use state::*;
 pub use storage::*;
 
 /* TODO list
-- disabled input/area
 - remove gpuikit based input
 - auto-scroll when cursor moves
 - cursor blinking
