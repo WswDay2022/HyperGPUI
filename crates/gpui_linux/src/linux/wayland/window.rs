@@ -286,6 +286,14 @@ impl WaylandSurfaceState {
         }
     }
 
+    fn set_exclusive_zone(&self, zone: i32) {
+        if let WaylandSurfaceState::LayerShell(WaylandLayerSurfaceState { layer_surface, .. }) =
+            self
+        {
+            layer_surface.set_exclusive_zone(zone);
+        }
+    }
+
     fn destroy(&mut self) {
         match self {
             WaylandSurfaceState::Xdg(WaylandXdgSurfaceState {
@@ -1469,6 +1477,40 @@ impl PlatformWindow for WaylandWindow {
                 edge.to_xdg(),
             )
         }
+    }
+
+    fn set_input_region(&self, rects: &[Bounds<Pixels>]) {
+        let state = self.borrow();
+        if rects.is_empty() {
+            state.surface.set_input_region(None);
+        } else {
+            let region = state
+                .globals
+                .compositor
+                .create_region(&state.globals.qh, ());
+            rects
+                .iter()
+                .map(|rect| rect.map(|pixels| f32::from(pixels) as i32))
+                .for_each(|rect| {
+                    region.add(
+                        rect.origin.x,
+                        rect.origin.y,
+                        rect.size.width,
+                        rect.size.height,
+                    )
+                });
+            state.surface.set_input_region(Some(&region));
+            region.destroy();
+        }
+        state.surface.commit();
+    }
+
+    fn set_exclusive_zone(&self, zone: Pixels) {
+        let state = self.borrow();
+        state
+            .surface_state
+            .set_exclusive_zone(f32::from(zone) as i32);
+        state.surface.commit();
     }
 
     fn window_decorations(&self) -> Decorations {
