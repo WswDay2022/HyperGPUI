@@ -1,8 +1,8 @@
 use gpui::{Action, Context, InteractiveElement, WeakEntity, Window};
 use std::{cell::RefCell, rc::Rc};
 
-/// The key context used for input element keybindings.
-pub const DEFAULT_INPUT_CONTEXT: &str = "Input";
+/// The key context used for EditableText element keybindings.
+pub const DEFAULT_INPUT_CONTEXT: &str = "EditableText";
 
 gpui::actions!(
     actions,
@@ -22,29 +22,29 @@ gpui::actions!(
         /// Delete the word after the cursor.
         DeleteWordRight,
         /// Delete from the cursor to the beginning of the line.
-        DeleteToBeginningOfLine,
+        DeleteToLineStart,
         /// Delete from the cursor to the end of the line.
-        DeleteToEndOfLine,
+        DeleteToLineEnd,
         /// Move the cursor one character to the left.
-        Left,
+        NavLeft,
         /// Move the cursor one character to the right.
-        Right,
+        NavRight,
         /// Move the cursor up one visual line.
-        Up,
+        NavUp,
         /// Move the cursor down one visual line.
-        Down,
+        NavDown,
         /// Move cursor to the start of the current line.
         Home,
         /// Move cursor to the end of the current line.
-        End,
+        NavLineEnd,
         /// Move cursor to the beginning of the content.
-        MoveToBeginning,
+        NavDocumentStart,
         /// Move cursor to the end of the content.
-        MoveToEnd,
+        NavDocumentEnd,
         /// Move cursor one word to the left.
-        WordLeft,
+        NavWordLeft,
         /// Move cursor one word to the right.
-        WordRight,
+        NavWordRight,
         /// Select all text content.
         SelectAll,
         /// Extend selection one character to the left.
@@ -56,9 +56,9 @@ gpui::actions!(
         /// Extend selection down one visual line.
         SelectDown,
         /// Extend selection to the beginning of the content.
-        SelectToBeginning,
+        SelectDocumentStart,
         /// Extend selection to the end of the content.
-        SelectToEnd,
+        SelectDocumentEnd,
         /// Extend selection one word to the left.
         SelectWordLeft,
         /// Extend selection one word to the right.
@@ -84,10 +84,10 @@ pub fn default_bindings() -> gpui::ActionBindingCollection {
         .with::<Delete>("delete")
         .with::<Tab>("tab")
         .with::<Enter>("enter")
-        .with::<Left>("left")
-        .with::<Right>("right")
-        .with::<Up>("up")
-        .with::<Down>("down")
+        .with::<NavLeft>("left")
+        .with::<NavRight>("right")
+        .with::<NavUp>("up")
+        .with::<NavDown>("down")
         .with::<SelectAll>("secondary-a")
         .with::<SelectLeft>("shift-left")
         .with::<SelectRight>("shift-right")
@@ -106,17 +106,17 @@ pub fn default_bindings() -> gpui::ActionBindingCollection {
         bindings = bindings
             .with::<DeleteWordLeft>("alt-backspace")
             .with::<DeleteWordRight>("alt-delete")
-            .with::<DeleteToBeginningOfLine>("cmd-backspace")
-            .with::<DeleteToEndOfLine>("ctrl-k")
+            .with::<DeleteToLineStart>("cmd-backspace")
+            .with::<DeleteToLineEnd>("ctrl-k")
             // Mac keyboards don't have Home/End keys, so cmd-left/right are standard
             .with::<Home>("cmd-left")
-            .with::<End>("cmd-right")
-            .with::<MoveToBeginning>("cmd-up")
-            .with::<MoveToEnd>("cmd-down")
-            .with::<SelectToBeginning>("cmd-shift-up")
-            .with::<SelectToEnd>("cmd-shift-down")
-            .with::<WordLeft>("alt-left")
-            .with::<WordRight>("alt-right")
+            .with::<NavLineEnd>("cmd-right")
+            .with::<NavDocumentStart>("cmd-up")
+            .with::<NavDocumentEnd>("cmd-down")
+            .with::<SelectDocumentStart>("cmd-shift-up")
+            .with::<SelectDocumentEnd>("cmd-shift-down")
+            .with::<NavWordLeft>("alt-left")
+            .with::<NavWordRight>("alt-right")
             .with::<SelectWordLeft>("alt-shift-left")
             .with::<SelectWordRight>("alt-shift-right");
     }
@@ -126,16 +126,16 @@ pub fn default_bindings() -> gpui::ActionBindingCollection {
         bindings = bindings
             .with::<DeleteWordLeft>("ctrl-backspace")
             .with::<DeleteWordRight>("ctrl-delete")
-            .with::<DeleteToBeginningOfLine>("ctrl-shift-backspace")
-            .with::<DeleteToEndOfLine>("ctrl-shift-delete")
+            .with::<DeleteToLineStart>("ctrl-shift-backspace")
+            .with::<DeleteToLineEnd>("ctrl-shift-delete")
             .with::<Home>("home")
-            .with::<End>("end")
-            .with::<MoveToBeginning>("ctrl-home")
-            .with::<MoveToEnd>("ctrl-end")
-            .with::<SelectToBeginning>("ctrl-shift-home")
-            .with::<SelectToEnd>("ctrl-shift-end")
-            .with::<WordLeft>("ctrl-left")
-            .with::<WordRight>("ctrl-right")
+            .with::<NavLineEnd>("end")
+            .with::<NavDocumentStart>("ctrl-home")
+            .with::<NavDocumentEnd>("ctrl-end")
+            .with::<SelectDocumentStart>("ctrl-shift-home")
+            .with::<SelectDocumentEnd>("ctrl-shift-end")
+            .with::<NavWordLeft>("ctrl-left")
+            .with::<NavWordRight>("ctrl-right")
             .with::<SelectWordLeft>("ctrl-shift-left")
             .with::<SelectWordRight>("ctrl-shift-right");
     }
@@ -154,33 +154,27 @@ pub trait EditableTextActionHandler<Context>: Sized {
 
     fn delete_word_left(&mut self, _: &DeleteWordLeft, _w: &mut Window, _cx: &mut Context) {}
     fn delete_word_right(&mut self, _: &DeleteWordRight, _w: &mut Window, _cx: &mut Context) {}
-    fn delete_to_line_start(
-        &mut self,
-        _: &DeleteToBeginningOfLine,
-        _w: &mut Window,
-        _cx: &mut Context,
-    ) {
-    }
-    fn delete_to_line_end(&mut self, _: &DeleteToEndOfLine, _w: &mut Window, _cx: &mut Context) {}
+    fn delete_to_line_start(&mut self, _: &DeleteToLineStart, _w: &mut Window, _cx: &mut Context) {}
+    fn delete_to_line_end(&mut self, _: &DeleteToLineEnd, _w: &mut Window, _cx: &mut Context) {}
 
-    fn nav_left(&mut self, _: &Left, _w: &mut Window, _cx: &mut Context) {}
-    fn nav_right(&mut self, _: &Right, _w: &mut Window, _cx: &mut Context) {}
-    fn nav_up(&mut self, _: &Up, _w: &mut Window, _cx: &mut Context) {}
-    fn nav_down(&mut self, _: &Down, _w: &mut Window, _cx: &mut Context) {}
+    fn nav_left(&mut self, _: &NavLeft, _w: &mut Window, _cx: &mut Context) {}
+    fn nav_right(&mut self, _: &NavRight, _w: &mut Window, _cx: &mut Context) {}
+    fn nav_up(&mut self, _: &NavUp, _w: &mut Window, _cx: &mut Context) {}
+    fn nav_down(&mut self, _: &NavDown, _w: &mut Window, _cx: &mut Context) {}
     fn nav_line_start(&mut self, _: &Home, _w: &mut Window, _cx: &mut Context) {}
-    fn nav_line_end(&mut self, _: &End, _w: &mut Window, _cx: &mut Context) {}
-    fn nav_start(&mut self, _: &MoveToBeginning, _w: &mut Window, _cx: &mut Context) {}
-    fn nav_end(&mut self, _: &MoveToEnd, _w: &mut Window, _cx: &mut Context) {}
-    fn nav_left_word(&mut self, _: &WordLeft, _w: &mut Window, _cx: &mut Context) {}
-    fn nav_right_word(&mut self, _: &WordRight, _w: &mut Window, _cx: &mut Context) {}
+    fn nav_line_end(&mut self, _: &NavLineEnd, _w: &mut Window, _cx: &mut Context) {}
+    fn nav_start(&mut self, _: &NavDocumentStart, _w: &mut Window, _cx: &mut Context) {}
+    fn nav_end(&mut self, _: &NavDocumentEnd, _w: &mut Window, _cx: &mut Context) {}
+    fn nav_left_word(&mut self, _: &NavWordLeft, _w: &mut Window, _cx: &mut Context) {}
+    fn nav_right_word(&mut self, _: &NavWordRight, _w: &mut Window, _cx: &mut Context) {}
 
     fn select_all(&mut self, _: &SelectAll, _w: &mut Window, _cx: &mut Context) {}
     fn select_left(&mut self, _: &SelectLeft, _w: &mut Window, _cx: &mut Context) {}
     fn select_right(&mut self, _: &SelectRight, _w: &mut Window, _cx: &mut Context) {}
     fn select_up(&mut self, _: &SelectUp, _w: &mut Window, _cx: &mut Context) {}
     fn select_down(&mut self, _: &SelectDown, _w: &mut Window, _cx: &mut Context) {}
-    fn select_start(&mut self, _: &SelectToBeginning, _w: &mut Window, _cx: &mut Context) {}
-    fn select_end(&mut self, _: &SelectToEnd, _w: &mut Window, _cx: &mut Context) {}
+    fn select_start(&mut self, _: &SelectDocumentStart, _w: &mut Window, _cx: &mut Context) {}
+    fn select_end(&mut self, _: &SelectDocumentEnd, _w: &mut Window, _cx: &mut Context) {}
     fn select_left_word(&mut self, _: &SelectWordLeft, _w: &mut Window, _cx: &mut Context) {}
     fn select_right_word(&mut self, _: &SelectWordRight, _w: &mut Window, _cx: &mut Context) {}
 

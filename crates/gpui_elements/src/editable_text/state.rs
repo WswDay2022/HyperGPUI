@@ -707,7 +707,7 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
 
     fn delete_to_line_start(
         &mut self,
-        _: &DeleteToBeginningOfLine,
+        _: &DeleteToLineStart,
         _w: &mut Window,
         cx: &mut Context<'app, Self>,
     ) {
@@ -716,22 +716,22 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
 
     fn delete_to_line_end(
         &mut self,
-        _: &DeleteToEndOfLine,
+        _: &DeleteToLineEnd,
         _w: &mut Window,
         cx: &mut Context<'app, Self>,
     ) {
         self.delete_linear(NavigationDirection::Forward, TextBoundary::Line, cx);
     }
 
-    fn nav_left(&mut self, _: &Left, _w: &mut Window, cx: &mut Context<'app, Self>) {
+    fn nav_left(&mut self, _: &NavLeft, _w: &mut Window, cx: &mut Context<'app, Self>) {
         self.nav_linear(NavigationDirection::Back, TextBoundary::Graphmeme, cx);
     }
 
-    fn nav_right(&mut self, _: &Right, _w: &mut Window, cx: &mut Context<'app, Self>) {
+    fn nav_right(&mut self, _: &NavRight, _w: &mut Window, cx: &mut Context<'app, Self>) {
         self.nav_linear(NavigationDirection::Forward, TextBoundary::Graphmeme, cx);
     }
 
-    fn nav_up(&mut self, _: &Up, window: &mut Window, cx: &mut Context<'app, Self>) {
+    fn nav_up(&mut self, _: &NavUp, window: &mut Window, cx: &mut Context<'app, Self>) {
         if !self.layout_data.supports_multiline {
             // semantically equivalent to line
             self.nav_linear(NavigationDirection::Back, TextBoundary::Line, cx);
@@ -744,7 +744,7 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
         }
     }
 
-    fn nav_down(&mut self, _: &Down, window: &mut Window, cx: &mut Context<'app, Self>) {
+    fn nav_down(&mut self, _: &NavDown, window: &mut Window, cx: &mut Context<'app, Self>) {
         if !self.layout_data.supports_multiline {
             // semantically equivalent to line
             self.nav_linear(NavigationDirection::Forward, TextBoundary::Line, cx);
@@ -761,24 +761,24 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
         self.nav_linear(NavigationDirection::Back, TextBoundary::Line, cx);
     }
 
-    fn nav_line_end(&mut self, _: &End, _w: &mut Window, cx: &mut Context<'app, Self>) {
+    fn nav_line_end(&mut self, _: &NavLineEnd, _w: &mut Window, cx: &mut Context<'app, Self>) {
         // [when not multiline] semantically equivalent to document
         self.nav_linear(NavigationDirection::Forward, TextBoundary::Line, cx);
     }
 
-    fn nav_start(&mut self, _: &MoveToBeginning, _w: &mut Window, cx: &mut Context<'app, Self>) {
+    fn nav_start(&mut self, _: &NavDocumentStart, _w: &mut Window, cx: &mut Context<'app, Self>) {
         self.nav_linear(NavigationDirection::Back, TextBoundary::Document, cx);
     }
 
-    fn nav_end(&mut self, _: &MoveToEnd, _w: &mut Window, cx: &mut Context<'app, Self>) {
+    fn nav_end(&mut self, _: &NavDocumentEnd, _w: &mut Window, cx: &mut Context<'app, Self>) {
         self.nav_linear(NavigationDirection::Forward, TextBoundary::Document, cx);
     }
 
-    fn nav_left_word(&mut self, _: &WordLeft, _w: &mut Window, cx: &mut Context<'app, Self>) {
+    fn nav_left_word(&mut self, _: &NavWordLeft, _w: &mut Window, cx: &mut Context<'app, Self>) {
         self.nav_linear(NavigationDirection::Back, TextBoundary::Word, cx);
     }
 
-    fn nav_right_word(&mut self, _: &WordRight, _w: &mut Window, cx: &mut Context<'app, Self>) {
+    fn nav_right_word(&mut self, _: &NavWordRight, _w: &mut Window, cx: &mut Context<'app, Self>) {
         self.nav_linear(NavigationDirection::Forward, TextBoundary::Word, cx);
     }
 
@@ -821,14 +821,14 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
 
     fn select_start(
         &mut self,
-        _: &SelectToBeginning,
+        _: &SelectDocumentStart,
         _w: &mut Window,
         cx: &mut Context<'app, Self>,
     ) {
         self.select_linear(NavigationDirection::Back, TextBoundary::Document, cx);
     }
 
-    fn select_end(&mut self, _: &SelectToEnd, _w: &mut Window, cx: &mut Context<'app, Self>) {
+    fn select_end(&mut self, _: &SelectDocumentEnd, _w: &mut Window, cx: &mut Context<'app, Self>) {
         self.select_linear(NavigationDirection::Forward, TextBoundary::Document, cx);
     }
 
@@ -1070,7 +1070,7 @@ mod tests {
         let view = create_test_input(cx, "hello", 0..0);
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                input.nav_left(&Left, window, cx);
+                input.nav_left(&NavLeft, window, cx);
                 assert_eq!(input.selected_range, 0..0);
             });
         })
@@ -1082,7 +1082,7 @@ mod tests {
         let view = create_test_input(cx, "hello", 3..3);
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                input.nav_left(&Left, window, cx);
+                input.nav_left(&NavLeft, window, cx);
                 assert_eq!(input.selected_range, 2..2);
             });
         })
@@ -1094,7 +1094,7 @@ mod tests {
         let view = create_test_input(cx, "hello", 1..4);
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                input.nav_left(&Left, window, cx);
+                input.nav_left(&NavLeft, window, cx);
                 assert_eq!(input.selected_range, 1..1);
             });
         })
@@ -1108,7 +1108,7 @@ mod tests {
         let view = create_test_input(cx, "ab\ncd", 3..3);
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                input.nav_left(&Left, window, cx);
+                input.nav_left(&NavLeft, window, cx);
                 assert_eq!(input.selected_range, 2..2); // cursor at end of line 1
             });
         })
@@ -1120,7 +1120,7 @@ mod tests {
         let view = create_test_input(cx, "hello", 5..5);
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                input.nav_right(&Right, window, cx);
+                input.nav_right(&NavRight, window, cx);
                 assert_eq!(input.selected_range, 5..5);
             });
         })
@@ -1132,7 +1132,7 @@ mod tests {
         let view = create_test_input(cx, "hello", 2..2);
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                input.nav_right(&Right, window, cx);
+                input.nav_right(&NavRight, window, cx);
                 assert_eq!(input.selected_range, 3..3);
             });
         })
@@ -1144,7 +1144,7 @@ mod tests {
         let view = create_test_input(cx, "hello", 1..4);
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                input.nav_right(&Right, window, cx);
+                input.nav_right(&NavRight, window, cx);
                 assert_eq!(input.selected_range, 4..4);
             });
         })
@@ -1158,7 +1158,7 @@ mod tests {
         let view = create_test_input(cx, "ab\ncd", 1..1);
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                input.nav_right(&Right, window, cx);
+                input.nav_right(&NavRight, window, cx);
                 assert_eq!(input.selected_range, 2..2); // cursor at end of line 1
             });
         })
@@ -1172,7 +1172,7 @@ mod tests {
         let view = create_test_input(cx, "ab\ncd", 2..2);
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                input.nav_right(&Right, window, cx);
+                input.nav_right(&NavRight, window, cx);
                 assert_eq!(input.selected_range, 3..3); // cursor at start of line 2
             });
         })
@@ -1186,7 +1186,7 @@ mod tests {
         let view = create_test_input(cx, "ab\ncd", 2..2);
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                input.nav_left(&Left, window, cx);
+                input.nav_left(&NavLeft, window, cx);
                 assert_eq!(input.selected_range, 1..1);
             });
         })
@@ -1210,7 +1210,7 @@ mod tests {
         let view = create_test_input(cx, "first\nsecond", 8..8);
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                input.nav_line_end(&End, window, cx);
+                input.nav_line_end(&NavLineEnd, window, cx);
                 assert_eq!(input.selected_range, 12..12);
             });
         })
@@ -1222,7 +1222,7 @@ mod tests {
         let view = create_test_input(cx, "first\nsecond\nthird", 9..9);
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                input.nav_start(&MoveToBeginning, window, cx);
+                input.nav_start(&NavDocumentStart, window, cx);
                 assert_eq!(input.selected_range, 0..0);
             });
         })
@@ -1234,7 +1234,7 @@ mod tests {
         let view = create_test_input(cx, "first\nsecond\nthird", 0..0);
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                input.nav_end(&MoveToEnd, window, cx);
+                input.nav_end(&NavDocumentEnd, window, cx);
                 assert_eq!(input.selected_range, 18..18);
             });
         })
@@ -1250,7 +1250,7 @@ mod tests {
         let view = create_test_input(cx, "hello world", 0..0);
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                input.nav_left_word(&WordLeft, window, cx);
+                input.nav_left_word(&NavWordLeft, window, cx);
                 assert_eq!(input.selected_range, 0..0);
             });
         })
@@ -1262,7 +1262,7 @@ mod tests {
         let view = create_test_input(cx, "hello world test", 11..11);
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                input.nav_left_word(&WordLeft, window, cx);
+                input.nav_left_word(&NavWordLeft, window, cx);
                 assert_eq!(input.selected_range, 6..6);
             });
         })
@@ -1274,7 +1274,7 @@ mod tests {
         let view = create_test_input(cx, "hello world", 11..11);
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                input.nav_right_word(&WordRight, window, cx);
+                input.nav_right_word(&NavWordRight, window, cx);
                 assert_eq!(input.selected_range, 11..11);
             });
         })
@@ -1286,7 +1286,7 @@ mod tests {
         let view = create_test_input(cx, "hello world test", 0..0);
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                input.nav_right_word(&WordRight, window, cx);
+                input.nav_right_word(&NavWordRight, window, cx);
                 assert_eq!(input.selected_range, 5..5);
             });
         })
@@ -1338,7 +1338,7 @@ mod tests {
         let view = create_test_input(cx, "hello world", 6..6);
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                input.select_start(&SelectToBeginning, window, cx);
+                input.select_start(&SelectDocumentStart, window, cx);
                 assert_eq!(input.selected_range, 0..6);
             });
         })
@@ -1350,7 +1350,7 @@ mod tests {
         let view = create_test_input(cx, "hello world", 6..6);
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                input.select_end(&SelectToEnd, window, cx);
+                input.select_end(&SelectDocumentEnd, window, cx);
                 assert_eq!(input.selected_range, 11..6);
             });
         })
@@ -1546,13 +1546,13 @@ mod tests {
         let view = create_test_input(cx, "café", 0..0);
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                input.nav_right(&Right, window, cx);
+                input.nav_right(&NavRight, window, cx);
                 assert_eq!(input.selected_range, 1..1);
-                input.nav_right(&Right, window, cx);
+                input.nav_right(&NavRight, window, cx);
                 assert_eq!(input.selected_range, 2..2);
-                input.nav_right(&Right, window, cx);
+                input.nav_right(&NavRight, window, cx);
                 assert_eq!(input.selected_range, 3..3);
-                input.nav_right(&Right, window, cx);
+                input.nav_right(&NavRight, window, cx);
                 assert_eq!(input.selected_range, 5..5);
             });
         })
@@ -1564,11 +1564,11 @@ mod tests {
         let view = create_test_input(cx, "a👋b", 0..0);
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                input.nav_right(&Right, window, cx);
+                input.nav_right(&NavRight, window, cx);
                 assert_eq!(input.selected_range, 1..1);
-                input.nav_right(&Right, window, cx);
+                input.nav_right(&NavRight, window, cx);
                 assert_eq!(input.selected_range, 5..5);
-                input.nav_right(&Right, window, cx);
+                input.nav_right(&NavRight, window, cx);
                 assert_eq!(input.selected_range, 6..6);
             });
         })
@@ -1622,10 +1622,10 @@ mod tests {
         let view = create_test_input(cx, "", 0..0);
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                input.nav_left(&Left, window, cx);
+                input.nav_left(&NavLeft, window, cx);
                 assert_eq!(input.selected_range, 0..0);
 
-                input.nav_right(&Right, window, cx);
+                input.nav_right(&NavRight, window, cx);
                 assert_eq!(input.selected_range, 0..0);
 
                 input.backspace(&Backspace, window, cx);
@@ -1723,20 +1723,20 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 // Move right through: a -> 😀 -> b
-                input.nav_right(&Right, window, cx);
+                input.nav_right(&NavRight, window, cx);
                 assert_eq!(input.selected_range.start, 1); // after 'a'
 
-                input.nav_right(&Right, window, cx);
+                input.nav_right(&NavRight, window, cx);
                 assert_eq!(input.selected_range.start, 5); // after 😀 (1 + 4 bytes)
 
-                input.nav_right(&Right, window, cx);
+                input.nav_right(&NavRight, window, cx);
                 assert_eq!(input.selected_range.start, 6); // after 'b'
 
                 // Move left back
-                input.nav_left(&Left, window, cx);
+                input.nav_left(&NavLeft, window, cx);
                 assert_eq!(input.selected_range.start, 5); // before 'b'
 
-                input.nav_left(&Left, window, cx);
+                input.nav_left(&NavLeft, window, cx);
                 assert_eq!(input.selected_range.start, 1); // before 😀
             });
         })
@@ -1752,13 +1752,13 @@ mod tests {
         let view = create_test_input(cx, &format!("a{}b", emoji), 0..0);
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                input.nav_right(&Right, window, cx); // past 'a'
+                input.nav_right(&NavRight, window, cx); // past 'a'
                 assert_eq!(input.selected_range.start, 1);
 
-                input.nav_right(&Right, window, cx); // past entire emoji with modifier
+                input.nav_right(&NavRight, window, cx); // past entire emoji with modifier
                 assert_eq!(input.selected_range.start, 9); // 1 + 8
 
-                input.nav_left(&Left, window, cx); // back before emoji
+                input.nav_left(&NavLeft, window, cx); // back before emoji
                 assert_eq!(input.selected_range.start, 1);
             });
         })
@@ -1776,13 +1776,13 @@ mod tests {
         let view = create_test_input(cx, &format!("x{}y", family), 0..0);
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                input.nav_right(&Right, window, cx); // past 'x'
+                input.nav_right(&NavRight, window, cx); // past 'x'
                 assert_eq!(input.selected_range.start, 1);
 
-                input.nav_right(&Right, window, cx); // past entire ZWJ sequence
+                input.nav_right(&NavRight, window, cx); // past entire ZWJ sequence
                 assert_eq!(input.selected_range.start, 19); // 1 + 18
 
-                input.nav_right(&Right, window, cx); // past 'y'
+                input.nav_right(&NavRight, window, cx); // past 'y'
                 assert_eq!(input.selected_range.start, 20);
             });
         })
@@ -1841,8 +1841,8 @@ mod tests {
         let view = create_test_input(cx, &format!("x{}y", flag), 0..0);
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                input.nav_right(&Right, window, cx); // past 'x'
-                input.nav_right(&Right, window, cx); // past flag (should be single grapheme)
+                input.nav_right(&NavRight, window, cx); // past 'x'
+                input.nav_right(&NavRight, window, cx); // past flag (should be single grapheme)
                 assert_eq!(input.selected_range.start, 9); // 1 + 8
             });
         })
@@ -1858,13 +1858,13 @@ mod tests {
         let view = create_test_input(cx, &format!("a{}b", combining), 0..0);
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                input.nav_right(&Right, window, cx); // past 'a'
+                input.nav_right(&NavRight, window, cx); // past 'a'
                 assert_eq!(input.selected_range.start, 1);
 
-                input.nav_right(&Right, window, cx); // past e + combining mark (single grapheme)
+                input.nav_right(&NavRight, window, cx); // past e + combining mark (single grapheme)
                 assert_eq!(input.selected_range.start, 4); // 1 + 3
 
-                input.nav_left(&Left, window, cx);
+                input.nav_left(&NavLeft, window, cx);
                 assert_eq!(input.selected_range.start, 1);
             });
         })
@@ -1880,8 +1880,8 @@ mod tests {
         let view = create_test_input(cx, &format!("x{}y", multi_combining), 0..0);
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                input.nav_right(&Right, window, cx); // past 'x'
-                input.nav_right(&Right, window, cx); // past entire combined character
+                input.nav_right(&NavRight, window, cx); // past 'x'
+                input.nav_right(&NavRight, window, cx); // past entire combined character
                 assert_eq!(input.selected_range.start, 6); // 1 + 5
             });
         })
@@ -1906,16 +1906,16 @@ mod tests {
         let view = create_test_input(cx, "a你好b", 0..0);
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                input.nav_right(&Right, window, cx); // past 'a'
+                input.nav_right(&NavRight, window, cx); // past 'a'
                 assert_eq!(input.selected_range.start, 1);
 
-                input.nav_right(&Right, window, cx); // past 你
+                input.nav_right(&NavRight, window, cx); // past 你
                 assert_eq!(input.selected_range.start, 4); // 1 + 3
 
-                input.nav_right(&Right, window, cx); // past 好
+                input.nav_right(&NavRight, window, cx); // past 好
                 assert_eq!(input.selected_range.start, 7); // 4 + 3
 
-                input.nav_right(&Right, window, cx); // past 'b'
+                input.nav_right(&NavRight, window, cx); // past 'b'
                 assert_eq!(input.selected_range.start, 8);
             });
         })
@@ -1928,23 +1928,23 @@ mod tests {
         let view = create_test_input(cx, "Hi你😀", 0..0);
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                input.nav_right(&Right, window, cx); // past 'H'
+                input.nav_right(&NavRight, window, cx); // past 'H'
                 assert_eq!(input.selected_range.start, 1);
 
-                input.nav_right(&Right, window, cx); // past 'i'
+                input.nav_right(&NavRight, window, cx); // past 'i'
                 assert_eq!(input.selected_range.start, 2);
 
-                input.nav_right(&Right, window, cx); // past 你 (3 bytes)
+                input.nav_right(&NavRight, window, cx); // past 你 (3 bytes)
                 assert_eq!(input.selected_range.start, 5);
 
-                input.nav_right(&Right, window, cx); // past 😀 (4 bytes)
+                input.nav_right(&NavRight, window, cx); // past 😀 (4 bytes)
                 assert_eq!(input.selected_range.start, 9);
 
                 // Now go back
-                input.nav_left(&Left, window, cx);
+                input.nav_left(&NavLeft, window, cx);
                 assert_eq!(input.selected_range.start, 5);
 
-                input.nav_left(&Left, window, cx);
+                input.nav_left(&NavLeft, window, cx);
                 assert_eq!(input.selected_range.start, 2);
             });
         })
@@ -1960,8 +1960,8 @@ mod tests {
         let view = create_test_input(cx, &format!("a{}b", emoji_presentation), 0..0);
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                input.nav_right(&Right, window, cx); // past 'a'
-                input.nav_right(&Right, window, cx); // past emoji with variation selector
+                input.nav_right(&NavRight, window, cx); // past 'a'
+                input.nav_right(&NavRight, window, cx); // past emoji with variation selector
                 assert_eq!(input.selected_range.start, 7); // 1 + 6
             });
         })
@@ -1976,8 +1976,8 @@ mod tests {
         let view = create_test_input(cx, &format!("x{}y", keycap), 0..0);
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                input.nav_right(&Right, window, cx); // past 'x'
-                input.nav_right(&Right, window, cx); // past keycap sequence
+                input.nav_right(&NavRight, window, cx); // past 'x'
+                input.nav_right(&NavRight, window, cx); // past keycap sequence
                 let expected_pos = 1 + keycap.len();
                 assert_eq!(input.selected_range.start, expected_pos);
             });
@@ -2020,7 +2020,7 @@ mod tests {
         let view = create_single_line_input(cx, "hello world", 5..5);
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                input.nav_up(&Up, window, cx);
+                input.nav_up(&NavUp, window, cx);
                 assert_eq!(input.selected_range, 0..0);
             });
         })
@@ -2032,7 +2032,7 @@ mod tests {
         let view = create_single_line_input(cx, "hello world", 5..5);
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                input.nav_down(&Down, window, cx);
+                input.nav_down(&NavDown, window, cx);
                 assert_eq!(input.selected_range, 11..11); // "hello world".len() == 11
             });
         })
@@ -2502,7 +2502,7 @@ mod tests {
         let view = create_test_input(cx, "hello world", 5..5);
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                input.delete_to_line_start(&DeleteToBeginningOfLine, window, cx);
+                input.delete_to_line_start(&DeleteToLineStart, window, cx);
                 assert_eq!(input.storage().content_utf8(), " world");
                 assert_eq!(input.selected_range, 0..0);
             });
@@ -2516,7 +2516,7 @@ mod tests {
         let view = create_test_input(cx, "line1\nline2\nline3", 8..8);
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                input.delete_to_line_start(&DeleteToBeginningOfLine, window, cx);
+                input.delete_to_line_start(&DeleteToLineStart, window, cx);
                 assert_eq!(input.storage().content_utf8(), "line1\nne2\nline3");
             });
         })
@@ -2528,7 +2528,7 @@ mod tests {
         let view = create_test_input(cx, "hello world", 0..0);
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                input.delete_to_line_start(&DeleteToBeginningOfLine, window, cx);
+                input.delete_to_line_start(&DeleteToLineStart, window, cx);
                 assert_eq!(input.storage().content_utf8(), "hello world");
             });
         })
@@ -2540,7 +2540,7 @@ mod tests {
         let view = create_test_input(cx, "hello world", 5..5);
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                input.delete_to_line_end(&DeleteToEndOfLine, window, cx);
+                input.delete_to_line_end(&DeleteToLineEnd, window, cx);
                 assert_eq!(input.storage().content_utf8(), "hello");
                 assert_eq!(input.selected_range, 5..5);
             });
@@ -2554,7 +2554,7 @@ mod tests {
         let view = create_test_input(cx, "line1\nline2\nline3", 8..8);
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                input.delete_to_line_end(&DeleteToEndOfLine, window, cx);
+                input.delete_to_line_end(&DeleteToLineEnd, window, cx);
                 assert_eq!(input.storage().content_utf8(), "line1\nli\nline3");
             });
         })
@@ -2566,7 +2566,7 @@ mod tests {
         let view = create_test_input(cx, "hello world", 11..11);
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                input.delete_to_line_end(&DeleteToEndOfLine, window, cx);
+                input.delete_to_line_end(&DeleteToLineEnd, window, cx);
                 assert_eq!(input.storage().content_utf8(), "hello world");
             });
         })
@@ -2614,7 +2614,7 @@ mod tests {
             view.input.update(cx, |input, cx| {
                 without_history_grouping(input);
 
-                input.delete_to_line_start(&DeleteToBeginningOfLine, window, cx);
+                input.delete_to_line_start(&DeleteToLineStart, window, cx);
                 assert_eq!(input.storage().content_utf8(), " world");
 
                 input.undo(&Undo, window, cx);
@@ -2631,7 +2631,7 @@ mod tests {
             view.input.update(cx, |input, cx| {
                 without_history_grouping(input);
 
-                input.delete_to_line_end(&DeleteToEndOfLine, window, cx);
+                input.delete_to_line_end(&DeleteToLineEnd, window, cx);
                 assert_eq!(input.storage().content_utf8(), "hello");
 
                 input.undo(&Undo, window, cx);
