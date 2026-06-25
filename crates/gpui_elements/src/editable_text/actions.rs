@@ -1,3 +1,4 @@
+//! Module containing user-input actions that are bound by EditableText elements
 use gpui::{Action, Context, InteractiveElement, WeakEntity, Window};
 use std::{cell::RefCell, rc::Rc};
 
@@ -14,9 +15,9 @@ gpui::actions!(
         /// Insert a tab character at the cursor position.
         Tab,
         /// Delete the character before the cursor.
-        Backspace,
+        DeleteLeft,
         /// Delete the character after the cursor.
-        Delete,
+        DeleteRight,
         /// Delete the word before the cursor.
         DeleteWordLeft,
         /// Delete the word after the cursor.
@@ -78,10 +79,14 @@ gpui::actions!(
     ]
 );
 
+/// Creates a collection of default keystroke bindings for EditableText actions.
+/// See [`ActionBindingCollection`](gpui::ActionBindingCollection) docs on how to override these bindings.
+///
+/// TODO: Collection does not supply a way to unbind a default keystroke
 pub fn default_bindings() -> gpui::ActionBindingCollection {
     let mut bindings = gpui::ActionBindingCollection::default()
-        .with::<Backspace>("backspace")
-        .with::<Delete>("delete")
+        .with::<DeleteLeft>("backspace")
+        .with::<DeleteRight>("delete")
         .with::<Tab>("tab")
         .with::<Enter>("enter")
         .with::<NavLeft>("left")
@@ -145,47 +150,80 @@ pub fn default_bindings() -> gpui::ActionBindingCollection {
 
 /// Declares stubs for all editable-text actions that an element's state entity can implement.
 pub trait EditableTextActionHandler<Context>: Sized {
+    /// Blur focus from the input.
     fn escape(&mut self, _: &Escape, _w: &mut Window, _cx: &mut Context) {}
 
+    /// Insert a newline at the cursor position.
     fn insert_enter(&mut self, _: &Enter, _w: &mut Window, _cx: &mut Context) {}
+    /// Insert a tab character at the cursor position.
     fn insert_tab(&mut self, _: &Tab, _w: &mut Window, _cx: &mut Context) {}
 
-    fn backspace(&mut self, _: &Backspace, _w: &mut Window, _cx: &mut Context) {}
-    fn delete(&mut self, _: &Delete, _w: &mut Window, _cx: &mut Context) {}
-
+    /// Delete the character before the cursor.
+    fn delete_left(&mut self, _: &DeleteLeft, _w: &mut Window, _cx: &mut Context) {}
+    /// Delete the character after the cursor.
+    fn delete_right(&mut self, _: &DeleteRight, _w: &mut Window, _cx: &mut Context) {}
+    /// Delete the word before the cursor.
     fn delete_word_left(&mut self, _: &DeleteWordLeft, _w: &mut Window, _cx: &mut Context) {}
+    /// Delete the word after the cursor.
     fn delete_word_right(&mut self, _: &DeleteWordRight, _w: &mut Window, _cx: &mut Context) {}
+    /// Delete from the cursor to the beginning of the line.
     fn delete_to_line_start(&mut self, _: &DeleteToLineStart, _w: &mut Window, _cx: &mut Context) {}
+    /// Delete from the cursor to the end of the line.
     fn delete_to_line_end(&mut self, _: &DeleteToLineEnd, _w: &mut Window, _cx: &mut Context) {}
 
+    /// Move the cursor one character to the left.
     fn nav_left(&mut self, _: &NavLeft, _w: &mut Window, _cx: &mut Context) {}
+    /// Move the cursor one character to the right.
     fn nav_right(&mut self, _: &NavRight, _w: &mut Window, _cx: &mut Context) {}
+    /// Move the cursor up one visual line.
     fn nav_up(&mut self, _: &NavUp, _w: &mut Window, _cx: &mut Context) {}
+    /// Move the cursor down one visual line.
     fn nav_down(&mut self, _: &NavDown, _w: &mut Window, _cx: &mut Context) {}
+    /// Move cursor to the start of the current line.
     fn nav_line_start(&mut self, _: &Home, _w: &mut Window, _cx: &mut Context) {}
+    /// Move cursor to the end of the current line.
     fn nav_line_end(&mut self, _: &NavLineEnd, _w: &mut Window, _cx: &mut Context) {}
+    /// Move cursor to the start of the document.
     fn nav_start(&mut self, _: &NavDocumentStart, _w: &mut Window, _cx: &mut Context) {}
+    /// Move cursor to the end of the document.
     fn nav_end(&mut self, _: &NavDocumentEnd, _w: &mut Window, _cx: &mut Context) {}
+    /// Move cursor one word to the left.
     fn nav_left_word(&mut self, _: &NavWordLeft, _w: &mut Window, _cx: &mut Context) {}
+    /// Move cursor one word to the right.
     fn nav_right_word(&mut self, _: &NavWordRight, _w: &mut Window, _cx: &mut Context) {}
 
+    /// Select the entire document.
     fn select_all(&mut self, _: &SelectAll, _w: &mut Window, _cx: &mut Context) {}
+    /// Extend selection one character to the left.
     fn select_left(&mut self, _: &SelectLeft, _w: &mut Window, _cx: &mut Context) {}
+    /// Extend selection one character to the right.
     fn select_right(&mut self, _: &SelectRight, _w: &mut Window, _cx: &mut Context) {}
+    /// Extend selection up one visual line.
     fn select_up(&mut self, _: &SelectUp, _w: &mut Window, _cx: &mut Context) {}
+    /// Extend selection down one visual line.
     fn select_down(&mut self, _: &SelectDown, _w: &mut Window, _cx: &mut Context) {}
+    /// Extend selection to the beginning of the document.
     fn select_start(&mut self, _: &SelectDocumentStart, _w: &mut Window, _cx: &mut Context) {}
+    /// Extend selection to the end of the document.
     fn select_end(&mut self, _: &SelectDocumentEnd, _w: &mut Window, _cx: &mut Context) {}
+    /// Extend selection one word to the left.
     fn select_left_word(&mut self, _: &SelectWordLeft, _w: &mut Window, _cx: &mut Context) {}
+    /// Extend selection one word to the right.
     fn select_right_word(&mut self, _: &SelectWordRight, _w: &mut Window, _cx: &mut Context) {}
 
+    /// Cut selected text to clipboard.
     fn cut(&mut self, _: &Cut, _w: &mut Window, _cx: &mut Context) {}
+    /// Copy selected text to clipboard.
     fn copy(&mut self, _: &Copy, _w: &mut Window, _cx: &mut Context) {}
+    /// Paste from clipboard at the cursor position.
     fn paste(&mut self, _: &Paste, _w: &mut Window, _cx: &mut Context) {}
 
+    /// Undo the last edit.
     fn undo(&mut self, _: &Undo, _w: &mut Window, _cx: &mut Context) {}
+    /// Redo the last undone edit.
     fn redo(&mut self, _: &Redo, _w: &mut Window, _cx: &mut Context) {}
 
+    /// Show the platform character palette.
     fn show_character_palette(
         &mut self,
         _: &ShowCharacterPalette,
@@ -247,8 +285,8 @@ pub(super) trait EditableTextActionElement<State> {
         self.register_action(|state, action, window, cx| state.escape(action, window, cx));
         self.register_action(|state, action, window, cx| state.insert_enter(action, window, cx));
         self.register_action(|state, action, window, cx| state.insert_tab(action, window, cx));
-        self.register_action(|state, action, window, cx| state.backspace(action, window, cx));
-        self.register_action(|state, action, window, cx| state.delete(action, window, cx));
+        self.register_action(|state, action, window, cx| state.delete_left(action, window, cx));
+        self.register_action(|state, action, window, cx| state.delete_right(action, window, cx));
         self.register_action(|state, action, window, cx| {
             state.delete_word_left(action, window, cx)
         });

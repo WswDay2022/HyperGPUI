@@ -1,5 +1,17 @@
-//! Implementation for editable-text elements (gpui equivalent of html `<input>` and `<textarea>`).
+//! Implementation for editable-text elements (gpui equivalent of html
+//! [`<input>`](https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Elements/input) and
+//! [`<textarea>`](https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Elements/textarea)).
+//!
 //! TODO: More documentation
+//! - caret blinking
+//! - history
+//! - storage
+//! - selection
+//! - ime
+//! - navigation
+//! - overflow (scroll vs clip)
+//! - auto-sizing to content via min/max w/h
+//! - mouse selection (click x2 x3 drag)
 //!
 //! Backlog of not-yet implemented features:
 //! - text sanitation & validation (see no-op implementation of [`EditableTextState::validate_incoming_text`])
@@ -14,6 +26,7 @@ mod layout;
 mod state;
 mod storage;
 
+pub use caret::*;
 pub use element::*;
 pub use state::*;
 pub use storage::*;

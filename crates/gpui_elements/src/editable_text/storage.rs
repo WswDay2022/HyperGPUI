@@ -2,6 +2,7 @@ use gpui::{App, NavigationDirection};
 use std::{ops::Range, rc::Rc};
 use unicode_segmentation::UnicodeSegmentation;
 
+/// Describes a boundary within a chunk of text.
 pub enum TextBoundary {
     /// The next utf-8 character in a direction from the caret
     Graphmeme,
@@ -19,13 +20,15 @@ pub enum TextBoundary {
 pub struct InitStorage(Option<Rc<dyn Fn(&mut App) -> Box<dyn UnicodeTextStorage>>>);
 
 impl InitStorage {
-    pub fn new_generic<F>(f: F) -> Self
+    /// Basic constructor which requires that the output of the func is a `dyn UnicodeTextStorage`.
+    pub fn new<F>(f: F) -> Self
     where
         F: 'static + Fn(&mut App) -> Box<dyn UnicodeTextStorage>,
     {
         Self(Some(Rc::new(f)))
     }
 
+    /// Wrapper around [`new`] which automatically casts the output of the provided func to [`UnicodeTextStorage`].
     pub fn new_typed<F, R>(f: F) -> Self
     where
         F: 'static + Fn(&mut App) -> R,
@@ -44,7 +47,8 @@ impl InitStorage {
     }
 }
 
-/// Abstraction around any text medium that can be used as the storage for EditableText elements.
+/// Implement this trait to create a storage medium that can be used as the content of EditableText elements.
+/// Default implementation is [`StringStorage`].
 pub trait UnicodeTextStorage {
     /// Returns the version/generation of the content, which should be incremented ever time the
     /// content is changed so that rendering elements can reprocess the contents via the text layout engine.
@@ -58,6 +62,8 @@ pub trait UnicodeTextStorage {
 
     /// Replace contents within the provided range with the given str slice.
     fn replace_range(&mut self, range: Range<usize>, text: &str);
+
+    // TODO: Refine the api for these methods
 
     fn utf_offset_8to16(&self, pos_uft8: usize) -> usize {
         // Fast path: if offset is 0, return 0
@@ -241,8 +247,8 @@ pub trait UnicodeTextStorage {
     }
 }
 
-/// [`UnicodeTextStorage`] implementation for std String.
-/// Not going to be the most performant, especially for large document text.
+/// [`UnicodeTextStorage`] implementation for [`String`].
+/// This is not the most performant, especially for large text documents.
 /// Its a decent default for editable text fields though.
 #[derive(Clone, Default)]
 pub struct StringStorage {

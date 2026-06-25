@@ -14,7 +14,7 @@ use std::{borrow::Cow, ops::Range};
 /// Event emitted via EditableText elements when the internal storage contents have changed
 pub struct TextChanged;
 
-/// Internal state for EditableText elements
+/// Internal state for EditableText elements. There is no way to access this externally with the current api.
 pub struct EditableTextState {
     /// The storage medium backing this element-state. Hypothetically supports both
     /// std String and other crates (e.g. long document text).
@@ -88,18 +88,19 @@ impl EditableTextState {
         }
     }
 
+    /// Returns the storage medium created for this field.
     pub fn storage(&self) -> &Box<dyn UnicodeTextStorage> {
         &self.storage
     }
 
     /// Returns the utf-8 character range that is currently selected within the current state of the text.
     /// Internally converts the stored direction-aware range into a canonical range.
-    pub fn selected_range(&self) -> Range<usize> {
+    pub(super) fn selected_range(&self) -> Range<usize> {
         self.selected_range.start.min(self.selected_range.end)
             ..self.selected_range.start.max(self.selected_range.end)
     }
 
-    pub fn selection_direction(&self) -> Option<NavigationDirection> {
+    pub(super) fn selection_direction(&self) -> Option<NavigationDirection> {
         match self.selected_range.start.cmp(&self.selected_range.end) {
             std::cmp::Ordering::Less => Some(NavigationDirection::Forward),
             std::cmp::Ordering::Equal => None,
@@ -107,18 +108,21 @@ impl EditableTextState {
         }
     }
 
+    /// Returns a reference to the entity owning the state of the [`Caret`] (e.g. its blinking state).
     pub fn caret_entity(&self) -> &Entity<Caret> {
         &self.caret
     }
 
+    /// Returns the position of the caret in utf8 character space.
     pub fn caret_pos(&self) -> usize {
         self.selected_range.start
     }
 
-    pub fn set_selected_range(&mut self, range: Range<usize>) {
+    pub(super) fn set_selected_range(&mut self, range: Range<usize>) {
         self.selected_range = range;
     }
 
+    /// Returns the IME marked range for character operations.
     pub fn marked_range(&self) -> Option<Range<usize>> {
         self.marked_range.clone()
     }
@@ -346,6 +350,10 @@ impl EditableTextState {
         }
     }
 
+    /// Moves the caret to the provided position.
+    ///
+    /// Will cause the current scroll position/offset to update on the next frame,
+    /// if the line the carent is on is out of view.
     pub fn move_to(&mut self, caret_pos: usize, cx: &mut Context<Self>) {
         cx.emit(CaretNotify::PauseBlinking);
         let caret_pos = caret_pos.min(self.storage.content_utf8().len());
@@ -354,6 +362,10 @@ impl EditableTextState {
         cx.notify();
     }
 
+    /// Changes the current selection to extend to the provided position.
+    ///
+    /// Will cause the current scroll position/offset to update on the next frame,
+    /// if the line the carent is on is out of view.
     pub fn select_to(&mut self, caret_pos: usize, cx: &mut Context<Self>) {
         cx.emit(CaretNotify::PauseBlinking);
         let caret_pos = caret_pos.min(self.storage().content_utf8().len());
@@ -362,6 +374,18 @@ impl EditableTextState {
         cx.notify();
     }
 
+    /// Removes a chunk of text at the cursor/selection.
+    /// No-op if the element is currently not accepting input.
+    ///
+    /// If there is a selection of multiple characters, the slice of text represented
+    /// by range is replaced with an empty string.
+    /// If there is no selection, `direction` and `boundary` are used to determine the slice of text to remove.
+    ///
+    /// [`NavigationDirection::Back`] represents scanning earlier in the text string from the caret.
+    ///
+    /// [`NavigationDirection::Forward`] represents scanning later in the text string from the caret.
+    ///
+    /// [`TextBoundary`] describes how far to jump from the caret.
     pub fn delete_linear(
         &mut self,
         direction: NavigationDirection,
@@ -389,6 +413,15 @@ impl EditableTextState {
         cx.notify();
     }
 
+    /// Moves the caret somewhere relative to its current location, according to `direction` and `boundary`.
+    ///
+    /// If there is currently a selection, the cursor will jump to the start/end of that selection based on `direction`.
+    ///
+    /// [`NavigationDirection::Back`] represents scanning earlier in the text string from the current caret.
+    ///
+    /// [`NavigationDirection::Forward`] represents scanning later in the text string from the current caret.
+    ///
+    /// [`TextBoundary`] describes how far to jump from the current caret
     pub fn nav_linear(
         &mut self,
         direction: NavigationDirection,
@@ -407,11 +440,20 @@ impl EditableTextState {
         self.move_to(caret_pos, cx);
     }
 
+    /// Sets the current selection to be the entire text in the storage medium
     pub fn select_document(&mut self, cx: &mut Context<Self>) {
         self.selected_range = 0..self.storage.content_utf8().len();
         cx.notify();
     }
 
+    /// Extends the current selection to include some amount of textrelative the current
+    /// location of the caret, according to `direction` and `boundary`.
+    ///
+    /// [`NavigationDirection::Back`] represents scanning earlier in the text string from the current caret.
+    ///
+    /// [`NavigationDirection::Forward`] represents scanning later in the text string from the current caret.
+    ///
+    /// [`TextBoundary`] describes how far to jump from the current caret
     pub fn select_linear(
         &mut self,
         direction: NavigationDirection,
@@ -427,6 +469,7 @@ impl EditableTextState {
 
 // History management
 impl EditableTextState {
+    /// Returns the history log of the element, which is the data that supports undo/redo operations.
     pub fn history(&self) -> Option<&EditableTextHistory> {
         self.history.as_ref()
     }
@@ -679,11 +722,11 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
         self.replace_text_in_range(None, "\t", window, cx);
     }
 
-    fn backspace(&mut self, _: &Backspace, _: &mut Window, cx: &mut Context<'app, Self>) {
+    fn delete_left(&mut self, _: &DeleteLeft, _: &mut Window, cx: &mut Context<'app, Self>) {
         self.delete_linear(NavigationDirection::Back, TextBoundary::Graphmeme, cx);
     }
 
-    fn delete(&mut self, _: &Delete, _w: &mut Window, cx: &mut Context<'app, Self>) {
+    fn delete_right(&mut self, _: &DeleteRight, _w: &mut Window, cx: &mut Context<'app, Self>) {
         self.delete_linear(NavigationDirection::Forward, TextBoundary::Graphmeme, cx);
     }
 
@@ -1366,7 +1409,7 @@ mod tests {
         let view = create_test_input(cx, "hello world", 6..11);
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                input.backspace(&Backspace, window, cx);
+                input.delete_left(&DeleteLeft, window, cx);
                 assert_eq!(input.storage().content_utf8(), "hello ");
                 assert_eq!(input.selected_range, 6..6);
             });
@@ -1379,7 +1422,7 @@ mod tests {
         let view = create_test_input(cx, "hello", 5..5);
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                input.backspace(&Backspace, window, cx);
+                input.delete_left(&DeleteLeft, window, cx);
                 assert_eq!(input.storage().content_utf8(), "hell");
                 assert_eq!(input.selected_range, 4..4);
             });
@@ -1392,7 +1435,7 @@ mod tests {
         let view = create_test_input(cx, "hello", 0..0);
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                input.backspace(&Backspace, window, cx);
+                input.delete_left(&DeleteLeft, window, cx);
                 assert_eq!(input.storage().content_utf8(), "hello");
                 assert_eq!(input.selected_range, 0..0);
             });
@@ -1405,7 +1448,7 @@ mod tests {
         let view = create_test_input(cx, "Hi 👋", 7..7);
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                input.backspace(&Backspace, window, cx);
+                input.delete_left(&DeleteLeft, window, cx);
                 assert_eq!(input.storage().content_utf8(), "Hi ");
                 assert_eq!(input.selected_range, 3..3);
             });
@@ -1422,7 +1465,7 @@ mod tests {
         let view = create_test_input(cx, "hello world", 0..5);
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                input.delete(&Delete, window, cx);
+                input.delete_right(&DeleteRight, window, cx);
                 assert_eq!(input.storage().content_utf8(), " world");
                 assert_eq!(input.selected_range, 0..0);
             });
@@ -1435,7 +1478,7 @@ mod tests {
         let view = create_test_input(cx, "hello", 0..0);
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                input.delete(&Delete, window, cx);
+                input.delete_right(&DeleteRight, window, cx);
                 assert_eq!(input.storage().content_utf8(), "ello");
                 assert_eq!(input.selected_range, 0..0);
             });
@@ -1448,7 +1491,7 @@ mod tests {
         let view = create_test_input(cx, "hello", 5..5);
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                input.delete(&Delete, window, cx);
+                input.delete_right(&DeleteRight, window, cx);
                 assert_eq!(input.storage().content_utf8(), "hello");
                 assert_eq!(input.selected_range, 5..5);
             });
@@ -1628,10 +1671,10 @@ mod tests {
                 input.nav_right(&NavRight, window, cx);
                 assert_eq!(input.selected_range, 0..0);
 
-                input.backspace(&Backspace, window, cx);
+                input.delete_left(&DeleteLeft, window, cx);
                 assert_eq!(input.storage().content_utf8(), "");
 
-                input.delete(&Delete, window, cx);
+                input.delete_right(&DeleteRight, window, cx);
                 assert_eq!(input.storage().content_utf8(), "");
 
                 input.select_all(&SelectAll, window, cx);
@@ -1794,7 +1837,7 @@ mod tests {
         let view = create_test_input(cx, "a😀b", 5..5); // cursor after emoji
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                input.backspace(&Backspace, window, cx);
+                input.delete_left(&DeleteLeft, window, cx);
                 assert_eq!(input.storage().content_utf8(), "ab");
                 assert_eq!(input.selected_range.start, 1);
             });
@@ -1811,7 +1854,7 @@ mod tests {
         let view = create_test_input(cx, &content, cursor_pos..cursor_pos);
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                input.backspace(&Backspace, window, cx);
+                input.delete_left(&DeleteLeft, window, cx);
                 assert_eq!(input.storage().content_utf8(), "ab");
                 assert_eq!(input.selected_range.start, 1);
             });
@@ -1824,7 +1867,7 @@ mod tests {
         let view = create_test_input(cx, "a😀b", 1..1); // cursor before emoji
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                input.delete(&Delete, window, cx);
+                input.delete_right(&DeleteRight, window, cx);
                 assert_eq!(input.storage().content_utf8(), "ab");
                 assert_eq!(input.selected_range.start, 1);
             });
@@ -2243,7 +2286,7 @@ mod tests {
             view.input.update(cx, |input, cx| {
                 without_history_grouping(input);
 
-                input.backspace(&Backspace, window, cx);
+                input.delete_left(&DeleteLeft, window, cx);
                 assert_eq!(input.storage().content_utf8(), "hell");
 
                 input.undo(&Undo, window, cx);
@@ -2260,7 +2303,7 @@ mod tests {
             view.input.update(cx, |input, cx| {
                 without_history_grouping(input);
 
-                input.delete(&Delete, window, cx);
+                input.delete_right(&DeleteRight, window, cx);
                 assert_eq!(input.storage().content_utf8(), "ello");
 
                 input.undo(&Undo, window, cx);

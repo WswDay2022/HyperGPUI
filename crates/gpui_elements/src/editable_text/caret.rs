@@ -3,7 +3,7 @@ use std::time::Duration;
 use gpui::{Context, Entity, EventEmitter, Subscription};
 use smallvec::SmallVec;
 
-/// Default interval for caret blinking.
+/// Default interval for caret blinking (500ms).
 pub const DEFAULT_BLINK_INTERVAL: Duration = Duration::from_millis(500);
 
 /// Events emitted that the [`Caret`] listens to.

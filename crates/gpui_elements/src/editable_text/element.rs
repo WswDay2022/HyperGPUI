@@ -14,6 +14,10 @@ use gpui::{
 use smallvec::SmallVec;
 use std::{cell::RefCell, ops::Range, rc::Rc, sync::Arc};
 
+/// Creates a text input element.
+/// See [`EditableTextElement`] for usage.
+///
+/// By default it is multiline, and therefore this is semantically equivalent to [`text_area`].
 #[track_caller]
 pub fn editable_text(id: impl Into<ElementId>) -> EditableTextElement {
     let mut this = EditableTextElement {
@@ -33,16 +37,27 @@ pub fn editable_text(id: impl Into<ElementId>) -> EditableTextElement {
     this
 }
 
+/// Creates a singleline text input element.
+/// See [`EditableTextElement`] for usage.
 #[track_caller]
 pub fn text_input(id: impl Into<ElementId>) -> EditableTextElement {
     editable_text(id).multiline(false)
 }
 
+/// Creates a multiline text input element.
+/// See [`EditableTextElement`] for usage.
 #[track_caller]
 pub fn text_area(id: impl Into<ElementId>) -> EditableTextElement {
     editable_text(id).multiline(true)
 }
 
+/// An input field which users can type text into.
+///
+/// EditableText elements require a storage medium to be specified
+/// (defaulting to [`StringStorage`](super::StringStorage)).
+/// Use [`with_storage`](Self::with_storage) to configure the storage medium,
+/// or [`default_value`](Self::default_value) to specify the content of the default storage medium.
+///
 pub struct EditableTextElement {
     interactivity: Interactivity,
     // Populated on first render with an entity stored/attached to the view.
@@ -86,11 +101,17 @@ impl Default for EditableTextColors {
 }
 
 impl EditableTextElement {
+    /// Configures whether the field supports multiple lines of text.
+    /// Disabling this prevents actions like `enter` and navigating up and down.
+    ///
+    /// It doesnt not automatically santize inputs from containing newlines (e.g. on paste).
+    /// This is a limitation of the current state of implementation and requires further iteration.
     pub fn multiline(mut self, enabled: bool) -> Self {
         self.supports_multiline = enabled;
         self
     }
 
+    /// Assigns the text that should be displayed when storage of the element is empty.
     pub fn placeholder(mut self, text: impl Into<SharedString>) -> Self {
         self.placeholder = Some(text.into());
         self
@@ -112,25 +133,31 @@ impl EditableTextElement {
         self
     }
 
-    /// Configures whether the element can accept input (effectively is the element currently enabled).
+    /// Configures whether the element can accept input (effectively means "is the element currently enabled").
     pub fn accepts_input(mut self, enabled: bool) -> Self {
         self.accepts_input = enabled;
         self
     }
 
     /// Sets the color of the placeholder text which is rendered when the element's stored text is empty.
+    ///
+    /// Cannot be refined via [`StyleRefinement`](gpui::StyleRefinement) due to limitations in the fields of [`Style`](gpui::Style).
     pub fn placeholder_color(mut self, color: Hsla) -> Self {
         self.colors.placeholder = color;
         self
     }
 
     /// Sets the color of the box highlighting selected text.
+    ///
+    /// Cannot be refined via [`StyleRefinement`](gpui::StyleRefinement) due to limitations in the fields of [`Style`](gpui::Style).
     pub fn selection_color(mut self, color: Hsla) -> Self {
         self.colors.selection = color;
         self
     }
 
     /// Sets the color of the caret / text-cursor.
+    ///
+    /// Cannot be refined via [`StyleRefinement`](gpui::StyleRefinement) due to limitations in the fields of [`Style`](gpui::Style).
     pub fn caret_color(mut self, color: Hsla) -> Self {
         self.colors.caret = color;
         self
@@ -138,6 +165,8 @@ impl EditableTextElement {
 
     /// Sets the color of the underlines rendered underneath text being editted/marked by InputMethodEditors
     /// (for writing Chinese, Japanese, and Korean utf-16).
+    ///
+    /// Cannot be refined via [`StyleRefinement`](gpui::StyleRefinement) due to limitations in the fields of [`Style`](gpui::Style).
     pub fn marked_color(mut self, color: Hsla) -> Self {
         self.colors.ime_underline = color;
         self
@@ -172,11 +201,6 @@ impl EditableTextActionElement<EditableTextState> for EditableTextElement {
     }
 }
 
-#[doc(hidden)]
-pub struct LayoutState<State> {
-    state: Entity<State>,
-}
-
 struct InteractivityPrepaint {
     hitbox: Option<Hitbox>,
     scroll_offset: Point<Pixels>,
@@ -184,6 +208,7 @@ struct InteractivityPrepaint {
     caret_visible: bool,
 }
 
+/// Internal type containing prepaint information used to paint the element
 #[doc(hidden)]
 pub struct PrepaintState {
     interactivity: InteractivityPrepaint,
@@ -192,7 +217,7 @@ pub struct PrepaintState {
 }
 
 impl Element for EditableTextElement {
-    type RequestLayoutState = LayoutState<EditableTextState>;
+    type RequestLayoutState = Entity<EditableTextState>;
     type PrepaintState = PrepaintState;
 
     fn id(&self) -> Option<ElementId> {
@@ -394,8 +419,7 @@ impl Element for EditableTextElement {
             },
         );
 
-        let layout_state = LayoutState { state };
-        (layout_id, layout_state)
+        (layout_id, state)
     }
 
     fn prepaint(
@@ -413,7 +437,7 @@ impl Element for EditableTextElement {
         let caret;
         let focus_handle;
         {
-            let state = request_layout.state.read(cx);
+            let state = request_layout.read(cx);
             content_size = state.layout_data.size.unwrap_or_else(|| bounds.size);
             caret = state.caret_entity().clone();
             focus_handle = state.focus_handle(cx);
@@ -443,7 +467,7 @@ impl Element for EditableTextElement {
                     bounds.size.height -= padding.top + padding.bottom;
                     bounds
                 };
-                request_layout.state.update(cx, |state, _cx| {
+                request_layout.update(cx, |state, _cx| {
                     // while gpui tracks scroll_offset with negative values,
                     // this is converted into positive for usage with bounds
                     state.layout_data.scroll_bounds =
@@ -458,7 +482,7 @@ impl Element for EditableTextElement {
             },
         );
 
-        let state = request_layout.state.read(cx);
+        let state = request_layout.read(cx);
         let elements = PrepaintElements::build_elements(state, &prepaint, &self.colors, window);
 
         PrepaintState {
@@ -491,13 +515,12 @@ impl Element for EditableTextElement {
             }
 
             if accepts_input {
-                let ime_handler =
-                    ElementInputHandler::new(inner_bounds, request_layout.state.clone());
+                let ime_handler = ElementInputHandler::new(inner_bounds, request_layout.clone());
                 window.handle_input(&prepaint.focus_handle, ime_handler, cx);
             }
 
             window.on_mouse_event({
-                let state = request_layout.state.clone();
+                let state = request_layout.clone();
                 move |event: &MouseDownEvent, phase, window, cx| {
                     if phase != DispatchPhase::Bubble {
                         return;
@@ -516,7 +539,7 @@ impl Element for EditableTextElement {
                 }
             });
             window.on_mouse_event({
-                let state = request_layout.state.clone();
+                let state = request_layout.clone();
                 move |event: &MouseUpEvent, phase, window, cx| {
                     if phase != DispatchPhase::Bubble {
                         return;
@@ -531,7 +554,7 @@ impl Element for EditableTextElement {
                 }
             });
             window.on_mouse_event({
-                let state = request_layout.state.clone();
+                let state = request_layout.clone();
                 move |event: &MouseMoveEvent, phase, window, cx| {
                     if phase != DispatchPhase::Bubble {
                         return;
