@@ -35,7 +35,7 @@ gpui::actions!(
         /// Move the cursor down one visual line.
         NavDown,
         /// Move cursor to the start of the current line.
-        Home,
+        NavLineStart,
         /// Move cursor to the end of the current line.
         NavLineEnd,
         /// Move cursor to the beginning of the content.
@@ -82,6 +82,44 @@ gpui::actions!(
 /// Creates a collection of default keystroke bindings for EditableText actions.
 /// See [`ActionBindingCollection`](gpui::ActionBindingCollection) docs on how to override these bindings.
 ///
+/// Apple keyboards dont have Home or End keys, so there are common bindings that replace those keys.
+/// | Action                | All         | Linux & Windows           | MacOS           |
+/// | --------------------- | ----------- | ------------------------- | --------------- |
+/// | Escape                | escape      |                           |                 |
+/// | Enter                 | enter       |                           |                 |
+/// | Tab                   | tab         |                           |                 |
+/// | DeleteLeft            | backspace   |                           |                 |
+/// | DeleteRight           | delete      |                           |                 |
+/// | DeleteWordLeft        |             | ctrl + backspace          | alt + backspace |
+/// | DeleteWordRight       |             | ctrl + delete             | alt + delete    |
+/// | DeleteToLineStart     |             | ctrl + shift + backspace  | cmd + backspace |
+/// | DeleteToLineEnd       |             | ctrl + shift + delete     | ctrl + k        |
+/// | NavLeft               | 🡄          |                           |                  |
+/// | NavRight              | 🡆          |                           |                  |
+/// | NavUp                 | 🡅          |                           |                  |
+/// | NavDown               | 🡇          |                           |                  |
+/// | NavLineStart          |             | home                      | cmd + 🡄         |
+/// | NavLineEnd            |             | end                       | cmd + 🡆         |
+/// | NavDocumentStart      |             | ctrl + home               | cmd + 🡅         |
+/// | NavDocumentEnd        |             | ctrl + end                | cmd + 🡇         |
+/// | NavWordLeft           |             | ctrl + 🡄                 | alt + 🡄         |
+/// | NavWordRight          |             | ctrl + 🡆                 | alt + 🡆         |
+/// | SelectAll             |             | ctrl + a                  | cmd + a         |
+/// | SelectLeft            | shift + 🡄  |                           |                  |
+/// | SelectRight           | shift + 🡆  |                           |                  |
+/// | SelectUp              | shift + 🡅  |                           |                  |
+/// | SelectDown            | shift + 🡇  |                           |                  |
+/// | SelectDocumentStart   |             | ctrl + shift + home       | cmd + shift + 🡅 |
+/// | SelectDocumentEnd     |             | ctrl + shift + end        | cmd + shift + 🡇 |
+/// | SelectWordLeft        |             | ctrl + shift + 🡄         | alt + shift + 🡄 |
+/// | SelectWordRight       |             | ctrl + shift + 🡆         | alt + shift + 🡆 |
+/// | Cut                   |             | ctrl + x                  | cmd + x          |
+/// | Copy                  |             | ctrl + c                  | cmd + c          |
+/// | Paste                 |             | ctrl + v                  | cmd + v          |
+/// | Undo                  |             | ctrl + z                  | cmd + z          |
+/// | Redo                  |             | ctrl + shift + z          | cmd + shift + z  |
+/// | ShowCharacterPalette  |             | ctrl + space              | cmd + space      |
+///
 /// TODO: Collection does not supply a way to unbind a default keystroke
 pub fn default_bindings() -> gpui::ActionBindingCollection {
     let mut bindings = gpui::ActionBindingCollection::default()
@@ -114,7 +152,7 @@ pub fn default_bindings() -> gpui::ActionBindingCollection {
             .with::<DeleteToLineStart>("cmd-backspace")
             .with::<DeleteToLineEnd>("ctrl-k")
             // Mac keyboards don't have Home/End keys, so cmd-left/right are standard
-            .with::<Home>("cmd-left")
+            .with::<NavLineStart>("cmd-left")
             .with::<NavLineEnd>("cmd-right")
             .with::<NavDocumentStart>("cmd-up")
             .with::<NavDocumentEnd>("cmd-down")
@@ -133,7 +171,7 @@ pub fn default_bindings() -> gpui::ActionBindingCollection {
             .with::<DeleteWordRight>("ctrl-delete")
             .with::<DeleteToLineStart>("ctrl-shift-backspace")
             .with::<DeleteToLineEnd>("ctrl-shift-delete")
-            .with::<Home>("home")
+            .with::<NavLineStart>("home")
             .with::<NavLineEnd>("end")
             .with::<NavDocumentStart>("ctrl-home")
             .with::<NavDocumentEnd>("ctrl-end")
@@ -180,7 +218,7 @@ pub trait EditableTextActionHandler<Context>: Sized {
     /// Move the cursor down one visual line.
     fn nav_down(&mut self, _: &NavDown, _w: &mut Window, _cx: &mut Context) {}
     /// Move cursor to the start of the current line.
-    fn nav_line_start(&mut self, _: &Home, _w: &mut Window, _cx: &mut Context) {}
+    fn nav_line_start(&mut self, _: &NavLineStart, _w: &mut Window, _cx: &mut Context) {}
     /// Move cursor to the end of the current line.
     fn nav_line_end(&mut self, _: &NavLineEnd, _w: &mut Window, _cx: &mut Context) {}
     /// Move cursor to the start of the document.

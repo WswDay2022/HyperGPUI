@@ -799,7 +799,7 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
         }
     }
 
-    fn nav_line_start(&mut self, _: &Home, _w: &mut Window, cx: &mut Context<'app, Self>) {
+    fn nav_line_start(&mut self, _: &NavLineStart, _w: &mut Window, cx: &mut Context<'app, Self>) {
         // [when not multiline] semantically equivalent to document
         self.nav_linear(NavigationDirection::Back, TextBoundary::Line, cx);
     }
@@ -1246,7 +1246,7 @@ mod tests {
         let view = create_test_input(cx, "first\nsecond", 9..9);
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                input.nav_line_start(&Home, window, cx);
+                input.nav_line_start(&NavLineStart, window, cx);
                 assert_eq!(input.selected_range, 6..6);
             });
         })
