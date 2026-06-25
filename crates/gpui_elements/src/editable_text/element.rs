@@ -66,6 +66,8 @@ struct EditableTextColors {
     selection: Hsla,
     /// Color of the caret / text cursor
     caret: Hsla,
+    /// Color of IME marked underlines
+    ime_underline: Hsla,
 }
 impl Default for EditableTextColors {
     fn default() -> Self {
@@ -78,6 +80,7 @@ impl Default for EditableTextColors {
                 a: 0.5,
             },
             caret: Hsla::white(),
+            ime_underline: Hsla::white().opacity(0.7),
         }
     }
 }
@@ -132,6 +135,13 @@ impl EditableTextElement {
         self.colors.caret = color;
         self
     }
+
+    /// Sets the color of the underlines rendered underneath text being editted/marked by InputMethodEditors
+    /// (for writing Chinese, Japanese, and Korean utf-16).
+    pub fn marked_color(mut self, color: Hsla) -> Self {
+        self.colors.ime_underline = color;
+        self
+    }
 }
 
 impl InteractiveElement for EditableTextElement {
@@ -162,33 +172,6 @@ impl EditableTextActionElement<EditableTextState> for EditableTextElement {
     }
 }
 
-pub enum PrepaintElement {
-    Line {
-        line: Arc<WrappedLine>,
-        point: Point<Pixels>,
-        align: TextAlign,
-    },
-    Quad(PaintQuad),
-}
-impl PrepaintElement {
-    fn build_quads(
-        offset_corners: Vec<(Point<Pixels>, Point<Pixels>)>,
-        origin: Point<Pixels>,
-        color: Hsla,
-    ) -> impl Iterator<Item = Self> {
-        let iter = offset_corners.into_iter();
-        iter.map(move |(offset_start, offset_end)| {
-            let bounds = Bounds::from_corners(origin + offset_start, origin + offset_end);
-            PrepaintElement::Quad(fill(bounds, color))
-        })
-    }
-}
-
-// NOTE: This value is not currently practical. Current estimation is:
-// 1 for caret, 1 for ime, n for each real line that may be wrapped,
-// n for selection (at least 1 per line that is wrapped that it encapsulates)
-const STACK_ALLOCATED_ELEMENTS: usize = 3usize;
-
 #[doc(hidden)]
 pub struct LayoutState<State> {
     state: Entity<State>,
@@ -205,7 +188,7 @@ struct InteractivityPrepaint {
 pub struct PrepaintState {
     interactivity: InteractivityPrepaint,
     focus_handle: FocusHandle,
-    elements: SmallVec<[PrepaintElement; STACK_ALLOCATED_ELEMENTS]>,
+    elements: PrepaintElements,
 }
 
 impl Element for EditableTextElement {
@@ -476,7 +459,7 @@ impl Element for EditableTextElement {
         );
 
         let state = request_layout.state.read(cx);
-        let elements = self.build_elements(state, &prepaint, window);
+        let elements = PrepaintElements::build_elements(state, &prepaint, &self.colors, window);
 
         PrepaintState {
             interactivity: prepaint,
@@ -562,15 +545,17 @@ impl Element for EditableTextElement {
             });
 
             let line_h = window.line_height();
-            let mut lines = Vec::with_capacity(prepaint.elements.len());
-            for element in prepaint.elements.drain(..) {
-                match element {
-                    PrepaintElement::Line { line, point, align } => {
-                        let _ = line.paint(point, line_h, align, Some(bounds), window, cx);
-                        lines.push(line);
-                    }
-                    PrepaintElement::Quad(quad) => window.paint_quad(quad),
-                }
+            for PrepaintLine { line, point, align } in prepaint.elements.lines.drain(..) {
+                let _ = line.paint(point, line_h, align, Some(bounds), window, cx);
+            }
+            for quad in prepaint.elements.ime_marked.drain(..) {
+                window.paint_quad(quad);
+            }
+            for quad in prepaint.elements.selection.drain(..) {
+                window.paint_quad(quad);
+            }
+            if let Some(quad) = prepaint.elements.caret.take() {
+                window.paint_quad(quad);
             }
         };
         self.interactivity().paint(
@@ -585,13 +570,43 @@ impl Element for EditableTextElement {
     }
 }
 
-impl EditableTextElement {
+struct PrepaintLine {
+    line: Arc<WrappedLine>,
+    point: Point<Pixels>,
+    align: TextAlign,
+}
+
+const STACK_ALLOCATED_LINES: usize = 100usize;
+const STACK_ALLOCATED_QUADS_SELECTION: usize = 20usize;
+const STACK_ALLOCATED_QUADS_IME_MARKED: usize = 2usize;
+
+#[derive(Default)]
+struct PrepaintElements {
+    lines: SmallVec<[PrepaintLine; STACK_ALLOCATED_LINES]>,
+    selection: SmallVec<[PaintQuad; STACK_ALLOCATED_QUADS_SELECTION]>,
+    ime_marked: SmallVec<[PaintQuad; STACK_ALLOCATED_QUADS_IME_MARKED]>,
+    caret: Option<PaintQuad>,
+}
+
+impl PrepaintElements {
+    fn build_quads(
+        offset_corners: Vec<(Point<Pixels>, Point<Pixels>)>,
+        origin: Point<Pixels>,
+        color: Hsla,
+    ) -> impl Iterator<Item = PaintQuad> {
+        let iter = offset_corners.into_iter();
+        iter.map(move |(offset_start, offset_end)| {
+            let bounds = Bounds::from_corners(origin + offset_start, origin + offset_end);
+            fill(bounds, color)
+        })
+    }
+
     fn build_elements(
-        &self,
         state: &EditableTextState,
         prepaint: &InteractivityPrepaint,
+        colors: &EditableTextColors,
         window: &mut Window,
-    ) -> SmallVec<[PrepaintElement; STACK_ALLOCATED_ELEMENTS]> {
+    ) -> PrepaintElements {
         let InteractivityPrepaint {
             hitbox: _,
             scroll_offset,
@@ -603,7 +618,7 @@ impl EditableTextElement {
         let selection = state.selected_range();
         let ime_range = state.marked_range();
 
-        let mut elements = SmallVec::new();
+        let mut elements = PrepaintElements::default();
 
         let line_height = window.line_height();
         let is_range_contained_by_range =
@@ -626,11 +641,9 @@ impl EditableTextElement {
                 continue;
             }
 
-            // TODO: First render all lines (underlines for IME), then all selections, then cursor if no selection
-
             if let Some(wrapped) = &segment.wrapped_line {
                 let point = inner_bounds.origin + point(scroll_offset.x, line_y);
-                elements.push(PrepaintElement::Line {
+                elements.lines.push(PrepaintLine {
                     line: wrapped.clone(),
                     point,
                     align: TextAlign::Left,
@@ -642,14 +655,14 @@ impl EditableTextElement {
             if is_range_contained_by_range(&segment.text_range, &selection) {
                 if segment_is_empty {
                     const EMPTY_LINE_SELECTION_WIDTH: Pixels = px(6.);
-                    elements.push(PrepaintElement::Quad(fill(
+                    elements.selection.push(fill(
                         Bounds::from_corners(
                             inner_bounds.origin + point(Pixels::ZERO, line_y),
                             inner_bounds.origin
                                 + point(EMPTY_LINE_SELECTION_WIDTH, line_y + line_height),
                         ),
-                        self.colors.selection,
-                    )));
+                        colors.selection,
+                    ));
                 } else {
                     let offset_corners = build_quad_over_text(
                         &selection,
@@ -658,10 +671,10 @@ impl EditableTextElement {
                         line_height,
                         Pixels::ZERO,
                     );
-                    elements.extend(PrepaintElement::build_quads(
+                    elements.selection.extend(PrepaintElements::build_quads(
                         offset_corners,
                         inner_bounds.origin,
-                        self.colors.selection,
+                        colors.selection,
                     ));
                 }
             }
@@ -681,10 +694,10 @@ impl EditableTextElement {
                         line_height,
                         underline_offset,
                     );
-                    elements.extend(PrepaintElement::build_quads(
+                    elements.ime_marked.extend(PrepaintElements::build_quads(
                         offset_corners,
                         inner_bounds.origin,
-                        self.colors.selection,
+                        colors.ime_underline,
                     ));
                 }
             }
@@ -706,9 +719,9 @@ impl EditableTextElement {
                     inner_bounds.origin + carent_point,
                     size(gpui::px(CURSOR_WIDTH), line_height),
                 ),
-                self.colors.caret,
+                colors.caret,
             );
-            elements.push(PrepaintElement::Quad(quad));
+            elements.caret = Some(quad);
         }
 
         elements
