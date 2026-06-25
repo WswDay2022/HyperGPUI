@@ -197,6 +197,7 @@ struct InteractivityPrepaint {
     hitbox: Option<Hitbox>,
     scroll_offset: Point<Pixels>,
     inner_bounds: Bounds<Pixels>,
+    caret_visible: bool,
 }
 
 #[doc(hidden)]
@@ -424,10 +425,18 @@ impl Element for EditableTextElement {
     ) -> Self::PrepaintState {
         // should reflect the text content layout size of the stored text,
         // so that scrolling can take it into account during prepaint.
-        let content_size = {
+        let content_size;
+        let caret;
+        let focus_handle;
+        {
             let state = request_layout.state.read(cx);
-            state.layout_data.size.unwrap_or_else(|| bounds.size)
-        };
+            content_size = state.layout_data.size.unwrap_or_else(|| bounds.size);
+            caret = state.caret_entity().clone();
+            focus_handle = state.focus_handle(cx);
+        }
+
+        let is_focused = focus_handle.is_focused(window);
+        let caret_visible = caret.update(cx, |caret, cx| caret.update_focus(is_focused, cx));
 
         let prepaint = self.interactivity().prepaint(
             global_id,
@@ -460,12 +469,12 @@ impl Element for EditableTextElement {
                     hitbox,
                     scroll_offset,
                     inner_bounds,
+                    caret_visible,
                 }
             },
         );
 
         let state = request_layout.state.read(cx);
-        let focus_handle = state.focus_handle(cx);
         let elements = self.build_elements(state, &prepaint, window);
 
         PrepaintState {
@@ -586,6 +595,7 @@ impl EditableTextElement {
             hitbox: _,
             scroll_offset,
             inner_bounds,
+            caret_visible,
         } = prepaint;
 
         let caret_pos = state.caret_pos();
@@ -691,9 +701,7 @@ impl EditableTextElement {
             }
         }
 
-        if state.is_caret_visible(window)
-            && let Some(carent_point) = caret_point
-        {
+        if *caret_visible && let Some(carent_point) = caret_point {
             const CURSOR_WIDTH: f32 = 2.0;
             let quad = fill(
                 Bounds::new(

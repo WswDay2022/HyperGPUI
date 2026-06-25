@@ -1,17 +1,21 @@
 use crate::editable_text::{
     TextBoundary, UnicodeTextStorage,
     actions::EditableTextActionHandler,
+    caret::{Caret, CaretNotify},
     history::EditableTextHistory,
-    notify::{TextChanged, TextHistoryPushed},
 };
 use gpui::{
-    App, Bounds, ClipboardItem, Context, EntityInputHandler, EventEmitter, FocusHandle, Focusable,
-    NavigationDirection, Pixels, Point, Size, UTF16Selection, Window, WrappedLine, point,
+    App, Bounds, ClipboardItem, Context, Entity, EntityInputHandler, EventEmitter, FocusHandle,
+    Focusable, NavigationDirection, Pixels, Point, Size, UTF16Selection, Window, WrappedLine,
+    point,
 };
 use std::{borrow::Cow, ops::Range, sync::Arc};
 
+pub struct TextChanged;
+
 pub struct EditableTextState {
     storage: Box<dyn UnicodeTextStorage>,
+    caret: Entity<Caret>,
 
     /// The utf-8 character range that is currently selected by the user.
     /// Valid both when start < end and start > end (which dictates the direction of the selection). Empty when start==end.
@@ -91,7 +95,7 @@ impl TextLineSegment {
 }
 
 impl EventEmitter<TextChanged> for EditableTextState {}
-impl EventEmitter<TextHistoryPushed> for EditableTextState {}
+impl EventEmitter<CaretNotify> for EditableTextState {}
 
 impl Focusable for EditableTextState {
     fn focus_handle(&self, _: &App) -> FocusHandle {
@@ -101,8 +105,18 @@ impl Focusable for EditableTextState {
 
 impl EditableTextState {
     pub fn new(storage: impl Into<Box<dyn UnicodeTextStorage>>, cx: &mut Context<Self>) -> Self {
+        use gpui::AppContext;
+        let caret = cx.new({
+            let state_entity = cx.entity();
+            move |cx| {
+                let mut caret = Caret::default().blink_interval_default();
+                caret.subscribe_to(&state_entity, cx);
+                caret
+            }
+        });
         Self {
             storage: storage.into(),
+            caret,
 
             selected_range: 0..0,
             marked_range: None,
@@ -136,6 +150,10 @@ impl EditableTextState {
             std::cmp::Ordering::Equal => None,
             std::cmp::Ordering::Greater => Some(NavigationDirection::Back),
         }
+    }
+
+    pub fn caret_entity(&self) -> &Entity<Caret> {
+        &self.caret
     }
 
     pub fn caret_pos(&self) -> usize {
@@ -310,7 +328,7 @@ impl EditableTextState {
     }
 
     pub fn move_to(&mut self, caret_pos: usize, cx: &mut Context<Self>) {
-        //cx.emit(CursorTrigger::PauseBlinkingForUserAction);
+        cx.emit(CaretNotify::PauseBlinking);
         let caret_pos = caret_pos.min(self.storage.content_utf8().len());
         self.selected_range = caret_pos..caret_pos;
         self.scroll_to_caret();
@@ -318,7 +336,7 @@ impl EditableTextState {
     }
 
     pub fn select_to(&mut self, caret_pos: usize, cx: &mut Context<Self>) {
-        //cx.emit(CursorTrigger::PauseBlinkingForUserAction);
+        cx.emit(CaretNotify::PauseBlinking);
         let caret_pos = caret_pos.min(self.storage().content_utf8().len());
         self.selected_range.start = caret_pos;
         self.scroll_to_caret();
@@ -528,13 +546,6 @@ impl EditableTextState {
     }
 }
 
-impl EditableTextState {
-    pub fn is_caret_visible(&self, window: &Window) -> bool {
-        // TODO: Cursor blinking
-        self.focus_handle.is_focused(window)
-    }
-}
-
 impl EntityInputHandler for EditableTextState {
     fn text_for_range(
         &mut self,
@@ -587,7 +598,7 @@ impl EntityInputHandler for EditableTextState {
     ) {
         let range_utf8 = self.ime_resolve_range(range_utf16);
         self.replace_text_in_range_bytes(range_utf8, text_to_insert, cx);
-        //cx.emit(CursorTrigger::PauseBlinkingForUserAction);
+        cx.emit(CaretNotify::PauseBlinking);
         cx.emit(TextChanged);
         cx.notify();
     }
