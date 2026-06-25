@@ -183,19 +183,27 @@ impl PrepaintElement {
     }
 }
 
+// NOTE: This value is not currently practical. Current estimation is:
+// 1 for caret, 1 for ime, n for each real line that may be wrapped,
+// n for selection (at least 1 per line that is wrapped that it encapsulates)
+const STACK_ALLOCATED_ELEMENTS: usize = 3usize;
+
 #[doc(hidden)]
 pub struct LayoutState<State> {
-    pub state: Entity<State>,
+    state: Entity<State>,
+}
+
+struct InteractivityPrepaint {
+    hitbox: Option<Hitbox>,
+    scroll_offset: Point<Pixels>,
+    inner_bounds: Bounds<Pixels>,
 }
 
 #[doc(hidden)]
 pub struct PrepaintState {
-    pub hitbox: Option<Hitbox>,
-    pub inner_bounds: Bounds<Pixels>,
-    pub focus_handle: FocusHandle,
-    pub elements: SmallVec<[PrepaintElement; 3]>,
-    pub scroll_offset: Point<Pixels>,
-    pub caret_visible: bool,
+    interactivity: InteractivityPrepaint,
+    focus_handle: FocusHandle,
+    elements: SmallVec<[PrepaintElement; STACK_ALLOCATED_ELEMENTS]>,
 }
 
 impl Element for EditableTextElement {
@@ -421,11 +429,6 @@ impl Element for EditableTextElement {
             state.layout_data.size.unwrap_or_else(|| bounds.size)
         };
 
-        struct InteractivityPrepaint {
-            hitbox: Option<Hitbox>,
-            scroll_offset: Point<Pixels>,
-            inner_bounds: Bounds<Pixels>,
-        }
         let prepaint = self.interactivity().prepaint(
             global_id,
             inspector_id,
@@ -460,20 +463,134 @@ impl Element for EditableTextElement {
                 }
             },
         );
+
+        let state = request_layout.state.read(cx);
+        let focus_handle = state.focus_handle(cx);
+        let elements = self.build_elements(state, &prepaint, window);
+
+        PrepaintState {
+            interactivity: prepaint,
+            focus_handle,
+            elements,
+        }
+    }
+
+    fn paint(
+        &mut self,
+        global_id: Option<&gpui::GlobalElementId>,
+        inspector_id: Option<&gpui::InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        request_layout: &mut Self::RequestLayoutState,
+        prepaint: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        if let Some(hitbox) = &prepaint.interactivity.hitbox {
+            window.set_cursor_style(CursorStyle::IBeam, hitbox);
+        }
+
+        let accepts_input = self.accepts_input;
+        let inner_bounds = prepaint.interactivity.inner_bounds;
+        let to_local_position = -(bounds.origin + prepaint.interactivity.scroll_offset);
+        let perform_paint = |style: &Style, window: &mut Window, cx: &mut App| {
+            if style.display == Display::None {
+                return;
+            }
+
+            if accepts_input {
+                let ime_handler =
+                    ElementInputHandler::new(inner_bounds, request_layout.state.clone());
+                window.handle_input(&prepaint.focus_handle, ime_handler, cx);
+            }
+
+            window.on_mouse_event({
+                let state = request_layout.state.clone();
+                move |event: &MouseDownEvent, phase, window, cx| {
+                    if phase != DispatchPhase::Bubble {
+                        return;
+                    }
+                    if !bounds.contains(&event.position) {
+                        return;
+                    }
+                    if event.button != MouseButton::Left {
+                        return;
+                    }
+
+                    let text_position = event.position + to_local_position;
+                    state.update(cx, |state, cx| {
+                        state.on_mouse_down(event, text_position, window, cx);
+                    });
+                }
+            });
+            window.on_mouse_event({
+                let state = request_layout.state.clone();
+                move |event: &MouseUpEvent, phase, window, cx| {
+                    if phase != DispatchPhase::Bubble {
+                        return;
+                    }
+                    if event.button != MouseButton::Left {
+                        return;
+                    }
+
+                    state.update(cx, |state, cx| {
+                        state.on_mouse_up(event, window, cx);
+                    });
+                }
+            });
+            window.on_mouse_event({
+                let state = request_layout.state.clone();
+                move |event: &MouseMoveEvent, phase, window, cx| {
+                    if phase != DispatchPhase::Bubble {
+                        return;
+                    }
+
+                    let text_position = event.position + to_local_position;
+                    state.update(cx, |state, cx| {
+                        state.on_mouse_move(event, text_position, window, cx);
+                    });
+                }
+            });
+
+            let line_h = window.line_height();
+            let mut lines = Vec::with_capacity(prepaint.elements.len());
+            for element in prepaint.elements.drain(..) {
+                match element {
+                    PrepaintElement::Line { line, point, align } => {
+                        let _ = line.paint(point, line_h, align, Some(bounds), window, cx);
+                        lines.push(line);
+                    }
+                    PrepaintElement::Quad(quad) => window.paint_quad(quad),
+                }
+            }
+        };
+        self.interactivity().paint(
+            global_id,
+            inspector_id,
+            bounds.clone(),
+            prepaint.interactivity.hitbox.as_ref(),
+            window,
+            cx,
+            perform_paint,
+        );
+    }
+}
+
+impl EditableTextElement {
+    fn build_elements(
+        &self,
+        state: &EditableTextState,
+        prepaint: &InteractivityPrepaint,
+        window: &mut Window,
+    ) -> SmallVec<[PrepaintElement; STACK_ALLOCATED_ELEMENTS]> {
         let InteractivityPrepaint {
-            hitbox,
+            hitbox: _,
             scroll_offset,
             inner_bounds,
         } = prepaint;
 
-        let state = request_layout.state.read(cx);
-
-        let focus_handle = state.focus_handle(cx);
         let caret_pos = state.caret_pos();
         let selection = state.selected_range();
         let ime_range = state.marked_range();
-        // TODO: Cursor blinking
-        let cursor_visible = true; // input.cursor_visible();
 
         let mut elements = SmallVec::new();
 
@@ -561,11 +678,11 @@ impl Element for EditableTextElement {
                 }
             }
 
+            // TODO: doesnt render caret when the caret is at the end of the document.
+            // contains_position doesnt include the last character because then scroll-to-caret is incorrect,
+            // but we still need to account for "caret is at the end of the last line"
             let is_cursor_in_line = segment.contains_position(caret_pos);
             if is_cursor_in_line && let Some(wrapped) = &segment.wrapped_line {
-                // TODO: when the cursor is functionally at a character that is on the next line
-                // (a line that spans multiple rows), the cursor displays at the end of the previous
-                // row instead of the start of the next row.
                 let local_offset = caret_pos.saturating_sub(segment.text_range.start);
                 let caret_px = wrapped
                     .position_for_index(local_offset, line_height)
@@ -574,9 +691,7 @@ impl Element for EditableTextElement {
             }
         }
 
-        let is_focused = focus_handle.is_focused(window);
-        if is_focused
-            && cursor_visible
+        if state.is_caret_visible(window)
             && let Some(carent_point) = caret_point
         {
             const CURSOR_WIDTH: f32 = 2.0;
@@ -590,113 +705,7 @@ impl Element for EditableTextElement {
             elements.push(PrepaintElement::Quad(quad));
         }
 
-        PrepaintState {
-            hitbox,
-            inner_bounds,
-            focus_handle,
-            elements,
-            scroll_offset,
-            caret_visible: cursor_visible,
-        }
-    }
-
-    fn paint(
-        &mut self,
-        global_id: Option<&gpui::GlobalElementId>,
-        inspector_id: Option<&gpui::InspectorElementId>,
-        bounds: Bounds<Pixels>,
-        request_layout: &mut Self::RequestLayoutState,
-        prepaint: &mut Self::PrepaintState,
-        window: &mut Window,
-        cx: &mut App,
-    ) {
-        if let Some(hitbox) = &prepaint.hitbox {
-            window.set_cursor_style(CursorStyle::IBeam, hitbox);
-        }
-
-        let accepts_input = self.accepts_input;
-        let inner_bounds = prepaint.inner_bounds;
-        let to_local_position = -(bounds.origin + prepaint.scroll_offset);
-        let perform_paint = |style: &Style, window: &mut Window, cx: &mut App| {
-            if style.display == Display::None {
-                return;
-            }
-
-            if accepts_input {
-                let ime_handler =
-                    ElementInputHandler::new(inner_bounds, request_layout.state.clone());
-                window.handle_input(&prepaint.focus_handle, ime_handler, cx);
-            }
-
-            window.on_mouse_event({
-                let state = request_layout.state.clone();
-                move |event: &MouseDownEvent, phase, window, cx| {
-                    if phase != DispatchPhase::Bubble {
-                        return;
-                    }
-                    if !bounds.contains(&event.position) {
-                        return;
-                    }
-                    if event.button != MouseButton::Left {
-                        return;
-                    }
-
-                    let text_position = event.position + to_local_position;
-                    state.update(cx, |state, cx| {
-                        state.on_mouse_down(event, text_position, window, cx);
-                    });
-                }
-            });
-            window.on_mouse_event({
-                let state = request_layout.state.clone();
-                move |event: &MouseUpEvent, phase, window, cx| {
-                    if phase != DispatchPhase::Bubble {
-                        return;
-                    }
-                    if event.button != MouseButton::Left {
-                        return;
-                    }
-
-                    state.update(cx, |state, cx| {
-                        state.on_mouse_up(event, window, cx);
-                    });
-                }
-            });
-            window.on_mouse_event({
-                let state = request_layout.state.clone();
-                move |event: &MouseMoveEvent, phase, window, cx| {
-                    if phase != DispatchPhase::Bubble {
-                        return;
-                    }
-
-                    let text_position = event.position + to_local_position;
-                    state.update(cx, |state, cx| {
-                        state.on_mouse_move(event, text_position, window, cx);
-                    });
-                }
-            });
-
-            let line_h = window.line_height();
-            let mut lines = Vec::with_capacity(prepaint.elements.len());
-            for element in prepaint.elements.drain(..) {
-                match element {
-                    PrepaintElement::Line { line, point, align } => {
-                        let _ = line.paint(point, line_h, align, Some(bounds), window, cx);
-                        lines.push(line);
-                    }
-                    PrepaintElement::Quad(quad) => window.paint_quad(quad),
-                }
-            }
-        };
-        self.interactivity().paint(
-            global_id,
-            inspector_id,
-            bounds.clone(),
-            prepaint.hitbox.as_ref(),
-            window,
-            cx,
-            perform_paint,
-        );
+        elements
     }
 }
 

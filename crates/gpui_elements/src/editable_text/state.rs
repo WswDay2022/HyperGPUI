@@ -275,8 +275,6 @@ impl EditableTextState {
         // point will be relative to content_size, and may or may not be within the current scroll_bounds
         let point = self.find_point_for_character_position(self.caret_pos());
 
-        println!("{point:?} ?= {:?}", self.layout_data.scroll_bounds);
-
         // this scroll_offset diverges from the rest of gpui, as it is stored in the
         // positive real number space (interactivity stores it in the negatives)
         let mut scroll_offset = Cow::Borrowed(&self.layout_data.scroll_bounds.origin);
@@ -527,6 +525,13 @@ impl EditableTextState {
 
         self.scroll_to_caret();
         cx.notify();
+    }
+}
+
+impl EditableTextState {
+    pub fn is_caret_visible(&self, window: &Window) -> bool {
+        // TODO: Cursor blinking
+        self.focus_handle.is_focused(window)
     }
 }
 
