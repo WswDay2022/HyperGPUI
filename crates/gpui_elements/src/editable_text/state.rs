@@ -7,10 +7,9 @@ use crate::editable_text::{
 };
 use gpui::{
     App, Bounds, ClipboardItem, Context, Entity, EntityInputHandler, EventEmitter, FocusHandle,
-    Focusable, NavigationDirection, Pixels, Point, Size, UTF16Selection, Window, WrappedLine,
-    point,
+    Focusable, NavigationDirection, Pixels, Point, UTF16Selection, Window, point,
 };
-use std::{borrow::Cow, ops::Range, sync::Arc};
+use std::{borrow::Cow, ops::Range};
 
 /// Event emitted via EditableText elements when the internal storage contents have changed
 pub struct TextChanged;
@@ -129,23 +128,30 @@ impl EditableTextState {
     /// Validates/santizes incoming text according to the rules of the field.
     fn validate_incoming_text<'text>(
         &self,
-        range: &Range<usize>,
-        mut text_to_insert: &'text str,
+        _range: &Range<usize>,
+        text_to_insert: &'text str,
     ) -> &'text str {
-        // TODO: Apply text sanitization
-        // single-line fields should prune \n and \r
-        // fields should be able to provide a max_length or other validations on text-input
+        // TODO: Apply text sanitization, ideally using externally-sourced implementations.
+        // example optional/opt-in sanitations include:
+        // - single-line fields should prune /n & /r
+        // - maximum utf8 length
+        // - numbers only
+        // should also consider validation support, for features such as:
+        // - total syntax evaluation (e.g. passwords)
+        // - conforms to regex or math (e.g. ssn, phone number, email, etc)
 
-        let max_length = None::<usize>;
-
+        /* A sample implementation of max-length sampled from gpuikit
         // Decide the effective new text up front (honouring `max_length`).
         // This avoids the "apply, then truncate" path which would leave the caret past the end.
+        let max_length = None::<usize>;
         if let Some(cap) = max_length {
             let existing_len = self.storage().content_utf8().len() - (range.end - range.start);
             let room = cap.saturating_sub(existing_len);
             text_to_insert = &text_to_insert[..text_to_insert.len().min(room)];
         }
+        */
 
+        // for now, this function is no-op
         text_to_insert
     }
 

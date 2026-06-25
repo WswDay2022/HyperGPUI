@@ -1,3 +1,11 @@
+//! Implementation for editable-text elements (gpui equivalent of html `<input>` and `<textarea>`).
+//! TODO: More documentation
+//!
+//! Backlog of not-yet implemented features:
+//! - text sanitation & validation (see no-op implementation of [`EditableTextState::validate_incoming_text`])
+//! - nav & select via PageUp/PageDown
+//! - masking text (e.g. for passwords)
+
 pub mod actions;
 mod caret;
 mod element;
@@ -9,12 +17,3 @@ mod storage;
 pub use element::*;
 pub use state::*;
 pub use storage::*;
-
-/* TODO list
-- text sanitation
-- add page up/down actions to nav by an entire page or expand selection by an entire page
-- test IME (char palette only available on macos)
-*/
-
-/* Open questions:
-*/
