@@ -13,7 +13,6 @@ ignored = ["gpui"]
 
 [dependencies]
 gpui.workspace = true
-async-io.workspace = true
 unicode-segmentation.workspace = true
 smallvec.workspace = true
 

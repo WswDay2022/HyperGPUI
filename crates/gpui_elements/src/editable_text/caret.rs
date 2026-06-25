@@ -134,7 +134,7 @@ impl Caret {
         let interval = self.interval;
 
         cx.spawn(async move |this, cx| {
-            async_io::Timer::after(interval).await;
+            cx.background_executor().timer(interval).await;
             this.update(cx, |this, cx| {
                 if this.generation == generation {
                     this.paused = false;
@@ -158,7 +158,7 @@ impl Caret {
         let interval = self.interval;
 
         cx.spawn(async move |this, cx| {
-            async_io::Timer::after(interval).await;
+            cx.background_executor().timer(interval).await;
             if let Some(this) = this.upgrade() {
                 this.update(cx, |this, cx| {
                     if this.generation == generation {
