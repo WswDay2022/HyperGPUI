@@ -267,12 +267,10 @@ impl Element for EditableTextElement {
             }
         };
 
-        let focus_handle;
         let show_placeholder;
         let storage_version;
         {
             let state = state.read(cx);
-            focus_handle = state.focus_handle(cx);
             show_placeholder = state.storage().content_utf8().is_empty();
             storage_version = state.storage().version();
 
@@ -281,16 +279,6 @@ impl Element for EditableTextElement {
                     .set_scroll_offset(global_id, window, -scroll_offset);
             }
         }
-
-        // NOTE: Unlike other elements, a FocusHandle is owned by the state.
-        // This means the user is currently unable to provide a focus handle.
-        // This was born out of Interactivity not having a way to read the focus handle.
-        // This might be able to be eliminated entirely if focus handle can be passed thru on_mouse_down.
-
-        // TODO: This required a gpui api change in order to sync the focus handle between Interactivity and TextInputStateBase
-        // maybe use `set_focus_handle` during prepaint?
-        //window.set_focus_handle(focus_handle, cx);
-        self.interactivity.track_focus(focus_handle);
 
         let placeholder = self.placeholder.clone();
         let placeholder_color = self.colors.placeholder;
@@ -472,7 +460,8 @@ impl Element for EditableTextElement {
         let is_focused = focus_handle.is_focused(window);
         let caret_visible = caret.update(cx, |caret, cx| caret.update_focus(is_focused, cx));
 
-        let prepaint = self.interactivity().prepaint(
+        window.set_focus_handle(&focus_handle, cx);
+        let prepaint = self.interactivity.prepaint(
             global_id,
             inspector_id,
             bounds,
@@ -546,6 +535,7 @@ impl Element for EditableTextElement {
             }
 
             window.on_mouse_event({
+                let focus_handle = prepaint.focus_handle.clone();
                 let state = request_layout.clone();
                 move |event: &MouseDownEvent, phase, window, cx| {
                     if phase != DispatchPhase::Bubble {
@@ -557,6 +547,8 @@ impl Element for EditableTextElement {
                     if event.button != MouseButton::Left {
                         return;
                     }
+
+                    window.focus(&focus_handle, cx);
 
                     let text_position = event.position + to_local_position;
                     state.update(cx, |state, cx| {

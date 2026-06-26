@@ -1013,7 +1013,6 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
     ) {
         let caret_pos = self.index_for_pixel_point(text_position, window.line_height());
 
-        window.focus(&self.focus_handle, cx);
         self.is_selecting = true;
 
         let is_same_position = self

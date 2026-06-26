@@ -17,6 +17,10 @@
 //! Standard library strings are not ideal though for large text documents. For such uses,
 //! it is encouraged that implementers consider rolling their own [`UnicodeTextStorage`] medium.
 //!
+//! Unlike other elements, editable text internally owns its [`FocusHandle`](gpui::FocusHandle).
+//! This is required due to limitations of the [`Interactivity`](gpui::Interactivity) api and
+//! that a user cannot interact with a text-input field if it cannot be focused.
+//!
 //! ### Usage Samples
 //!
 //! A single-line text input with a fixed width and text that does not wrap
