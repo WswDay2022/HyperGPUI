@@ -106,7 +106,7 @@ impl EditableTextElement {
     /// Configures whether the field supports multiple lines of text.
     /// Disabling this prevents actions like `enter` and navigating up and down.
     ///
-    /// It doesnt not automatically santize inputs from containing newlines (e.g. on paste).
+    /// It doesnt not automatically sanitize inputs from containing newlines (e.g. on paste).
     /// This is a limitation of the current state of implementation and requires further iteration.
     pub fn multiline(mut self, enabled: bool) -> Self {
         self.supports_multiline = enabled;

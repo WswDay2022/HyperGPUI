@@ -149,12 +149,12 @@ impl EditableTextState {
 }
 
 impl EditableTextState {
-    /// Validates/santizes incoming text according to the rules of the field.
+    /// Validates/sanitizes incoming text according to the rules of the field.
     fn validate_incoming_text<'text>(
         &self,
         _range: &Range<usize>,
         text_to_insert: &'text str,
-    ) -> &'text str {
+    ) -> Cow<'text, str> {
         // TODO: Apply text sanitization, ideally using externally-sourced implementations.
         // example optional/opt-in sanitations include:
         // - single-line fields should prune /n & /r
@@ -163,6 +163,11 @@ impl EditableTextState {
         // should also consider validation support, for features such as:
         // - total syntax evaluation (e.g. passwords)
         // - conforms to regex or math (e.g. ssn, phone number, email, etc)
+        let mut text_to_insert = Cow::Borrowed(text_to_insert);
+
+        if !self.layout_data.supports_multiline {
+            text_to_insert = Cow::Owned(text_to_insert.replace("\n", "").replace("\r", ""));
+        }
 
         /* A sample implementation of max-length sampled from gpuikit
         // Decide the effective new text up front (honouring `max_length`).
@@ -638,7 +643,7 @@ impl EntityInputHandler for EditableTextState {
     ) {
         let range_utf8 = self.ime_resolve_range(range_utf16);
         let text_to_insert = self.validate_incoming_text(&range_utf8, text_to_insert);
-        self.replace_text(range_utf8, text_to_insert);
+        self.replace_text(range_utf8, text_to_insert.as_ref());
         cx.emit(CaretNotify::PauseBlinking);
         self.emit_text_changed(cx);
         cx.notify();
@@ -654,7 +659,7 @@ impl EntityInputHandler for EditableTextState {
     ) {
         let range = self.ime_resolve_range(range_utf16);
         let text_to_insert = self.validate_incoming_text(&range, text_to_insert);
-        self.replace_text(range.clone(), text_to_insert);
+        self.replace_text(range.clone(), text_to_insert.as_ref());
         self.ime_mark_text_in_range(&range, text_to_insert.len());
         self.ime_mark_selected_range(&range, &new_selected_range_utf16, text_to_insert.len());
         self.emit_text_changed(cx);
@@ -991,7 +996,7 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
 
         let range = self.ime_resolve_range(None);
         let text_to_insert = self.validate_incoming_text(&range, &text);
-        self.replace_text(range, text_to_insert);
+        self.replace_text(range, text_to_insert.as_ref());
         self.emit_text_changed(cx);
         cx.notify();
     }
