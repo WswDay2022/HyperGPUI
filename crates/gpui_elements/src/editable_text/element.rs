@@ -1,5 +1,5 @@
 use crate::editable_text::{
-    EditableTextState, InitStorage,
+    EditableTextState, FRcTextChanged, InitStorage,
     actions::{DEFAULT_INPUT_CONTEXT, EditableTextActionElement, EditableTextActionHandler},
     layout::{TextInputLayoutData, TextLineSegment},
 };
@@ -28,6 +28,7 @@ pub fn editable_text(id: impl Into<ElementId>) -> EditableTextElement {
         placeholder: None,
         accepts_input: true,
         colors: EditableTextColors::default(),
+        on_text_changed: None,
     };
     this.interactivity.element_id = Some(id.into());
 
@@ -69,6 +70,7 @@ pub struct EditableTextElement {
     placeholder: Option<SharedString>,
     accepts_input: bool,
     colors: EditableTextColors,
+    on_text_changed: Option<FRcTextChanged>,
 }
 
 /// EditableText styling that goes beyond what Style/StyleRefinement supports
@@ -171,6 +173,20 @@ impl EditableTextElement {
         self.colors.ime_underline = color;
         self
     }
+
+    /// Assigns the callback to execute on after every change to the text.
+    ///
+    /// This is not suitable for input sanitation (which should occur before the mutation).
+    ///
+    /// Doesn't use the established emit/subscribe pattern normally found on entities.
+    /// Reasoning and blockers are described in the documentation of [`FRcTextChanged`].
+    pub fn on_text_changed<F>(mut self, f: F) -> Self
+    where
+        F: 'static + Fn(&Entity<EditableTextState>, &mut App),
+    {
+        self.on_text_changed = Some(Rc::new(f));
+        self
+    }
 }
 
 impl InteractiveElement for EditableTextElement {
@@ -244,6 +260,9 @@ impl Element for EditableTextElement {
                 });
                 // store a reference to the entity owned by the element for access in action handlers
                 *self.state_entity_rc().borrow_mut() = state.downgrade();
+                state.update(cx, |state, _cx| {
+                    state.on_text_changed = self.on_text_changed.clone();
+                });
                 state
             }
         };
@@ -263,7 +282,14 @@ impl Element for EditableTextElement {
             }
         }
 
+        // NOTE: Unlike other elements, a FocusHandle is owned by the state.
+        // This means the user is currently unable to provide a focus handle.
+        // This was born out of Interactivity not having a way to read the focus handle.
+        // This might be able to be eliminated entirely if focus handle can be passed thru on_mouse_down.
+
         // TODO: This required a gpui api change in order to sync the focus handle between Interactivity and TextInputStateBase
+        // maybe use `set_focus_handle` during prepaint?
+        //window.set_focus_handle(focus_handle, cx);
         self.interactivity.track_focus(focus_handle);
 
         let placeholder = self.placeholder.clone();

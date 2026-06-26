@@ -9,18 +9,27 @@ use gpui::{
     App, Bounds, ClipboardItem, Context, Entity, EntityInputHandler, EventEmitter, FocusHandle,
     Focusable, NavigationDirection, Pixels, Point, UTF16Selection, Window, point,
 };
-use std::{borrow::Cow, ops::Range};
+use std::{borrow::Cow, ops::Range, rc::Rc};
 
-/// Event emitted via EditableText elements when the internal storage contents have changed
-pub struct TextChanged;
+/// Heap allocated function which is triggered when the text is changed.
+///
+/// This doesn't use the established [`Context::emit`] pattern because of limitations caused by
+/// [`Window::use_keyed_state`], where the [`EditableTextState`] entity is unavailable until
+/// [`Element::request_layout`] and therefore cannot be provided to the
+/// element's caller/constructor for usage via [`Context::subscribe`].
+pub type FRcTextChanged = Rc<dyn Fn(&Entity<EditableTextState>, &mut App) + 'static>;
 
-/// Internal state for EditableText elements. There is no way to access this externally with the current api.
+/// Internal state for EditableText elements.
 pub struct EditableTextState {
     /// The storage medium backing this element-state. Hypothetically supports both
     /// std String and other crates (e.g. long document text).
     storage: Box<dyn UnicodeTextStorage>,
     /// The caret entity which has internal state for features like blinking
     caret: Entity<Caret>,
+
+    /// Callback for consumers to receive notifications that the storage has changed.
+    /// See documentation of [`FRcTextChanged`] why this doesnt use the typical emit/subscribe approach.
+    pub(super) on_text_changed: Option<FRcTextChanged>,
 
     /// The utf-8 character range that is currently selected by the user.
     /// Valid both when start < end and start > end (which dictates the direction of the selection).
@@ -49,12 +58,17 @@ pub struct EditableTextState {
     pub(super) layout_data: TextInputLayoutData,
 }
 
-impl EventEmitter<TextChanged> for EditableTextState {}
 impl EventEmitter<CaretNotify> for EditableTextState {}
 
 impl Focusable for EditableTextState {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus_handle.clone()
+    }
+}
+
+impl AsRef<str> for EditableTextState {
+    fn as_ref(&self) -> &str {
+        self.as_str()
     }
 }
 
@@ -83,13 +97,19 @@ impl EditableTextState {
             focus_handle: cx.focus_handle(),
             // TODO: what is the best way to give users access to configure this via element
             history: Some(EditableTextHistory::default()),
+            on_text_changed: None,
 
             layout_data: TextInputLayoutData::default(),
         }
     }
 
+    /// Returns the current contents of [`storage`] as a string slice.
+    pub fn as_str(&self) -> &str {
+        self.storage().content_utf8()
+    }
+
     /// Returns the storage medium created for this field.
-    pub fn storage(&self) -> &Box<dyn UnicodeTextStorage> {
+    pub(super) fn storage(&self) -> &Box<dyn UnicodeTextStorage> {
         &self.storage
     }
 
@@ -109,12 +129,12 @@ impl EditableTextState {
     }
 
     /// Returns a reference to the entity owning the state of the [`Caret`] (e.g. its blinking state).
-    pub fn caret_entity(&self) -> &Entity<Caret> {
+    pub(super) fn caret_entity(&self) -> &Entity<Caret> {
         &self.caret
     }
 
     /// Returns the position of the caret in utf8 character space.
-    pub fn caret_pos(&self) -> usize {
+    pub(super) fn caret_pos(&self) -> usize {
         self.selected_range.start
     }
 
@@ -123,7 +143,7 @@ impl EditableTextState {
     }
 
     /// Returns the IME marked range for character operations.
-    pub fn marked_range(&self) -> Option<Range<usize>> {
+    pub(super) fn marked_range(&self) -> Option<Range<usize>> {
         self.marked_range.clone()
     }
 }
@@ -167,6 +187,18 @@ impl EditableTextState {
         self.storage.replace_range(range, text_to_insert);
         self.selected_range = end_pos..end_pos;
         self.marked_range = None;
+    }
+
+    fn emit_text_changed(&self, cx: &mut Context<Self>) {
+        let Some(rc_callback) = self.on_text_changed.clone() else {
+            return;
+        };
+        // Defer the emit until the end of the update cycle so that the state can be provided
+        // as the subject instead of direct access to storage.
+        // That way if the listener needs to mutate the stored contents, they can do so via
+        // apis on Self (which will help retain caret and selection coherence).
+        let entity = cx.entity();
+        cx.defer(move |cx| (*rc_callback)(&entity, cx));
     }
 }
 
@@ -409,7 +441,7 @@ impl EditableTextState {
 
         self.replace_text(start..end, "");
 
-        cx.emit(TextChanged);
+        self.emit_text_changed(cx);
         cx.notify();
     }
 
@@ -608,7 +640,7 @@ impl EntityInputHandler for EditableTextState {
         let text_to_insert = self.validate_incoming_text(&range_utf8, text_to_insert);
         self.replace_text(range_utf8, text_to_insert);
         cx.emit(CaretNotify::PauseBlinking);
-        cx.emit(TextChanged);
+        self.emit_text_changed(cx);
         cx.notify();
     }
 
@@ -625,7 +657,7 @@ impl EntityInputHandler for EditableTextState {
         self.replace_text(range.clone(), text_to_insert);
         self.ime_mark_text_in_range(&range, text_to_insert.len());
         self.ime_mark_selected_range(&range, &new_selected_range_utf16, text_to_insert.len());
-        cx.emit(TextChanged);
+        self.emit_text_changed(cx);
         cx.notify();
     }
 
@@ -937,7 +969,7 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
 
             self.replace_text(self.selected_range.clone(), "");
         }
-        cx.emit(TextChanged);
+        self.emit_text_changed(cx);
         cx.notify();
     }
 
@@ -960,7 +992,7 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
         let range = self.ime_resolve_range(None);
         let text_to_insert = self.validate_incoming_text(&range, &text);
         self.replace_text(range, text_to_insert);
-        cx.emit(TextChanged);
+        self.emit_text_changed(cx);
         cx.notify();
     }
 
