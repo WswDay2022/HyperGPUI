@@ -218,6 +218,21 @@ impl Point<Pixels> {
     pub fn magnitude(&self) -> f64 {
         ((self.x.0.powi(2) + self.y.0.powi(2)) as f64).sqrt()
     }
+
+    /// Returns true if the difference between self and `other` is less than `epsilon` in both coordinates.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use gpui::{Pixels, Point};
+    /// let p1 = Point { x: Pixels::from(1.0), y: Pixels::from(1.0) };
+    /// let p2 = Point { x: Pixels::from(3.0), y: Pixels::from(-2.0) };
+    /// assert_eq!(p1.is_nearly_eq(&p2, Pixels::from(4.0)), true);
+    /// ```
+    pub fn is_nearly_eq(&self, other: &Self, epsilon: Pixels) -> bool {
+        let diff = *self - *other;
+        diff.x.abs() < epsilon && diff.y.abs() < epsilon
+    }
 }
 
 impl<T> Point<T>
