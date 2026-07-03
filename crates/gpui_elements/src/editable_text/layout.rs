@@ -55,18 +55,10 @@ impl TextLineSegment {
             return pos == self.text_range.start;
         }
 
-        // pos must be >= range-start
-        if pos < self.text_range.start {
-            return false;
+        if include_end {
+            (self.text_range.start..=self.text_range.end).contains(&pos)
+        } else {
+            self.text_range.contains(&pos)
         }
-
-        // pos must be <= range-end
-        if pos > self.text_range.end {
-            return false;
-        }
-
-        // pos must be < range-end
-        // or == is permitted if explicitly allowed (varies according to usage needs)
-        pos < self.text_range.end || include_end
     }
 }

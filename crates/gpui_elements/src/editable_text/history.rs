@@ -66,12 +66,14 @@ impl EditableTextHistory {
         let now = Instant::now();
 
         // Check if we should group with the last entry
-        if let Some(last) = self.undo_stack.last_mut() {
-            if now.duration_since(last.timestamp) < self.grouping_interval {
-                // Within group interval - extend the existing patch
-                if last.extend(&range, new_text_len) {
-                    return;
-                }
+        if let Some(last) = self.undo_stack.last_mut()
+            && now.duration_since(last.timestamp) < self.grouping_interval
+        {
+            // The change was triggered within group interval timing.
+            // Try to extend the existing patch (which is a mutation).
+            // If extending successeds, then we can early-out. Otherwise the mutation is non-contiguous.
+            if last.extend(&range, new_text_len) {
+                return;
             }
         }
 
