@@ -1,23 +1,15 @@
 use crate::editable_text::{
-    TextBoundary, UnicodeTextStorage,
+    StringStorage, TextBoundary, UnicodeTextStorage,
     actions::EditableTextActionHandler,
     caret::{Caret, CaretNotify},
     history::EditableTextHistory,
     layout::TextInputLayoutData,
 };
 use gpui::{
-    App, Bounds, ClipboardItem, Context, Entity, EntityInputHandler, EventEmitter, FocusHandle,
-    Focusable, NavigationDirection, Pixels, Point, UTF16Selection, Window, point,
+    App, Bounds, ClipboardItem, Context, ElementId, Entity, EntityInputHandler, EventEmitter,
+    FocusHandle, Focusable, NavigationDirection, Pixels, Point, UTF16Selection, Window, point,
 };
-use std::{borrow::Cow, ops::Range, rc::Rc};
-
-/// Heap allocated function which is triggered when the text is changed.
-///
-/// This doesn't use the established [`Context::emit`] pattern because of limitations caused by
-/// [`Window::use_keyed_state`], where the [`EditableTextState`] entity is unavailable until
-/// [`Element::request_layout`] and therefore cannot be provided to the
-/// element's caller/constructor for usage via [`Context::subscribe`].
-pub type FRcTextChanged = Rc<dyn Fn(&Entity<EditableTextState>, &mut App) + 'static>;
+use std::{borrow::Cow, ops::Range};
 
 /// Internal state for EditableText elements.
 pub struct EditableTextState {
@@ -26,10 +18,6 @@ pub struct EditableTextState {
     storage: Box<dyn UnicodeTextStorage>,
     /// The caret entity which has internal state for features like blinking
     caret: Entity<Caret>,
-
-    /// Callback for consumers to receive notifications that the storage has changed.
-    /// See documentation of [`FRcTextChanged`] why this doesnt use the typical emit/subscribe approach.
-    pub(super) on_text_changed: Option<FRcTextChanged>,
 
     /// The utf-8 character range that is currently selected by the user.
     /// Valid both when start < end and start > end (which dictates the direction of the selection).
@@ -60,6 +48,12 @@ pub struct EditableTextState {
 
 impl EventEmitter<CaretNotify> for EditableTextState {}
 
+/// Event emitted when an `EditableTextState` is changed.
+///
+/// This is not suitable for input sanitation (which should occur before the mutation).
+pub struct TextChanged;
+impl EventEmitter<TextChanged> for EditableTextState {}
+
 impl Focusable for EditableTextState {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -73,7 +67,55 @@ impl AsRef<str> for EditableTextState {
 }
 
 impl EditableTextState {
-    pub fn new(storage: impl Into<Box<dyn UnicodeTextStorage>>, cx: &mut Context<Self>) -> Self {
+    /// Uses a pre-existing state attached to the element at `key`, as long as the element has existed over consecutive frames.
+    /// If the state does not yet exist, a new one is created using the default [`UnicodeTextStorage`] medium.
+    pub fn use_keyed(key: impl Into<ElementId>, window: &mut Window, cx: &mut App) -> Entity<Self> {
+        Self::use_keyed_init(key, window, cx, |_, _| StringStorage::default())
+    }
+
+    /// Uses a pre-existing state attached to the element at `key`, as long as the element has existed over consecutive frames.
+    /// If the state does not yet exist, a new one is created calling `init` to create a [`UnicodeTextStorage`] medium.
+    ///
+    /// ```
+    /// # use gpui::{RenderOnce, Window, App, IntoElement, ElementId};
+    /// # use gpui_elements::editable_text::{EditableTextState, StringStorage, editable_text};
+    /// pub struct Form;
+    /// impl RenderOnce for Form {
+    ///     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+    ///         let field_a_id = ElementId::from("field_a");
+    ///         let field_a = EditableTextState::use_keyed_init(field_a_id.clone(), window, cx,
+    ///             |_window, _cx| StringStorage::from("this is some default editable text content"));
+    ///         editable_text(field_a_id).state(field_a.downgrade())
+    ///     }
+    /// }
+    /// ```
+    pub fn use_keyed_init<F, StorageType>(
+        key: impl Into<ElementId>,
+        window: &mut Window,
+        cx: &mut App,
+        init: F,
+    ) -> Entity<Self>
+    where
+        F: 'static + Fn(&mut Window, &mut Context<'_, EditableTextState>) -> StorageType,
+        StorageType: 'static + UnicodeTextStorage,
+    {
+        window.use_keyed_state(key, cx, |window, cx| Self::new(init(window, cx), cx))
+    }
+
+    /// Creates a new EditableText state with a given storage medium.
+    ///
+    /// Does not intrinsicly handle the state being attached to an element
+    /// over multiple frames (e.g. via [`RenderOnce`]). Use [`use_keyed`] or [`use_keyed_init`] for that.
+    ///
+    /// Expected to be called via [`AppContext::new`] such as:
+    /// ```
+    /// # use gpui::{AppContext, Window, App, Entity};
+    /// # use gpui_elements::editable_text::{StringStorage, EditableTextState};
+    /// # fn new(_window: &mut Window, cx: &mut App) -> Entity<EditableTextState> {
+    /// cx.new(|cx| EditableTextState::new(StringStorage::default(), cx))
+    /// # }
+    /// ```
+    pub fn new(storage: impl UnicodeTextStorage + 'static, cx: &mut Context<Self>) -> Self {
         use gpui::AppContext;
         let caret = cx.new({
             let state_entity = cx.entity();
@@ -84,7 +126,7 @@ impl EditableTextState {
             }
         });
         Self {
-            storage: storage.into(),
+            storage: Box::new(storage),
             caret,
 
             selected_range: 0..0,
@@ -97,7 +139,6 @@ impl EditableTextState {
             focus_handle: cx.focus_handle(),
             // TODO: what is the best way to give users access to configure this via element
             history: Some(EditableTextHistory::default()),
-            on_text_changed: None,
 
             layout_data: TextInputLayoutData::default(),
         }
@@ -106,6 +147,14 @@ impl EditableTextState {
     /// Returns the current contents of [`storage`] as a string slice.
     pub fn as_str(&self) -> &str {
         self.storage().content_utf8()
+    }
+
+    /// Replaces the contents of the stored text with the provided string slice.
+    pub fn emplace(&mut self, content: &str, cx: &mut Context<Self>) {
+        let len = self.storage.content_utf8().len();
+        self.replace_text(0..len, content);
+        self.emit_text_changed(cx);
+        cx.notify();
     }
 
     /// Returns the storage medium created for this field.
@@ -195,15 +244,7 @@ impl EditableTextState {
     }
 
     fn emit_text_changed(&self, cx: &mut Context<Self>) {
-        let Some(rc_callback) = self.on_text_changed.clone() else {
-            return;
-        };
-        // Defer the emit until the end of the update cycle so that the state can be provided
-        // as the subject instead of direct access to storage.
-        // That way if the listener needs to mutate the stored contents, they can do so via
-        // apis on Self (which will help retain caret and selection coherence).
-        let entity = cx.entity();
-        cx.defer(move |cx| (*rc_callback)(&entity, cx));
+        cx.emit(TextChanged);
     }
 }
 
@@ -1110,8 +1151,7 @@ mod tests {
     }
 
     fn default_state(content: &str, cx: &mut Context<EditableTextState>) -> EditableTextState {
-        let storage = Box::new(StringStorage::from(content)) as Box<dyn UnicodeTextStorage>;
-        EditableTextState::new(storage, cx)
+        EditableTextState::new(StringStorage::from(content), cx)
     }
 
     fn create_test_input(

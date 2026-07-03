@@ -1,5 +1,5 @@
 use crate::editable_text::{
-    EditableTextState, FRcTextChanged, InitStorage,
+    EditableTextState,
     actions::{DEFAULT_INPUT_CONTEXT, EditableTextActionElement, EditableTextActionHandler},
     layout::{TextInputLayoutData, TextLineSegment},
 };
@@ -24,11 +24,9 @@ pub fn editable_text(id: impl Into<ElementId>) -> EditableTextElement {
         interactivity: Interactivity::default(),
         state_entity: Rc::new(RefCell::new(WeakEntity::new_invalid())),
         supports_multiline: true,
-        init_storage: InitStorage::default(),
         placeholder: None,
         accepts_input: true,
         colors: EditableTextColors::default(),
-        on_text_changed: None,
     };
     this.interactivity.element_id = Some(id.into());
 
@@ -53,24 +51,16 @@ pub fn text_area(id: impl Into<ElementId>) -> EditableTextElement {
 }
 
 /// An input field which users can type text into.
-///
-/// EditableText elements require a storage medium to be specified
-/// (defaulting to [`StringStorage`](super::StringStorage)).
-/// Use [`with_storage`](Self::with_storage) to configure the storage medium,
-/// or [`default_value`](Self::default_value) to specify the content of the default storage medium.
-///
 pub struct EditableTextElement {
     interactivity: Interactivity,
     // Populated on first render with an entity stored/attached to the view.
     // This reference is shared with the action handlers, which are processed between renders
     // and therefore cannot otherwise access state attached to the view.
     state_entity: Rc<RefCell<WeakEntity<EditableTextState>>>,
-    init_storage: InitStorage,
     supports_multiline: bool,
     placeholder: Option<SharedString>,
     accepts_input: bool,
     colors: EditableTextColors,
-    on_text_changed: Option<FRcTextChanged>,
 }
 
 /// EditableText styling that goes beyond what Style/StyleRefinement supports
@@ -103,6 +93,15 @@ impl Default for EditableTextColors {
 }
 
 impl EditableTextElement {
+    /// Assigns the underlying state of this element, which should persist across multiple frames.
+    /// The user should either create the entity once or utilize `Window::use_keyed_state`
+    /// to create an entity intrinsicly linked to the element.
+    /// If no state is configured, one will be linked to this element on first render via `Window::use_keyed_state`.
+    pub fn state(self, state: WeakEntity<EditableTextState>) -> Self {
+        *self.state_entity.borrow_mut() = state;
+        self
+    }
+
     /// Configures whether the field supports multiple lines of text.
     /// Disabling this prevents actions like `enter` and navigating up and down.
     ///
@@ -116,22 +115,6 @@ impl EditableTextElement {
     /// Assigns the text that should be displayed when storage of the element is empty.
     pub fn placeholder(mut self, text: impl Into<SharedString>) -> Self {
         self.placeholder = Some(text.into());
-        self
-    }
-
-    /// Swaps the default storage container (standard String) with a custom initializer of [`UnicodeTextStorage`].
-    pub fn with_storage(mut self, fn_init: impl Into<InitStorage>) -> Self {
-        self.init_storage = fn_init.into();
-        self
-    }
-
-    /// Swaps the default storage container. The new initializer is a standard String using the provided value.
-    ///
-    /// Incompatible with [`with_storage`] (they establish the same internal value).
-    /// If you initialize custom storage, you should be able to initialize its default value.
-    pub fn default_value(mut self, value: impl Into<String>) -> Self {
-        let storage = super::StringStorage::from(value.into());
-        self.init_storage = InitStorage::new_typed(move |_cx| storage.clone());
         self
     }
 
@@ -171,20 +154,6 @@ impl EditableTextElement {
     /// Cannot be refined via [`StyleRefinement`](gpui::StyleRefinement) due to limitations in the fields of [`Style`](gpui::Style).
     pub fn marked_color(mut self, color: Hsla) -> Self {
         self.colors.ime_underline = color;
-        self
-    }
-
-    /// Assigns the callback to execute on after every change to the text.
-    ///
-    /// This is not suitable for input sanitation (which should occur before the mutation).
-    ///
-    /// Doesn't use the established emit/subscribe pattern normally found on entities.
-    /// Reasoning and blockers are described in the documentation of [`FRcTextChanged`].
-    pub fn on_text_changed<F>(mut self, f: F) -> Self
-    where
-        F: 'static + Fn(&Entity<EditableTextState>, &mut App),
-    {
-        self.on_text_changed = Some(Rc::new(f));
         self
     }
 }
@@ -252,19 +221,18 @@ impl Element for EditableTextElement {
         cx: &mut App,
     ) -> (gpui::LayoutId, Self::RequestLayoutState) {
         // Fetches or initializes the internal state of the field
-        let state = match &self.interactivity().element_id {
-            None => unimplemented!("all input elements must be assigned an id"),
-            Some(element_id) => {
-                let state = window.use_keyed_state(element_id.clone(), cx, |_window, cx| {
-                    EditableTextState::new(self.init_storage.exec(cx), cx)
-                });
-                // store a reference to the entity owned by the element for access in action handlers
-                *self.state_entity_rc().borrow_mut() = state.downgrade();
-                state.update(cx, |state, _cx| {
-                    state.on_text_changed = self.on_text_changed.clone();
-                });
-                state
-            }
+        let state = self.state_entity.borrow().upgrade();
+        let state = match state {
+            Some(entity) => entity,
+            None => match &self.interactivity.element_id {
+                None => unimplemented!("all input elements must be assigned an id"),
+                Some(element_id) => {
+                    let state = EditableTextState::use_keyed(element_id.clone(), window, cx);
+                    // store a reference to the entity owned by the element for access in action handlers
+                    *self.state_entity_rc().borrow_mut() = state.downgrade();
+                    state
+                }
+            },
         };
 
         let show_placeholder;

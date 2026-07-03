@@ -65,7 +65,7 @@
 //!     .min_w_10().max_w_128()
 //!     .min_h_24().max_h_128()
 //!     .whitespace_normal() // default
-//!     .overflow_x_scroll().overflow_y_scroll()
+//!     .overflow_y_scroll()
 //! # }
 //! ```
 //!
@@ -74,16 +74,44 @@
 //! users write a [debounce](https://developer.mozilla.org/en-US/docs/Glossary/Debounce)
 //! or some way to detect "focus lost" to signify the user leaving the field.
 //! ```
-//! # use gpui::{prelude::*, App, Entity};
-//! # fn test() -> gpui_elements::editable_text::EditableTextElement {
-//! use gpui_elements::editable_text::{text_input, EditableTextState};
-//! text_input("my_input")
-//!     .whitespace_nowrap()
-//!     .overflow_x_scroll()
-//!     // this will trigger on every character input or other mutation to the underlying string
-//!     .on_text_changed(|state: &Entity<EditableTextState>, cx: &mut App| {
-//!         println!("text changed to: {:?}", state.read(cx).as_str());
-//!     })
+//! # use gpui::{prelude::*, App, Entity, Window, AppContext, ElementId};
+//! # fn test(window: &mut Window, cx: &mut App) -> gpui_elements::editable_text::EditableTextElement {
+//! use gpui_elements::editable_text::{text_input, EditableTextState, TextChanged};
+//!
+//! // A unique id to the editable text element within the outer scope.
+//! let id = ElementId::from("my_input");
+//!
+//! // Find or lazily create the state entity backing the element.
+//! // Then attach the entity to the element, thereby keeping it alive across consecutive frames.
+//! let state = EditableTextState::use_keyed(id.clone(), window, cx);
+//!
+//! // This will trigger on every character input or other mutation to the underlying string
+//! cx.subscribe(&state, |state, _: &TextChanged, cx| {
+//! 	println!("{:?}", state.read(cx).as_str());
+//! }).detach();
+//!
+//! // Using state explicitly attaches the state we already have attached to the ElementId.
+//! text_input(id).state(state.downgrade())
+//! # }
+//! ```
+//!
+//! You can configure the default value of the editable text by using [`use_keyed_init`]:
+//! ```
+//! # use gpui::{prelude::*, App, Entity, Window, AppContext, ElementId};
+//! # use gpui_elements::editable_text::{text_input, EditableTextState, StringStorage};
+//! # fn test(window: &mut Window, cx: &mut App) -> gpui_elements::editable_text::EditableTextElement {
+//! let id = ElementId::from("my_input");
+//!
+//! // The function parameter will only be called when the state is created/initialized.
+//! // All successive renders across consecutive frames will re-use the existing state.
+//! let _state = EditableTextState::use_keyed_init(id.clone(), window, cx,
+//!     |_window, _cx| StringStorage::from("this is some default text content"));
+//!
+//! // Its also plausible to omit the state function call. The element will try to find the state
+//! // according to its id (which we are trusting here was garunteed to be at that id above).
+//! // Despite this functionality, its recommended that callers which construct a state explicitly
+//! // provide it to the element, at least for clarity and debugging.
+//! text_input(id)
 //! # }
 //! ```
 //!

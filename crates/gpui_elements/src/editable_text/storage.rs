@@ -1,5 +1,5 @@
-use gpui::{App, NavigationDirection};
-use std::{ops::Range, rc::Rc};
+use gpui::NavigationDirection;
+use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
 
 /// Describes a boundary within a chunk of text.
@@ -12,39 +12,6 @@ pub enum TextBoundary {
     Line,
     /// The entire document
     Document,
-}
-
-/// Allocated Fn initializer for EditableText storage medium [`UnicodeTextStorage`].
-/// Defaults to empty/none, resulting in [`StringStorage`] when executed.
-#[derive(Clone, Default)]
-pub struct InitStorage(Option<Rc<dyn Fn(&mut App) -> Box<dyn UnicodeTextStorage>>>);
-
-impl InitStorage {
-    /// Basic constructor which requires that the output of the func is a `dyn UnicodeTextStorage`.
-    pub fn new<F>(f: F) -> Self
-    where
-        F: 'static + Fn(&mut App) -> Box<dyn UnicodeTextStorage>,
-    {
-        Self(Some(Rc::new(f)))
-    }
-
-    /// Wrapper around [`new`] which automatically casts the output of the provided func to [`UnicodeTextStorage`].
-    pub fn new_typed<F, R>(f: F) -> Self
-    where
-        F: 'static + Fn(&mut App) -> R,
-        R: 'static + UnicodeTextStorage,
-    {
-        Self(Some(Rc::new(move |cx| {
-            Box::new(f(cx)) as Box<dyn UnicodeTextStorage>
-        })))
-    }
-
-    pub(super) fn exec(&self, cx: &mut App) -> Box<dyn UnicodeTextStorage> {
-        match &self.0 {
-            None => Box::new(StringStorage::default()),
-            Some(init) => (*init)(cx),
-        }
-    }
 }
 
 /// Implement this trait to create a storage medium that can be used as the content of EditableText elements.
