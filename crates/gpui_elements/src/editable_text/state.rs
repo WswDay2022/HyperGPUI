@@ -191,7 +191,11 @@ impl EditableTextState {
 
     /// Returns the current contents of [`storage`] as a string slice.
     pub fn as_str(&self) -> &str {
-        self.storage().content_utf8()
+        self.storage.content_utf8()
+    }
+
+    pub fn version(&self) -> u16 {
+        self.storage.version()
     }
 
     /// Replaces the contents of the stored text with the provided string slice.
@@ -200,11 +204,6 @@ impl EditableTextState {
         self.replace_text(0..len, content);
         self.emit_text_changed(cx);
         cx.notify();
-    }
-
-    /// Returns the storage medium created for this field.
-    pub(super) fn storage(&self) -> &Box<dyn UnicodeTextStorage> {
-        &self.storage
     }
 
     /// Returns the utf-8 character range that is currently selected within the current state of the text.
@@ -263,7 +262,7 @@ impl EditableTextState {
         // This avoids the "apply, then truncate" path which would leave the caret past the end.
         let max_length = None::<usize>;
         if let Some(cap) = max_length {
-            let existing_len = self.storage().content_utf8().len() - (range.end - range.start);
+            let existing_len = self.as_str().len() - (range.end - range.start);
             let room = cap.saturating_sub(existing_len);
             text_to_insert = &text_to_insert[..text_to_insert.len().min(room)];
         }
@@ -486,7 +485,7 @@ impl EditableTextState {
     /// if the line the carent is on is out of view.
     pub fn select_to(&mut self, caret_pos: usize, cx: &mut Context<Self>) {
         cx.emit(CaretNotify::PauseBlinking);
-        let caret_pos = caret_pos.min(self.storage().content_utf8().len());
+        let caret_pos = caret_pos.min(self.as_str().len());
         self.selected_range.start = caret_pos;
         self.scroll_to_caret();
         cx.notify();
@@ -639,7 +638,7 @@ impl EditableTextState {
         let range = range.or_else(|| self.marked_range.clone());
         let range = range.unwrap_or_else(|| self.selected_range());
 
-        let storage_len_utf8 = self.storage().content_utf8().len();
+        let storage_len_utf8 = self.as_str().len();
         range.start.min(storage_len_utf8)..range.end.min(storage_len_utf8)
     }
 
@@ -810,7 +809,7 @@ impl EntityInputHandler for EditableTextState {
         _cx: &mut Context<Self>,
     ) -> Option<usize> {
         let index = self.index_for_pixel_point(point, window.line_height());
-        Some(self.storage().utf_offset_8to16(index))
+        Some(self.storage.utf_offset_8to16(index))
     }
 }
 
@@ -1532,7 +1531,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.delete_left(&DeleteLeft, window, cx);
-                assert_eq!(input.storage().content_utf8(), "hello ");
+                assert_eq!(input.as_str(), "hello ");
                 assert_eq!(input.selected_range, 6.into());
             });
         })
@@ -1545,7 +1544,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.delete_left(&DeleteLeft, window, cx);
-                assert_eq!(input.storage().content_utf8(), "hell");
+                assert_eq!(input.as_str(), "hell");
                 assert_eq!(input.selected_range, 4.into());
             });
         })
@@ -1558,7 +1557,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.delete_left(&DeleteLeft, window, cx);
-                assert_eq!(input.storage().content_utf8(), "hello");
+                assert_eq!(input.as_str(), "hello");
                 assert_eq!(input.selected_range, 0.into());
             });
         })
@@ -1571,7 +1570,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.delete_left(&DeleteLeft, window, cx);
-                assert_eq!(input.storage().content_utf8(), "Hi ");
+                assert_eq!(input.as_str(), "Hi ");
                 assert_eq!(input.selected_range, 3.into());
             });
         })
@@ -1588,7 +1587,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.delete_right(&DeleteRight, window, cx);
-                assert_eq!(input.storage().content_utf8(), " world");
+                assert_eq!(input.as_str(), " world");
                 assert_eq!(input.selected_range, 0.into());
             });
         })
@@ -1601,7 +1600,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.delete_right(&DeleteRight, window, cx);
-                assert_eq!(input.storage().content_utf8(), "ello");
+                assert_eq!(input.as_str(), "ello");
                 assert_eq!(input.selected_range, 0.into());
             });
         })
@@ -1614,7 +1613,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.delete_right(&DeleteRight, window, cx);
-                assert_eq!(input.storage().content_utf8(), "hello");
+                assert_eq!(input.as_str(), "hello");
                 assert_eq!(input.selected_range, 5.into());
             });
         })
@@ -1632,7 +1631,7 @@ mod tests {
             view.input.update(cx, |input, cx| {
                 input.layout_data.supports_multiline = true;
                 input.insert_enter(&Enter, window, cx);
-                assert_eq!(input.storage().content_utf8(), "hello\n world");
+                assert_eq!(input.as_str(), "hello\n world");
                 assert_eq!(input.selected_range, 6.into());
             });
         })
@@ -1646,7 +1645,7 @@ mod tests {
             view.input.update(cx, |input, cx| {
                 input.layout_data.supports_multiline = true;
                 input.insert_enter(&Enter, window, cx);
-                assert_eq!(input.storage().content_utf8(), "hello\nworld");
+                assert_eq!(input.as_str(), "hello\nworld");
                 assert_eq!(input.selected_range, 6.into());
             });
         })
@@ -1678,7 +1677,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.cut(&Cut, window, cx);
-                assert_eq!(input.storage().content_utf8(), " world");
+                assert_eq!(input.as_str(), " world");
                 assert_eq!(input.selected_range, 0.into());
             });
         })
@@ -1695,7 +1694,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.paste(&Paste, window, cx);
-                assert_eq!(input.storage().content_utf8(), "hello there world");
+                assert_eq!(input.as_str(), "hello there world");
                 assert_eq!(input.selected_range, 11.into());
             });
         })
@@ -1767,7 +1766,7 @@ mod tests {
             view.input.update(cx, |input, _cx| {
                 use NavigationDirection::*;
                 use TextBoundary::*;
-                let storage = input.storage();
+                let storage = &input.storage;
 
                 assert_eq!(storage.offset_from_caret(0, Back, Line), 0);
                 assert_eq!(storage.offset_from_caret(3, Back, Line), 0);
@@ -1798,10 +1797,10 @@ mod tests {
                 assert_eq!(input.selected_range, 0.into());
 
                 input.delete_left(&DeleteLeft, window, cx);
-                assert_eq!(input.storage().content_utf8(), "");
+                assert_eq!(input.as_str(), "");
 
                 input.delete_right(&DeleteRight, window, cx);
-                assert_eq!(input.storage().content_utf8(), "");
+                assert_eq!(input.as_str(), "");
 
                 input.select_all(&SelectAll, window, cx);
                 assert_eq!(input.selected_range, 0.into());
@@ -1817,7 +1816,7 @@ mod tests {
             view.input.update(cx, |input, cx| {
                 input.marked_range = Some(5..7);
                 input.replace_text_in_range(Some(0..11), "new content", window, cx);
-                assert_eq!(input.storage().content_utf8(), "new content");
+                assert_eq!(input.as_str(), "new content");
                 assert_eq!(input.selected_range, 11.into());
                 assert_eq!(input.marked_range, None);
             });
@@ -1848,7 +1847,7 @@ mod tests {
             view.input.update(cx, |input, _cx| {
                 use NavigationDirection::*;
                 use TextBoundary::*;
-                assert_eq!(input.storage().offset_from_caret(0, Back, Graphmeme), 0);
+                assert_eq!(input.storage.offset_from_caret(0, Back, Graphmeme), 0);
             });
         })
         .unwrap();
@@ -1861,7 +1860,7 @@ mod tests {
             view.input.update(cx, |input, _cx| {
                 use NavigationDirection::*;
                 use TextBoundary::*;
-                let storage = input.storage();
+                let storage = &input.storage;
                 assert_eq!(storage.offset_from_caret(5, Forward, Graphmeme), 5);
                 assert_eq!(storage.offset_from_caret(100, Forward, Graphmeme), 5);
             });
@@ -1874,11 +1873,11 @@ mod tests {
         let view = create_test_input(cx, "hello world", 0);
         view.update(cx, |view, _window, cx| {
             view.input.update(cx, |input, _cx| {
-                let range = input.storage().word_range_at(5);
+                let range = input.storage.word_range_at(5);
                 assert_eq!(range.start, 0);
                 assert_eq!(range.end, 5);
 
-                let range = input.storage().word_range_at(8);
+                let range = input.storage.word_range_at(8);
                 assert_eq!(range.start, 6);
                 assert_eq!(range.end, 11);
             });
@@ -1969,7 +1968,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.delete_left(&DeleteLeft, window, cx);
-                assert_eq!(input.storage().content_utf8(), "ab");
+                assert_eq!(input.as_str(), "ab");
                 assert_eq!(input.selected_range.start, 1);
             });
         })
@@ -1986,7 +1985,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.delete_left(&DeleteLeft, window, cx);
-                assert_eq!(input.storage().content_utf8(), "ab");
+                assert_eq!(input.as_str(), "ab");
                 assert_eq!(input.selected_range.start, 1);
             });
         })
@@ -1999,7 +1998,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.delete_right(&DeleteRight, window, cx);
-                assert_eq!(input.storage().content_utf8(), "ab");
+                assert_eq!(input.as_str(), "ab");
                 assert_eq!(input.selected_range.start, 1);
             });
         })
@@ -2182,7 +2181,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.insert_enter(&Enter, window, cx);
-                assert_eq!(input.storage().content_utf8(), "hello");
+                assert_eq!(input.as_str(), "hello");
                 assert_eq!(input.selected_range, 5.into());
             });
         })
@@ -2250,11 +2249,11 @@ mod tests {
 
                 // Make an edit
                 input.replace_text_in_range(None, " world", window, cx);
-                assert_eq!(input.storage().content_utf8(), "hello world");
+                assert_eq!(input.as_str(), "hello world");
 
                 // Undo should restore original content
                 input.undo(&Undo, window, cx);
-                assert_eq!(input.storage().content_utf8(), "hello");
+                assert_eq!(input.as_str(), "hello");
             });
         })
         .unwrap();
@@ -2268,13 +2267,13 @@ mod tests {
                 without_history_grouping(input);
 
                 input.replace_text_in_range(None, " world", window, cx);
-                assert_eq!(input.storage().content_utf8(), "hello world");
+                assert_eq!(input.as_str(), "hello world");
 
                 input.undo(&Undo, window, cx);
-                assert_eq!(input.storage().content_utf8(), "hello");
+                assert_eq!(input.as_str(), "hello");
 
                 input.redo(&Redo, window, cx);
-                assert_eq!(input.storage().content_utf8(), "hello world");
+                assert_eq!(input.as_str(), "hello world");
             });
         })
         .unwrap();
@@ -2287,7 +2286,7 @@ mod tests {
             view.input.update(cx, |input, cx| {
                 assert!(!is_history_kind_available(input, HistoryKind::Undo));
                 input.undo(&Undo, window, cx);
-                assert_eq!(input.storage().content_utf8(), "hello");
+                assert_eq!(input.as_str(), "hello");
             });
         })
         .unwrap();
@@ -2300,7 +2299,7 @@ mod tests {
             view.input.update(cx, |input, cx| {
                 assert!(!is_history_kind_available(input, HistoryKind::Redo));
                 input.redo(&Redo, window, cx);
-                assert_eq!(input.storage().content_utf8(), "hello");
+                assert_eq!(input.as_str(), "hello");
             });
         })
         .unwrap();
@@ -2315,12 +2314,12 @@ mod tests {
 
                 // Delete selection
                 input.replace_text_in_range(None, "", window, cx);
-                assert_eq!(input.storage().content_utf8(), " world");
+                assert_eq!(input.as_str(), " world");
                 assert_eq!(input.selected_range, 0.into());
 
                 // Undo should restore content and selection
                 input.undo(&Undo, window, cx);
-                assert_eq!(input.storage().content_utf8(), "hello world");
+                assert_eq!(input.as_str(), "hello world");
                 assert_eq!(input.selected_range, (0, 5).into());
             });
         })
@@ -2337,25 +2336,25 @@ mod tests {
                 input.replace_text_in_range(None, "a", window, cx);
                 input.replace_text_in_range(None, "b", window, cx);
                 input.replace_text_in_range(None, "c", window, cx);
-                assert_eq!(input.storage().content_utf8(), "abc");
+                assert_eq!(input.as_str(), "abc");
 
                 input.undo(&Undo, window, cx);
-                assert_eq!(input.storage().content_utf8(), "ab");
+                assert_eq!(input.as_str(), "ab");
 
                 input.undo(&Undo, window, cx);
-                assert_eq!(input.storage().content_utf8(), "a");
+                assert_eq!(input.as_str(), "a");
 
                 input.undo(&Undo, window, cx);
-                assert_eq!(input.storage().content_utf8(), "");
+                assert_eq!(input.as_str(), "");
 
                 input.redo(&Redo, window, cx);
-                assert_eq!(input.storage().content_utf8(), "a");
+                assert_eq!(input.as_str(), "a");
 
                 input.redo(&Redo, window, cx);
-                assert_eq!(input.storage().content_utf8(), "ab");
+                assert_eq!(input.as_str(), "ab");
 
                 input.redo(&Redo, window, cx);
-                assert_eq!(input.storage().content_utf8(), "abc");
+                assert_eq!(input.as_str(), "abc");
             });
         })
         .unwrap();
@@ -2369,15 +2368,15 @@ mod tests {
                 without_history_grouping(input);
 
                 input.replace_text_in_range(None, " world", window, cx);
-                assert_eq!(input.storage().content_utf8(), "hello world");
+                assert_eq!(input.as_str(), "hello world");
 
                 input.undo(&Undo, window, cx);
-                assert_eq!(input.storage().content_utf8(), "hello");
+                assert_eq!(input.as_str(), "hello");
                 assert!(is_history_kind_available(input, HistoryKind::Redo));
 
                 // New edit should clear redo stack
                 input.replace_text_in_range(None, "!", window, cx);
-                assert_eq!(input.storage().content_utf8(), "hello!");
+                assert_eq!(input.as_str(), "hello!");
                 assert!(!is_history_kind_available(input, HistoryKind::Redo));
             });
         })
@@ -2418,10 +2417,10 @@ mod tests {
                 without_history_grouping(input);
 
                 input.delete_left(&DeleteLeft, window, cx);
-                assert_eq!(input.storage().content_utf8(), "hell");
+                assert_eq!(input.as_str(), "hell");
 
                 input.undo(&Undo, window, cx);
-                assert_eq!(input.storage().content_utf8(), "hello");
+                assert_eq!(input.as_str(), "hello");
             });
         })
         .unwrap();
@@ -2435,10 +2434,10 @@ mod tests {
                 without_history_grouping(input);
 
                 input.delete_right(&DeleteRight, window, cx);
-                assert_eq!(input.storage().content_utf8(), "ello");
+                assert_eq!(input.as_str(), "ello");
 
                 input.undo(&Undo, window, cx);
-                assert_eq!(input.storage().content_utf8(), "hello");
+                assert_eq!(input.as_str(), "hello");
             });
         })
         .unwrap();
@@ -2452,10 +2451,10 @@ mod tests {
                 without_history_grouping(input);
 
                 input.cut(&Cut, window, cx);
-                assert_eq!(input.storage().content_utf8(), " world");
+                assert_eq!(input.as_str(), " world");
 
                 input.undo(&Undo, window, cx);
-                assert_eq!(input.storage().content_utf8(), "hello world");
+                assert_eq!(input.as_str(), "hello world");
             });
         })
         .unwrap();
@@ -2468,7 +2467,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.cut(&Cut, window, cx);
-                assert_eq!(input.storage().content_utf8(), "line1\nline3");
+                assert_eq!(input.as_str(), "line1\nline3");
             });
         })
         .unwrap();
@@ -2484,7 +2483,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.cut(&Cut, window, cx);
-                assert_eq!(input.storage().content_utf8(), "line2\nline3");
+                assert_eq!(input.as_str(), "line2\nline3");
             });
         })
         .unwrap();
@@ -2500,7 +2499,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.cut(&Cut, window, cx);
-                assert_eq!(input.storage().content_utf8(), "line1\nline2");
+                assert_eq!(input.as_str(), "line1\nline2");
             });
         })
         .unwrap();
@@ -2516,7 +2515,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.cut(&Cut, window, cx);
-                assert_eq!(input.storage().content_utf8(), "line1\nline3");
+                assert_eq!(input.as_str(), "line1\nline3");
             });
         })
         .unwrap();
@@ -2532,7 +2531,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.cut(&Cut, window, cx);
-                assert_eq!(input.storage().content_utf8(), "");
+                assert_eq!(input.as_str(), "");
             });
         })
         .unwrap();
@@ -2549,10 +2548,10 @@ mod tests {
                 without_history_grouping(input);
 
                 input.cut(&Cut, window, cx);
-                assert_eq!(input.storage().content_utf8(), "line1\nline3");
+                assert_eq!(input.as_str(), "line1\nline3");
 
                 input.undo(&Undo, window, cx);
-                assert_eq!(input.storage().content_utf8(), "line1\nline2\nline3");
+                assert_eq!(input.as_str(), "line1\nline2\nline3");
             });
         })
         .unwrap();
@@ -2567,10 +2566,10 @@ mod tests {
                 without_history_grouping(input);
 
                 input.paste(&Paste, window, cx);
-                assert_eq!(input.storage().content_utf8(), "hello world");
+                assert_eq!(input.as_str(), "hello world");
 
                 input.undo(&Undo, window, cx);
-                assert_eq!(input.storage().content_utf8(), "hello");
+                assert_eq!(input.as_str(), "hello");
             });
         })
         .unwrap();
@@ -2585,10 +2584,10 @@ mod tests {
                 input.layout_data.supports_multiline = true;
 
                 input.insert_enter(&Enter, window, cx);
-                assert_eq!(input.storage().content_utf8(), "hello\n world");
+                assert_eq!(input.as_str(), "hello\n world");
 
                 input.undo(&Undo, window, cx);
-                assert_eq!(input.storage().content_utf8(), "hello world");
+                assert_eq!(input.as_str(), "hello world");
             });
         })
         .unwrap();
@@ -2601,7 +2600,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.delete_word_left(&DeleteWordLeft, window, cx);
-                assert_eq!(input.storage().content_utf8(), " world");
+                assert_eq!(input.as_str(), " world");
                 assert_eq!(input.selected_range, 0.into());
             });
         })
@@ -2615,7 +2614,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.delete_word_left(&DeleteWordLeft, window, cx);
-                assert_eq!(input.storage().content_utf8(), " world");
+                assert_eq!(input.as_str(), " world");
             });
         })
         .unwrap();
@@ -2627,7 +2626,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.delete_word_left(&DeleteWordLeft, window, cx);
-                assert_eq!(input.storage().content_utf8(), "hello world");
+                assert_eq!(input.as_str(), "hello world");
             });
         })
         .unwrap();
@@ -2640,7 +2639,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.delete_word_right(&DeleteWordRight, window, cx);
-                assert_eq!(input.storage().content_utf8(), " world");
+                assert_eq!(input.as_str(), " world");
                 assert_eq!(input.selected_range, 0.into());
             });
         })
@@ -2653,7 +2652,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.delete_word_right(&DeleteWordRight, window, cx);
-                assert_eq!(input.storage().content_utf8(), " world");
+                assert_eq!(input.as_str(), " world");
             });
         })
         .unwrap();
@@ -2665,7 +2664,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.delete_word_right(&DeleteWordRight, window, cx);
-                assert_eq!(input.storage().content_utf8(), "hello world");
+                assert_eq!(input.as_str(), "hello world");
             });
         })
         .unwrap();
@@ -2677,7 +2676,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.delete_to_line_start(&DeleteToLineStart, window, cx);
-                assert_eq!(input.storage().content_utf8(), " world");
+                assert_eq!(input.as_str(), " world");
                 assert_eq!(input.selected_range, 0.into());
             });
         })
@@ -2691,7 +2690,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.delete_to_line_start(&DeleteToLineStart, window, cx);
-                assert_eq!(input.storage().content_utf8(), "line1\nne2\nline3");
+                assert_eq!(input.as_str(), "line1\nne2\nline3");
             });
         })
         .unwrap();
@@ -2703,7 +2702,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.delete_to_line_start(&DeleteToLineStart, window, cx);
-                assert_eq!(input.storage().content_utf8(), "hello world");
+                assert_eq!(input.as_str(), "hello world");
             });
         })
         .unwrap();
@@ -2715,7 +2714,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.delete_to_line_end(&DeleteToLineEnd, window, cx);
-                assert_eq!(input.storage().content_utf8(), "hello");
+                assert_eq!(input.as_str(), "hello");
                 assert_eq!(input.selected_range, 5.into());
             });
         })
@@ -2729,7 +2728,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.delete_to_line_end(&DeleteToLineEnd, window, cx);
-                assert_eq!(input.storage().content_utf8(), "line1\nli\nline3");
+                assert_eq!(input.as_str(), "line1\nli\nline3");
             });
         })
         .unwrap();
@@ -2741,7 +2740,7 @@ mod tests {
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
                 input.delete_to_line_end(&DeleteToLineEnd, window, cx);
-                assert_eq!(input.storage().content_utf8(), "hello world");
+                assert_eq!(input.as_str(), "hello world");
             });
         })
         .unwrap();
@@ -2755,10 +2754,10 @@ mod tests {
                 without_history_grouping(input);
 
                 input.delete_word_left(&DeleteWordLeft, window, cx);
-                assert_eq!(input.storage().content_utf8(), " world");
+                assert_eq!(input.as_str(), " world");
 
                 input.undo(&Undo, window, cx);
-                assert_eq!(input.storage().content_utf8(), "hello world");
+                assert_eq!(input.as_str(), "hello world");
             });
         })
         .unwrap();
@@ -2772,10 +2771,10 @@ mod tests {
                 without_history_grouping(input);
 
                 input.delete_word_right(&DeleteWordRight, window, cx);
-                assert_eq!(input.storage().content_utf8(), "hello ");
+                assert_eq!(input.as_str(), "hello ");
 
                 input.undo(&Undo, window, cx);
-                assert_eq!(input.storage().content_utf8(), "hello world");
+                assert_eq!(input.as_str(), "hello world");
             });
         })
         .unwrap();
@@ -2789,10 +2788,10 @@ mod tests {
                 without_history_grouping(input);
 
                 input.delete_to_line_start(&DeleteToLineStart, window, cx);
-                assert_eq!(input.storage().content_utf8(), " world");
+                assert_eq!(input.as_str(), " world");
 
                 input.undo(&Undo, window, cx);
-                assert_eq!(input.storage().content_utf8(), "hello world");
+                assert_eq!(input.as_str(), "hello world");
             });
         })
         .unwrap();
@@ -2806,10 +2805,10 @@ mod tests {
                 without_history_grouping(input);
 
                 input.delete_to_line_end(&DeleteToLineEnd, window, cx);
-                assert_eq!(input.storage().content_utf8(), "hello");
+                assert_eq!(input.as_str(), "hello");
 
                 input.undo(&Undo, window, cx);
-                assert_eq!(input.storage().content_utf8(), "hello world");
+                assert_eq!(input.as_str(), "hello world");
             });
         })
         .unwrap();

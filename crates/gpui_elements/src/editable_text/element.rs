@@ -239,11 +239,10 @@ impl Element for EditableTextElement {
         // Block-wrapped so that the state being read is dropped before continuing.
         let (show_placeholder, storage_version, next_scroll_offset) = {
             let state = state.read(cx);
-            let show_placeholder = state.storage().content_utf8().is_empty();
-            let storage_version = state.storage().version();
+            let show_placeholder = state.as_str().is_empty();
             (
                 show_placeholder,
-                storage_version,
+                state.version(),
                 state.layout_data.next_scroll_offset,
             )
         };
@@ -285,10 +284,7 @@ impl Element for EditableTextElement {
                             ) = {
                                 let state = state.read(cx);
                                 let (text, color) = match show_placeholder {
-                                    false => (
-                                        SharedString::from(state.storage().content_utf8()),
-                                        text_style.color,
-                                    ),
+                                    false => (SharedString::from(state.as_str()), text_style.color),
                                     true => {
                                         (placeholder.clone().unwrap_or_default(), placeholder_color)
                                     }
