@@ -758,45 +758,49 @@ impl EntityInputHandler for EditableTextState {
         let line_height = window.line_height();
 
         for line in &self.layout_data.lines {
+            // The vertical offset of the text-segment from the start of the virtual box (which could be scrolled).
+            // Scrolling is not relevant here, so we are just operating on the internal virtualized space.
             let y_offset = line.pos_y * line_height;
+            // The start of the line in screen space as if there was no scrolling.
+            let line_origin = bounds.origin + point(Pixels::ZERO, y_offset);
             if line.text_range.is_empty() {
                 if range.start == line.text_range.start {
                     return Some(Bounds::from_corners(
-                        bounds.origin + point(Pixels::ZERO, y_offset),
-                        bounds.origin + point(gpui::px(4.), y_offset + line_height),
+                        line_origin,
+                        line_origin + point(gpui::px(4.), line_height),
                     ));
                 }
-            } else if line.text_range.contains(&range.start) {
-                if let Some(wrapped) = &line.wrapped_line {
-                    let local_start = range.start - line.text_range.start;
-                    let local_end = (range.end - line.text_range.start).min(wrapped.text.len());
+            } else if line.text_range.contains(&range.start)
+                && let Some(wrapped) = &line.wrapped_line
+            {
+                let local_start = range.start - line.text_range.start;
+                let local_end = (range.end - line.text_range.start).min(wrapped.text.len());
 
-                    let start_pos = wrapped
-                        .position_for_index(local_start, line_height)
-                        .unwrap_or(point(Pixels::ZERO, Pixels::ZERO));
-                    let end_pos = wrapped
-                        .position_for_index(local_end, line_height)
-                        .unwrap_or_else(|| {
-                            let last_line_y = line_height * (line.row_count() - 1) as f32;
-                            point(wrapped.width(), last_line_y)
-                        });
+                // The start of the line in screen-space pixels
+                let line_start_screen_pos = wrapped
+                    .position_for_index(local_start, line_height)
+                    .unwrap_or_default();
+                // The end of the line in screen-space pixels
+                let line_end_screen_pos = wrapped
+                    .position_for_index(local_end, line_height)
+                    .unwrap_or_else(|| {
+                        // the y-height/position of the last line
+                        let last_line_y = line_height * (line.row_count() - 1) as f32;
+                        point(wrapped.width(), last_line_y)
+                    });
 
-                    let start_visual_line = (start_pos.y / line_height).floor() as usize;
-                    let end_visual_line = (end_pos.y / line_height).floor() as usize;
-
-                    if start_visual_line == end_visual_line {
-                        return Some(Bounds::from_corners(
-                            bounds.origin + start_pos + point(Pixels::ZERO, y_offset),
-                            bounds.origin + point(end_pos.x, y_offset + start_pos.y + line_height),
-                        ));
-                    } else {
-                        return Some(Bounds::from_corners(
-                            bounds.origin + start_pos + point(Pixels::ZERO, y_offset),
-                            bounds.origin
-                                + point(wrapped.width(), y_offset + start_pos.y + line_height),
-                        ));
-                    }
-                }
+                // The number of rows this text-segment spans
+                let line_height_range = (line_start_screen_pos.y / line_height).floor() as usize
+                    ..(line_end_screen_pos.y / line_height).floor() as usize;
+                // The width of the line-segment that may span multiple rows
+                let width = match line_height_range.is_empty() {
+                    true => line_end_screen_pos.x,
+                    false => wrapped.width(),
+                };
+                return Some(Bounds::from_corners(
+                    line_origin + line_start_screen_pos,
+                    line_origin + point(width, line_start_screen_pos.y + line_height),
+                ));
             }
         }
         None
