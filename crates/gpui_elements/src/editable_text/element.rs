@@ -80,16 +80,30 @@ struct EditableTextColors {
 }
 impl Default for EditableTextColors {
     fn default() -> Self {
+        const WHITE_50PC: Hsla = Hsla {
+            h: 0.0,
+            s: 0.0,
+            l: 1.0,
+            a: 0.5,
+        };
+        const WHITE_70PC: Hsla = Hsla {
+            h: 0.0,
+            s: 0.0,
+            l: 1.0,
+            a: 0.7,
+        };
+        // approx rgb(38 79 120) or oklch(41.9% 0.0829 250.4)
+        const LIGHT_NAVY_BLUE_50PC: Hsla = Hsla {
+            h: 0.583,
+            s: 0.519,
+            l: 0.31,
+            a: 0.5,
+        };
         Self {
-            placeholder: Hsla::white().opacity(0.5),
-            selection: Hsla {
-                h: 0.583,
-                s: 0.519,
-                l: 0.31,
-                a: 0.5,
-            },
+            placeholder: WHITE_50PC,
+            selection: LIGHT_NAVY_BLUE_50PC,
             caret: Hsla::white(),
-            ime_underline: Hsla::white().opacity(0.7),
+            ime_underline: WHITE_70PC,
         }
     }
 }
