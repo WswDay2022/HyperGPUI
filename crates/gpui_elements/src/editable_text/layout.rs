@@ -67,4 +67,37 @@ impl TextLineSegment {
             self.text_range.contains(&pos)
         }
     }
+
+    /// Returns the index of the character within this segment that is closest
+    /// to the provided screen space position.
+    /// The character index returned is in absolute space; it is not relative to this segment.
+    pub fn character_index_at_point(&self, point: Point<Pixels>, line_height: Pixels) -> usize {
+        let mut offset = 0usize;
+        if !self.text_range.is_empty()
+            && let Some(wrapped) = &self.wrapped_line
+        {
+            offset = wrapped
+                .closest_index_for_position(point, line_height)
+                .unwrap_or_else(|closest| closest)
+                .min(wrapped.text.len());
+        }
+        self.text_range.start + offset
+    }
+
+    /// Returns the screen space position of the character at the position provided.
+    /// The position of the character must be absolute to the string this segment
+    /// partially represents, it is converted to a relative offset internally.
+    pub fn position_for_index(
+        &self,
+        character_index: usize,
+        line_height: Pixels,
+    ) -> Option<Point<Pixels>> {
+        let wrapped = self.wrapped_line.as_ref()?;
+        // the position in the text relative to this line segment
+        let relative_text_pos = character_index
+            .saturating_sub(self.text_range.start)
+            .min(wrapped.text.len());
+        // the screen position of the character in this line segment
+        wrapped.position_for_index(relative_text_pos, line_height)
+    }
 }
