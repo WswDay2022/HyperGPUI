@@ -235,17 +235,23 @@ impl Element for EditableTextElement {
             },
         };
 
-        let show_placeholder;
-        let storage_version;
-        {
+        // Read new state information from the underlying entity.
+        // Block-wrapped so that the state being read is dropped before continuing.
+        let (show_placeholder, storage_version, next_scroll_offset) = {
             let state = state.read(cx);
-            show_placeholder = state.storage().content_utf8().is_empty();
-            storage_version = state.storage().version();
+            let show_placeholder = state.storage().content_utf8().is_empty();
+            let storage_version = state.storage().version();
+            (
+                show_placeholder,
+                storage_version,
+                state.layout_data.next_scroll_offset,
+            )
+        };
 
-            if let Some(scroll_offset) = state.layout_data.next_scroll_offset {
-                self.interactivity
-                    .set_scroll_offset(global_id, window, -scroll_offset);
-            }
+        // Update the scroll offset of the element when the user's caret goes out of scope.
+        if let Some(scroll_offset) = next_scroll_offset {
+            self.interactivity
+                .set_scroll_offset(global_id, window, -scroll_offset);
         }
 
         let placeholder = self.placeholder.clone();
@@ -270,29 +276,31 @@ impl Element for EditableTextElement {
                                 .to_pixels(font_size.into(), window.rem_size()),
                         );
                         move |known_dimensions, available_space, window, cx| {
-                            let text: SharedString;
-                            let color: Hsla;
-                            let prev_wrap_width: Option<Pixels>;
-                            let prev_size: Option<Size<Pixels>>;
-                            let last_seen_storage_version: u16;
-
-                            {
+                            let (
+                                text,
+                                color,
+                                prev_wrap_width,
+                                prev_size,
+                                last_seen_storage_version,
+                            ) = {
                                 let state = state.read(cx);
-                                match show_placeholder {
-                                    false => {
-                                        text = SharedString::from(state.storage().content_utf8());
-                                        color = text_style.color;
-                                    }
+                                let (text, color) = match show_placeholder {
+                                    false => (
+                                        SharedString::from(state.storage().content_utf8()),
+                                        text_style.color,
+                                    ),
                                     true => {
-                                        text = placeholder.clone().unwrap_or_default();
-                                        color = placeholder_color;
+                                        (placeholder.clone().unwrap_or_default(), placeholder_color)
                                     }
-                                }
-                                prev_wrap_width = state.layout_data.wrap_width;
-                                prev_size = state.layout_data.size;
-                                last_seen_storage_version =
-                                    state.layout_data.last_seen_storage_version;
-                            }
+                                };
+                                (
+                                    text,
+                                    color,
+                                    state.layout_data.wrap_width,
+                                    state.layout_data.size,
+                                    state.layout_data.last_seen_storage_version,
+                                )
+                            };
 
                             let runs = vec![gpui::TextRun {
                                 len: text.len(),
@@ -570,7 +578,7 @@ impl Element for EditableTextElement {
         self.interactivity().paint(
             global_id,
             inspector_id,
-            bounds.clone(),
+            bounds,
             prepaint.interactivity.hitbox.as_ref(),
             window,
             cx,
@@ -603,11 +611,12 @@ impl PrepaintElements {
         origin: Point<Pixels>,
         color: Hsla,
     ) -> impl Iterator<Item = PaintQuad> {
-        let iter = offset_corners.into_iter();
-        iter.map(move |(offset_start, offset_end)| {
-            let bounds = Bounds::from_corners(origin + offset_start, origin + offset_end);
-            fill(bounds, color)
-        })
+        offset_corners
+            .into_iter()
+            .map(move |(offset_start, offset_end)| {
+                let bounds = Bounds::from_corners(origin + offset_start, origin + offset_end);
+                fill(bounds, color)
+            })
     }
 
     fn build_elements(
