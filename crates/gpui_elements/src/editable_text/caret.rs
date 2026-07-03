@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use gpui::{Context, Entity, EventEmitter, Subscription};
+use gpui::{Context, Entity, EventEmitter, Subscription, Task};
 use smallvec::SmallVec;
 
 /// Default interval for caret blinking (500ms).
@@ -20,8 +20,9 @@ pub struct Caret {
     generation: usize,
     /// Whether the caret is presently visible in this frame
     visible: bool,
-    /// Whether the caret is currently able to blink
-    active: bool,
+    /// Whether the caret's EditableText element is currently focused.
+    /// Caret is only eligible to be blinking if currently focused.
+    has_focus: bool,
     /// true when blinking is active but paused for some number of frames
     paused: bool,
     #[allow(dead_code)]
@@ -35,7 +36,7 @@ impl Default for Caret {
             interval: Duration::ZERO,
             generation: Default::default(),
             visible: false,
-            active: false,
+            has_focus: false,
             paused: false,
             subscriptions: SmallVec::new(),
             was_focused: false,
@@ -64,10 +65,18 @@ impl Caret {
     {
         let handle = cx.subscribe(emitter, |state, _emitter, event, cx| match event {
             CaretNotify::PauseBlinking => {
-                if !state.interval.is_zero() {
-                    state.pause_blinking(cx);
-                    cx.notify();
+                if state.interval.is_zero() {
+                    return;
                 }
+
+                // Temporarily pauses blinking and leaves the caret visible. Blinking will resume after
+                // the pre-established interval elapses from the time this is called.
+                if !state.visible {
+                    state.visible = true;
+                }
+                state.paused = true;
+                state.restart_blink_ticker(cx);
+                cx.notify();
             }
         });
         self.subscriptions.push(handle);
@@ -78,94 +87,67 @@ impl Caret {
         let was_focused = self.was_focused;
         self.was_focused = is_focused;
 
-        match (self.interval.is_zero(), is_focused, was_focused) {
-            (true, _, _) => true,
-            (false, true, false) => {
-                self.enable(cx);
+        // Caret has no blinking interval, it is always visible
+        if self.interval.is_zero() {
+            return true;
+        }
+
+        match (is_focused, was_focused) {
+            // Caret has a blinking interval, and gained focused.
+            (true, false) => {
+                self.has_focus = true;
+                self.paused = false;
+
+                // Render in this frame and restart the blinking ticker.
+                self.visible = true;
+                self.restart_blink_ticker(cx);
                 true
             }
-            (false, false, true) => {
-                self.disable(cx);
+            // Caret has a blinking interval and lost focus
+            (false, true) => {
+                self.has_focus = false;
+                self.visible = false;
+                self.paused = false;
+                cx.notify();
                 false
             }
-            (false, _, _) => self.visible,
+            // Has a blinking interval, but focus has not changed.
+            // Only render if currently visible (based on blink ticker).
+            _ => self.visible,
         }
     }
 
-    /// Activates caret blinking.
-    ///
-    /// While active, the caret will alternate between visible and hidden states at the
-    /// configured interval. Has no effect if already active.
-    fn enable(&mut self, cx: &mut Context<Self>) {
-        if self.active {
-            return;
-        }
+    fn restart_blink_ticker(&mut self, cx: &mut Context<Self>) {
+        let generation = self.generation.wrapping_add(1);
+        self.generation = generation;
 
-        self.active = true;
-        self.visible = false;
-        self.paused = false;
-        self.spawn_ticker(cx);
-    }
-
-    /// Deactivates caret blinking.
-    ///
-    /// Marks the caret as invisible and pauses blinking indefinitely. `enable` must be called
-    /// explicitly to resume visibility and blinking. Call `pause_blinking` instead if you want to
-    /// temporarily stop blinking while keeping the caret visible.
-    fn disable(&mut self, cx: &mut Context<Self>) {
-        self.active = false;
-        self.visible = false;
-        self.paused = false;
-        cx.notify();
-    }
-
-    /// Temporarily pauses blinking and leaves the caret visible. Blinking will resume after
-    /// the pre-established interval elapses from the time this is called.
-    fn pause_blinking(&mut self, cx: &mut Context<Self>) {
-        if !self.visible {
-            self.visible = true;
-            cx.notify();
-        }
-
-        self.paused = true;
-        self.generation = self.generation.wrapping_add(1);
-
-        let generation = self.generation;
         let interval = self.interval;
-
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(interval).await;
+
+            let Some(this) = this.upgrade() else { return };
             this.update(cx, |this, cx| {
+                // If the generation has changed, that means a new task was spawned.
+                // This one should be no-op since a new task is owning the blinking state.
                 if this.generation == generation {
+                    // PauseBlinking increments the generation via restart_ticker,
+                    // so we can always unpause the blinking if the generation is unchanged.
                     this.paused = false;
-                    this.spawn_ticker(cx);
-                }
-            })
-        })
-        .detach();
-    }
 
-    fn spawn_ticker(&mut self, cx: &mut Context<Self>) {
-        if !self.active || self.paused {
-            return;
-        }
-
-        self.visible = !self.visible;
-        cx.notify();
-
-        self.generation = self.generation.wrapping_add(1);
-        let generation = self.generation;
-        let interval = self.interval;
-
-        cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(interval).await;
-            if let Some(this) = this.upgrade() {
-                this.update(cx, |this, cx| {
-                    if this.generation == generation {
-                        this.spawn_ticker(cx);
+                    // This was the last tick/blink before we lost focus.
+                    // Should now go inert until focus is regained.
+                    if !this.has_focus {
+                        return;
                     }
-                });
-            }
+
+                    // We still have focus, toggle whether caret is visible and make sure the owning element re-renders.
+                    this.visible = !this.visible;
+                    cx.notify();
+
+                    // Start a fresh cycle by respawning the task.
+                    this.restart_blink_ticker(cx);
+                }
+            });
         })
         .detach();
     }
