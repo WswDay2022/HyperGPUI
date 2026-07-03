@@ -3,7 +3,7 @@ use crate::editable_text::{
     actions::EditableTextActionHandler,
     caret::{Caret, CaretNotify},
     history::EditableTextHistory,
-    layout::EditableTextLayoutResult,
+    layout::{EditableTextLayoutResult, TextLineSegment},
 };
 use gpui::{
     App, Bounds, ClipboardItem, Context, ElementId, Entity, EntityInputHandler, EventEmitter,
@@ -291,6 +291,23 @@ impl EditableTextState {
 
 // Screen space (text layout engine output) & String space transformers
 impl EditableTextState {
+    fn character_offset_at_point(
+        line: &TextLineSegment, // TODO: move to be a member of segment
+        point: Point<Pixels>,
+        line_height: Pixels,
+    ) -> usize {
+        let mut offset = 0usize;
+        if !line.text_range.is_empty()
+            && let Some(wrapped) = &line.wrapped_line
+        {
+            offset = wrapped
+                .closest_index_for_position(point, line_height)
+                .unwrap_or_else(|closest| closest)
+                .min(wrapped.text.len());
+        }
+        offset
+    }
+
     /// Returns the utf-8 character position of the start of the line that contains the provided pixel-point.
     fn index_for_pixel_point(&self, point: Point<Pixels>, line_height: Pixels) -> usize {
         let storage_len_utf8 = self.storage.content_utf8().len();
@@ -299,63 +316,22 @@ impl EditableTextState {
         }
 
         for line in &self.layout_data.lines {
-            let y_offset = line.pos_y * line_height;
-            let line_height_total = line_height * line.row_count() as f32;
-
-            if point.y >= y_offset && point.y < y_offset + line_height_total {
-                if line.text_range.is_empty() {
-                    return line.text_range.start;
-                }
-                let Some(wrapped) = &line.wrapped_line else {
-                    return line.text_range.start;
-                };
-
-                let relative_y = point.y - y_offset;
-                let relative_point = gpui::point(point.x, relative_y);
-
-                let closest_result =
-                    wrapped.closest_index_for_position(relative_point, line_height);
-
-                let local_idx = closest_result.unwrap_or_else(|closest| closest);
-                let clamped = local_idx.min(wrapped.text.len());
-                return line.text_range.start + clamped;
+            let segment_start_pos_y = line.pos_y * line_height;
+            let segment_height = line_height * line.row_count() as f32;
+            let segment_contains_point =
+                point.y >= segment_start_pos_y && point.y < segment_start_pos_y + segment_height;
+            if !segment_contains_point {
+                continue;
             }
+
+            // the screen position of the caret relative to the text segment
+            let relative_point = gpui::point(point.x, point.y - segment_start_pos_y);
+
+            let offset = Self::character_offset_at_point(line, relative_point, line_height);
+            return line.text_range.start + offset;
         }
 
         storage_len_utf8
-    }
-
-    fn line_index_and_point_at_caret(&self, line_height: Pixels) -> (usize, Point<Pixels>) {
-        if self.layout_data.lines.is_empty() {
-            return (0, Point::default());
-        }
-
-        let pos = self.caret_pos();
-
-        // accumulated vertical line count (not literal lines, since they can be wrapped)
-        let mut segment_index = 0;
-        for segment in &self.layout_data.lines {
-            if segment.text_range.is_empty() {
-                if pos == segment.text_range.start {
-                    return (segment_index, Point::default());
-                }
-            }
-
-            if segment.text_range.contains(&pos) {
-                if let Some(wrapped) = &segment.wrapped_line {
-                    let pos_in_segment = (pos - segment.text_range.start).min(wrapped.text.len());
-                    if let Some(point) = wrapped.position_for_index(pos_in_segment, line_height) {
-                        let visual_line_within = (point.y / line_height).floor() as usize;
-                        return (segment_index + visual_line_within, point);
-                    }
-                }
-                return (segment_index, Point::default());
-            }
-
-            segment_index += segment.row_count();
-        }
-
-        (segment_index.saturating_sub(1), Point::default())
     }
 
     fn find_position_in_vertical_direction(
@@ -363,40 +339,68 @@ impl EditableTextState {
         direction: i32,
         line_height: Pixels,
     ) -> Option<usize> {
-        let (line_index, point) = self.line_index_and_point_at_caret(line_height);
-        let line_index = line_index.saturating_add_signed(direction as isize);
+        let (caret_line_index, caret_point) = self.line_index_and_point_at_caret(line_height);
+        let target_line_index = caret_line_index.saturating_add_signed(direction as isize);
 
-        let mut current_visual_line = 0;
-        for segment in &self.layout_data.lines {
-            let wrap_boundary_len = segment.row_count();
-
-            if line_index < current_visual_line + wrap_boundary_len {
-                let visual_line_within_layout = line_index - current_visual_line;
-
-                if segment.text_range.is_empty() {
-                    return Some(segment.text_range.start);
-                }
-
-                if let Some(wrapped) = &segment.wrapped_line {
-                    let y_within_wrapped = line_height * visual_line_within_layout as f32;
-                    let target_point = gpui::point(point.x, y_within_wrapped);
-
-                    let closest_result =
-                        wrapped.closest_index_for_position(target_point, line_height);
-
-                    let closest_idx = closest_result.unwrap_or_else(|closest| closest);
-                    let clamped = closest_idx.min(wrapped.text.len());
-                    let result = segment.text_range.start + clamped;
-                    return Some(result);
-                }
-
-                return Some(segment.text_range.start);
+        let mut visual_row_index = 0;
+        for line in &self.layout_data.lines {
+            let num_rows_in_segment = line.row_count();
+            let segment_contains_target =
+                target_line_index < visual_row_index + num_rows_in_segment;
+            if !segment_contains_target {
+                visual_row_index += num_rows_in_segment;
+                continue;
             }
 
-            current_visual_line += wrap_boundary_len;
+            // the index/offset of the row in this segment that we are navigating to
+            let desired_row_in_segment = target_line_index - visual_row_index;
+            // the y screen position relative to the segment of the desired row
+            let row_pos_y = line_height * desired_row_in_segment as f32;
+            // the position of the caret in the row
+            let relative_point = gpui::point(caret_point.x, row_pos_y);
+
+            let offset = Self::character_offset_at_point(line, relative_point, line_height);
+            return Some(line.text_range.start + offset);
         }
 
-        (direction > 0).then(|| self.storage.content_utf8().len())
+        (direction > 0).then(|| self.as_str().len())
+    }
+
+    fn line_index_and_point_at_caret(&self, line_height: Pixels) -> (usize, Point<Pixels>) {
+        if self.layout_data.lines.is_empty() {
+            return (0, Point::default());
+        }
+
+        let caret_pos = self.caret_pos();
+
+        // accumulated vertical line count (not literal lines, since they can be wrapped)
+        let mut visual_row_index = 0;
+        for segment in &self.layout_data.lines {
+            // text segment is empty & and the caret is at the newline
+            if segment.text_range.is_empty() && caret_pos == segment.text_range.start {
+                return (visual_row_index, Point::default());
+            }
+
+            if !segment.text_range.contains(&caret_pos) {
+                visual_row_index += segment.row_count();
+                continue;
+            }
+
+            // Find the screen position relative to this segment where the caret is at.
+            let point = segment.wrapped_line.as_ref().map(|wrapped| {
+                // the character location of the caret relative to the text segment
+                let relative_text_pos =
+                    (caret_pos - segment.text_range.start).min(wrapped.text.len());
+                // the screen position of the text position (if possible, may be none)
+                wrapped.position_for_index(relative_text_pos, line_height)
+            });
+            let point = point.flatten().unwrap_or_default();
+            // the visual row offset from the start of the segment
+            let row_offset = (point.y / line_height).floor() as usize;
+            return (visual_row_index + row_offset, point);
+        }
+
+        (visual_row_index.saturating_sub(1), Point::default())
     }
 
     fn find_point_for_character_position(&self, character_pos: usize) -> Point<Pixels> {
@@ -408,15 +412,16 @@ impl EditableTextState {
                 continue;
             }
 
-            let line_origin = point(Pixels::ZERO, row_count * line_height);
-            return match &segment.wrapped_line {
-                None => line_origin,
-                Some(wrapped) => {
-                    let local_offset = character_pos.saturating_sub(segment.text_range.start);
-                    let position = wrapped.position_for_index(local_offset, line_height);
-                    position.unwrap_or_default() + line_origin
-                }
-            };
+            // Find the screen position relative to this segment where the caret is at.
+            let relative_point = segment.wrapped_line.as_ref().map(|wrapped| {
+                // the position in the text relative to this line segment
+                let relative_text_pos = character_pos.saturating_sub(segment.text_range.start);
+                // the screen position of the character in this line segment
+                wrapped.position_for_index(relative_text_pos, line_height)
+            });
+
+            let line_origin = point(Pixels::ZERO, row_count as f32 * line_height);
+            return line_origin + relative_point.flatten().unwrap_or_default();
         }
         Point::default()
     }
