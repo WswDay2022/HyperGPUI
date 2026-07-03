@@ -1,5 +1,5 @@
 //! Module containing user-input actions that are bound by EditableText elements
-use gpui::{Action, Context, InteractiveElement, WeakEntity, Window};
+use gpui::{InteractiveElement, WeakEntity, Window};
 use std::{cell::RefCell, rc::Rc};
 
 /// The key context used for EditableText element keybindings.
@@ -290,29 +290,27 @@ pub trait EditableTextActionHandler<Context>: Sized {
     }
 }
 
-/// Generic trait to support an element backed by an internal state entity to bind to all editable-text input actions.
-pub(super) trait EditableTextActionElement<State> {
-    fn state_entity_rc(&self) -> &Rc<RefCell<WeakEntity<State>>>;
-
-    fn register_action<ActionType>(
-        &mut self,
-        listener: fn(&mut State, &ActionType, &mut Window, &mut Context<State>),
-    ) where
-        Self: InteractiveElement,
-        ActionType: Action + std::fmt::Debug,
-        State: 'static,
-    {
-        let entity_rc = self.state_entity_rc().clone();
-        self.interactivity()
-            .on_action::<ActionType>(move |action, window, cx| {
+/// Registers an handler function of [`EditableTextActionHandler`]
+/// which is processed via the return value of [`EditableTextActionElement::state_entity_rc`].
+macro_rules! register_action {
+    ($action_element:expr, $func:ident) => {{
+        let entity_rc = $action_element.state_entity_rc().clone();
+        $action_element
+            .interactivity()
+            .on_action(move |action, window, cx| {
                 let weak_entity = entity_rc.borrow();
                 if let Some(entity) = weak_entity.upgrade() {
                     entity.update(cx, |state, cx| {
-                        listener(state, action, window, cx);
+                        state.$func(action, window, cx);
                     });
                 }
             });
-    }
+    }};
+}
+
+/// Generic trait to support an element backed by an internal state entity to bind to all editable-text input actions.
+pub(super) trait EditableTextActionElement<State> {
+    fn state_entity_rc(&self) -> &Rc<RefCell<WeakEntity<State>>>;
 
     fn register_actions(&mut self)
     where
@@ -320,53 +318,39 @@ pub(super) trait EditableTextActionElement<State> {
         State: for<'app> EditableTextActionHandler<gpui::Context<'app, State>>,
         State: 'static,
     {
-        self.register_action(|state, action, window, cx| state.escape(action, window, cx));
-        self.register_action(|state, action, window, cx| state.insert_enter(action, window, cx));
-        self.register_action(|state, action, window, cx| state.insert_tab(action, window, cx));
-        self.register_action(|state, action, window, cx| state.delete_left(action, window, cx));
-        self.register_action(|state, action, window, cx| state.delete_right(action, window, cx));
-        self.register_action(|state, action, window, cx| {
-            state.delete_word_left(action, window, cx)
-        });
-        self.register_action(|state, action, window, cx| {
-            state.delete_word_right(action, window, cx)
-        });
-        self.register_action(|state, action, window, cx| {
-            state.delete_to_line_start(action, window, cx)
-        });
-        self.register_action(|state, action, window, cx| {
-            state.delete_to_line_end(action, window, cx)
-        });
-        self.register_action(|state, action, window, cx| state.nav_left(action, window, cx));
-        self.register_action(|state, action, window, cx| state.nav_right(action, window, cx));
-        self.register_action(|state, action, window, cx| state.nav_up(action, window, cx));
-        self.register_action(|state, action, window, cx| state.nav_down(action, window, cx));
-        self.register_action(|state, action, window, cx| state.nav_line_start(action, window, cx));
-        self.register_action(|state, action, window, cx| state.nav_line_end(action, window, cx));
-        self.register_action(|state, action, window, cx| state.nav_start(action, window, cx));
-        self.register_action(|state, action, window, cx| state.nav_end(action, window, cx));
-        self.register_action(|state, action, window, cx| state.nav_left_word(action, window, cx));
-        self.register_action(|state, action, window, cx| state.nav_right_word(action, window, cx));
-        self.register_action(|state, action, window, cx| state.select_all(action, window, cx));
-        self.register_action(|state, action, window, cx| state.select_left(action, window, cx));
-        self.register_action(|state, action, window, cx| state.select_right(action, window, cx));
-        self.register_action(|state, action, window, cx| state.select_up(action, window, cx));
-        self.register_action(|state, action, window, cx| state.select_down(action, window, cx));
-        self.register_action(|state, action, window, cx| state.select_start(action, window, cx));
-        self.register_action(|state, action, window, cx| state.select_end(action, window, cx));
-        self.register_action(|state, action, window, cx| {
-            state.select_left_word(action, window, cx)
-        });
-        self.register_action(|state, action, window, cx| {
-            state.select_right_word(action, window, cx)
-        });
-        self.register_action(|state, action, window, cx| state.cut(action, window, cx));
-        self.register_action(|state, action, window, cx| state.copy(action, window, cx));
-        self.register_action(|state, action, window, cx| state.paste(action, window, cx));
-        self.register_action(|state, action, window, cx| state.undo(action, window, cx));
-        self.register_action(|state, action, window, cx| state.redo(action, window, cx));
-        self.register_action(|state, action, window, cx| {
-            state.show_character_palette(action, window, cx)
-        });
+        register_action!(self, escape);
+        register_action!(self, insert_enter);
+        register_action!(self, insert_tab);
+        register_action!(self, delete_left);
+        register_action!(self, delete_right);
+        register_action!(self, delete_word_left);
+        register_action!(self, delete_word_right);
+        register_action!(self, delete_to_line_start);
+        register_action!(self, delete_to_line_end);
+        register_action!(self, nav_left);
+        register_action!(self, nav_right);
+        register_action!(self, nav_up);
+        register_action!(self, nav_down);
+        register_action!(self, nav_line_start);
+        register_action!(self, nav_line_end);
+        register_action!(self, nav_start);
+        register_action!(self, nav_end);
+        register_action!(self, nav_left_word);
+        register_action!(self, nav_right_word);
+        register_action!(self, select_all);
+        register_action!(self, select_left);
+        register_action!(self, select_right);
+        register_action!(self, select_up);
+        register_action!(self, select_down);
+        register_action!(self, select_start);
+        register_action!(self, select_end);
+        register_action!(self, select_left_word);
+        register_action!(self, select_right_word);
+        register_action!(self, cut);
+        register_action!(self, copy);
+        register_action!(self, paste);
+        register_action!(self, undo);
+        register_action!(self, redo);
+        register_action!(self, show_character_palette);
     }
 }
