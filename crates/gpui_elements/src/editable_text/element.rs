@@ -437,7 +437,7 @@ impl EditableTextElement {
             unimplemented!("all input elements must be assigned an id")
         };
 
-        let state = EditableTextState::use_keyed(element_id.clone(), window, cx);
+        let state = EditableTextState::use_keyed(element_id, window, cx);
         // store a reference to the entity owned by the element for access in action handlers
         *self.state_entity_rc().borrow_mut() = state.downgrade();
         state

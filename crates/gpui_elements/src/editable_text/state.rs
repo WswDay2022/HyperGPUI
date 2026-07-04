@@ -306,7 +306,7 @@ enum TextSegmentQuery {
 // Screen space (text layout engine output) & String space transformers
 impl EditableTextState {
     /// Attempts to find a text segment based on the provided query parameters.
-    /// If found, the returned tuple is the segment & the number of preceeding visual rows.
+    /// If found, the returned tuple is the segment & the number of preceding visual rows.
     /// If not found, the resulting "err" is the total number of visual rows of all line segments.
     fn find_segment(&self, query: TextSegmentQuery) -> Result<(&TextLineSegment, usize), usize> {
         let mut row_count = 0;
@@ -336,7 +336,7 @@ impl EditableTextState {
         }
 
         let segment = self.find_segment(TextSegmentQuery::ScreenPosition { point, line_height });
-        let Ok((segment, _preceeding_row_count)) = segment else {
+        let Ok((segment, _preceding_row_count)) = segment else {
             return storage_len_utf8;
         };
 
@@ -355,13 +355,13 @@ impl EditableTextState {
         let target_line_index = caret_line_index.saturating_add_signed(direction as isize);
 
         let segment = self.find_segment(TextSegmentQuery::Row(target_line_index));
-        let Ok((segment, preceeding_row_count)) = segment else {
+        let Ok((segment, preceding_row_count)) = segment else {
             return (direction > 0).then(|| self.as_str().len());
         };
 
         // calculate the screen space position of the row we are navigating to,
         // relative to the y-position of the segment.
-        let row_index = (target_line_index - preceeding_row_count) as f32;
+        let row_index = (target_line_index - preceding_row_count) as f32;
         let relative_point = gpui::point(caret_point.x, row_index * line_height);
 
         Some(segment.character_index_at_point(relative_point, line_height))
@@ -374,7 +374,7 @@ impl EditableTextState {
 
         let caret_pos = self.caret_pos();
         let segment = self.find_segment(TextSegmentQuery::CharacterPosition(caret_pos));
-        let (segment, preceeding_row_count) = match segment {
+        let (segment, preceding_row_count) = match segment {
             Ok(segment) => segment,
             Err(total_row_count) => return (total_row_count.saturating_sub(1), Point::default()),
         };
@@ -385,12 +385,12 @@ impl EditableTextState {
         let point = relative_point.unwrap_or_default();
         // the visual row offset from the start of the segment
         let row_offset = (point.y / line_height).floor() as usize;
-        (preceeding_row_count + row_offset, point)
+        (preceding_row_count + row_offset, point)
     }
 
     fn find_point_for_character_position(&self, character_pos: usize) -> Point<Pixels> {
         let segment = self.find_segment(TextSegmentQuery::CharacterPosition(character_pos));
-        let Ok((segment, preceeding_row_count)) = segment else {
+        let Ok((segment, preceding_row_count)) = segment else {
             return Point::default();
         };
         let line_height = self.layout_data.line_height;
@@ -398,7 +398,7 @@ impl EditableTextState {
         // Find the screen position relative to this segment where the caret is at.
         let relative_point = segment.position_for_index(character_pos, line_height);
 
-        let line_origin = point(Pixels::ZERO, preceeding_row_count as f32 * line_height);
+        let line_origin = point(Pixels::ZERO, preceding_row_count as f32 * line_height);
         return line_origin + relative_point.unwrap_or_default();
     }
 }

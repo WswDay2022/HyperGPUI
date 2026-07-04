@@ -108,7 +108,7 @@
 //!     |_window, _cx| StringStorage::from("this is some default text content"));
 //!
 //! // Its also plausible to omit the state function call. The element will try to find the state
-//! // according to its id (which we are trusting here was garunteed to be at that id above).
+//! // according to its id (which we are trusting here was guaranteed to be at that id above).
 //! // Despite this functionality, its recommended that callers which construct a state explicitly
 //! // provide it to the element, at least for clarity and debugging.
 //! text_input(id)

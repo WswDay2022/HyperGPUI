@@ -151,7 +151,7 @@ impl HistoryEntry {
             range: self.range.start..self.range.start + self.old_text.len(),
             old_text: prev_text_at_range,
             new_text_len: self.old_text.len(),
-            selected_range: self.selected_range.clone(),
+            selected_range: self.selected_range,
             timestamp: self.timestamp,
         }
     }
