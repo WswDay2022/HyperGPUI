@@ -115,6 +115,28 @@
 //! # }
 //! ```
 //!
+//! To use a blinking caret, construct a caret entity with a blinking interval when constructing the state:
+//! ```
+//! # use gpui::{prelude::*, App, Entity, Window, AppContext, ElementId};
+//! # fn test(window: &mut Window, cx: &mut App) -> gpui_elements::editable_text::EditableTextElement {
+//! use gpui_elements::editable_text::{text_input, EditableTextState, TextChanged, Caret};
+//! let id = ElementId::from("my_input");
+//!
+//! let state = EditableTextState::use_keyed(id.clone(), window, cx);
+//!
+//! // Ensure the caret exists, linked to the input element by id.
+//! window.use_keyed_state(id.clone(), cx, |window, cx| {
+//!     // using the default interval of 500ms
+//!     let mut caret = Caret::default().blink_interval_default();
+//!     // ensures the caret receives events from the input state during typing & other actions
+//!     caret.subscribe_to(&state, cx);
+//!     caret
+//! });
+//!
+//! text_input(id).state(state.downgrade())
+//! # }
+//! ```
+//!
 //! You can view more complex examples in the gpui crate examples.
 //! TODO: there is no example with editable text yet, and we should link it here when there is.
 //!

@@ -1,5 +1,5 @@
 use crate::editable_text::{
-    EditableTextState,
+    Caret, EditableTextState,
     actions::{DEFAULT_INPUT_CONTEXT, EditableTextActionElement, EditableTextActionHandler},
     layout::{EditableTextLayoutResult, EditableTextLayoutState, TextLineSegment},
 };
@@ -216,6 +216,7 @@ struct PrelayoutState {
 #[doc(hidden)]
 pub struct LayoutState {
     state: Entity<EditableTextState>,
+    caret: Entity<Caret>,
 }
 
 struct InteractivityPrepaint {
@@ -253,6 +254,7 @@ impl Element for EditableTextElement {
         cx: &mut App,
     ) -> (gpui::LayoutId, Self::RequestLayoutState) {
         let entity = self.find_or_create_state(window, cx);
+        let caret = self.find_or_create_caret(&entity, window, cx);
 
         // Read new state information from the underlying entity.
         // Block-wrapped so that the state being read is dropped before continuing.
@@ -302,7 +304,13 @@ impl Element for EditableTextElement {
             },
         );
 
-        (layout_id, LayoutState { state: entity })
+        (
+            layout_id,
+            LayoutState {
+                state: entity,
+                caret,
+            },
+        )
     }
 
     fn prepaint(
@@ -316,16 +324,17 @@ impl Element for EditableTextElement {
     ) -> Self::PrepaintState {
         // should reflect the text content layout size of the stored text,
         // so that scrolling can take it into account during prepaint.
-        let (content_size, caret_entity, focus_handle) = {
+        let (content_size, focus_handle) = {
             let state = request_layout.state.read(cx);
             let content_size = state.layout_data.state.size.unwrap_or_else(|| bounds.size);
-            let caret = state.caret_entity().clone();
             let focus_handle = state.focus_handle(cx);
-            (content_size, caret, focus_handle)
+            (content_size, focus_handle)
         };
 
         let is_focused = focus_handle.is_focused(window);
-        let caret_visible = caret_entity.update(cx, |caret, cx| caret.update_focus(is_focused, cx));
+        let caret_visible = request_layout
+            .caret
+            .update(cx, |caret, cx| caret.update_focus(is_focused, cx));
         window.set_focus_handle(&focus_handle, cx);
 
         let prepaint = self.interactivity.prepaint(
@@ -441,6 +450,23 @@ impl EditableTextElement {
         // store a reference to the entity owned by the element for access in action handlers
         *self.state_entity_rc().borrow_mut() = state.downgrade();
         state
+    }
+
+    fn find_or_create_caret(
+        &self,
+        state: &Entity<EditableTextState>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Entity<Caret> {
+        let Some(element_id) = self.interactivity.element_id.clone() else {
+            unimplemented!("all input elements must be assigned an id")
+        };
+
+        window.use_keyed_state(element_id, cx, |_window, cx| {
+            let mut caret = Caret::default();
+            caret.subscribe_to(state, cx);
+            caret
+        })
     }
 
     fn process_frame_events(

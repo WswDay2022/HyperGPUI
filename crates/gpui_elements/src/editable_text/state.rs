@@ -1,7 +1,7 @@
 use crate::editable_text::{
     StringStorage, TextBoundary, UnicodeTextStorage,
     actions::EditableTextActionHandler,
-    caret::{Caret, CaretNotify},
+    caret::CaretNotify,
     history::EditableTextHistory,
     layout::{EditableTextLayoutResult, TextLineSegment},
 };
@@ -63,8 +63,6 @@ pub struct EditableTextState {
     /// The storage medium backing this element-state. Hypothetically supports both
     /// std String and other crates (e.g. long document text).
     storage: Box<dyn UnicodeTextStorage>,
-    /// The caret entity which has internal state for features like blinking
-    caret: Entity<Caret>,
 
     /// The utf-8 character range that is currently selected by the user.
     /// Valid both when start < end and start > end (which dictates the direction of the selection).
@@ -163,18 +161,8 @@ impl EditableTextState {
     /// # }
     /// ```
     pub fn new(storage: impl UnicodeTextStorage + 'static, cx: &mut Context<Self>) -> Self {
-        use gpui::AppContext;
-        let caret = cx.new({
-            let state_entity = cx.entity();
-            move |cx| {
-                let mut caret = Caret::default().blink_interval_default();
-                caret.subscribe_to(&state_entity, cx);
-                caret
-            }
-        });
         Self {
             storage: Box::new(storage),
-            caret,
 
             selected_range: 0.into(),
             marked_range: None,
@@ -220,11 +208,6 @@ impl EditableTextState {
             std::cmp::Ordering::Equal => None,
             std::cmp::Ordering::Greater => Some(NavigationDirection::Back),
         }
-    }
-
-    /// Returns a reference to the entity owning the state of the [`Caret`] (e.g. its blinking state).
-    pub(super) fn caret_entity(&self) -> &Entity<Caret> {
-        &self.caret
     }
 
     /// Returns the position of the caret in utf8 character space.
