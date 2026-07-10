@@ -515,6 +515,7 @@ impl EditableTextElement {
                     return;
                 }
 
+                cx.stop_propagation();
                 window.focus(&focus_handle, cx);
 
                 let text_position = event.position + to_local_position;
@@ -533,6 +534,7 @@ impl EditableTextElement {
                     return;
                 }
 
+                cx.stop_propagation();
                 state.update(cx, |state, cx| {
                     state.on_mouse_up(event, window, cx);
                 });
