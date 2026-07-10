@@ -3,7 +3,7 @@ use smallvec::SmallVec;
 use std::time::Duration;
 
 /// Default interval for caret blinking (500ms).
-pub const DEFAULT_BLINK_INTERVAL: Duration = Duration::from_millis(500);
+pub const BLINK_INTERVAL_500MS: Duration = Duration::from_millis(500);
 
 /// Events emitted that the [`Caret`] listens to.
 pub enum CaretNotify {
@@ -44,17 +44,26 @@ impl Default for Caret {
 }
 
 impl Caret {
-    /// Sets the blinking interval of the caret to the global "default".
-    /// The true default of the caret is "do not blink".
-    pub fn blink_interval_default(mut self) -> Self {
-        self.interval = DEFAULT_BLINK_INTERVAL;
-        self
+    /// Returns the duration of the current blink interval
+    pub fn blink_interval(&self) -> Duration {
+        self.interval
     }
 
     /// Sets the blinking interval of the caret.
-    pub fn blink_interval(mut self, interval: Duration) -> Self {
+    pub fn set_blink_interval(&mut self, interval: Duration) {
         self.interval = interval;
+    }
+
+    /// Sets the blinking interval of the caret.
+    pub fn with_blink_interval(mut self, interval: Duration) -> Self {
+        self.set_blink_interval(interval);
         self
+    }
+
+    /// Sets the blinking interval of the caret to the global "default".
+    /// The true default of the caret is "do not blink".
+    pub fn with_blink_interval_500ms(self) -> Self {
+        self.with_blink_interval(BLINK_INTERVAL_500MS)
     }
 
     /// Listens for CaretNotify events on an entity (e.g. [`EditableTextState`]).
@@ -88,7 +97,7 @@ impl Caret {
 
         // Caret has no blinking interval, it is always visible
         if self.interval.is_zero() {
-            return true;
+            return is_focused;
         }
 
         match (is_focused, was_focused) {

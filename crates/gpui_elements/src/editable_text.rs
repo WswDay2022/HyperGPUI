@@ -115,7 +115,20 @@
 //! # }
 //! ```
 //!
-//! To use a blinking caret, construct a caret entity with a blinking interval when constructing the state:
+//! To use a blinking caret, you can use one of the templated functions:
+//! ```
+//! # use gpui::{prelude::*, App, Entity, Window, AppContext, ElementId};
+//! # fn test(window: &mut Window, cx: &mut App) -> gpui_elements::editable_text::EditableTextElement {
+//! use gpui_elements::editable_text::{text_input};
+//! let id = ElementId::from("my_input");
+//! text_input(id)
+//!     .caret_blink_interval_500ms()
+//!     // or use the parameterized one, e.g. 200ms
+//!     .caret_blink_interval(std::time::Duration::from_millis(200))
+//! # }
+//! ```
+//!
+//! or construct a caret entity with a blinking interval when constructing the state:
 //! ```
 //! # use gpui::{prelude::*, App, Entity, Window, AppContext, ElementId};
 //! # fn test(window: &mut Window, cx: &mut App) -> gpui_elements::editable_text::EditableTextElement {
@@ -127,7 +140,7 @@
 //! // Ensure the caret exists, linked to the input element by id.
 //! window.use_keyed_state(id.clone(), cx, |window, cx| {
 //!     // using the default interval of 500ms
-//!     let mut caret = Caret::default().blink_interval_default();
+//!     let mut caret = Caret::default().with_blink_interval_500ms();
 //!     // ensures the caret receives events from the input state during typing & other actions
 //!     caret.subscribe_to(&state, cx);
 //!     caret

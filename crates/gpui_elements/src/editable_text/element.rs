@@ -1,5 +1,5 @@
 use crate::editable_text::{
-    Caret, EditableTextState,
+    BLINK_INTERVAL_500MS, Caret, EditableTextState,
     actions::{DEFAULT_INPUT_CONTEXT, EditableTextActionElement, EditableTextActionHandler},
     layout::{EditableTextLayoutResult, EditableTextLayoutState, TextLineSegment},
 };
@@ -12,7 +12,7 @@ use gpui::{
     px, size,
 };
 use smallvec::SmallVec;
-use std::{cell::RefCell, ops::Range, rc::Rc, sync::Arc};
+use std::{cell::RefCell, ops::Range, rc::Rc, sync::Arc, time::Duration};
 
 const CARET_RENDER_WIDTH: f32 = 2.0;
 
@@ -29,6 +29,7 @@ pub fn editable_text(id: impl Into<ElementId>) -> EditableTextElement {
         placeholder: None,
         accepts_input: true,
         colors: EditableTextColors::default(),
+        caret_blink_interval: None,
     };
     this.interactivity.element_id = Some(id.into());
 
@@ -63,6 +64,7 @@ pub struct EditableTextElement {
     placeholder: Option<SharedString>,
     accepts_input: bool,
     colors: EditableTextColors,
+    caret_blink_interval: Option<Duration>,
 }
 
 /// EditableText styling that goes beyond what Style/StyleRefinement supports
@@ -138,6 +140,17 @@ impl EditableTextElement {
     pub fn accepts_input(mut self, enabled: bool) -> Self {
         self.accepts_input = enabled;
         self
+    }
+
+    /// Sets the blinking interval of the caret.
+    pub fn caret_blink_interval(mut self, duration: Duration) -> Self {
+        self.caret_blink_interval = Some(duration);
+        self
+    }
+
+    /// Sets the blinking interval of the caret to 500ms
+    pub fn caret_blink_interval_500ms(self) -> Self {
+        self.caret_blink_interval(BLINK_INTERVAL_500MS)
     }
 
     /// Sets the color of the placeholder text which is rendered when the element's stored text is empty.
@@ -255,6 +268,12 @@ impl Element for EditableTextElement {
     ) -> (gpui::LayoutId, Self::RequestLayoutState) {
         let entity = self.find_or_create_state(window, cx);
         let caret = self.find_or_create_caret(&entity, window, cx);
+
+        if let Some(duration) = self.caret_blink_interval.take()
+            && caret.read(cx).blink_interval() != duration
+        {
+            caret.update(cx, |caret, _cx| caret.set_blink_interval(duration));
+        }
 
         // Read new state information from the underlying entity.
         // Block-wrapped so that the state being read is dropped before continuing.
