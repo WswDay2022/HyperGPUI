@@ -534,7 +534,6 @@ impl EditableTextElement {
                     return;
                 }
 
-                cx.stop_propagation();
                 state.update(cx, |state, cx| {
                     state.on_mouse_up(event, window, cx);
                 });
