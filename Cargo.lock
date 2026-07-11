@@ -2426,6 +2426,7 @@ name = "gpui_elements"
 version = "0.1.0"
 dependencies = [
  "gpui",
+ "gpui_platform",
  "smallvec",
  "unicode-segmentation",
 ]

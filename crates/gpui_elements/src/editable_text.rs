@@ -150,8 +150,7 @@
 //! # }
 //! ```
 //!
-//! You can view more complex examples in the gpui crate examples.
-//! TODO: there is no example with editable text yet, and we should link it here when there is.
+//! Full-text examples can be found in the [examples folder](https://github.com/gpui-ce/gpui-ce/tree/main/crates/gpui_elements/examples)
 //!
 //! ### Backlog of not-yet implemented features:
 //! - detecting focus being lost on an EditableText field
