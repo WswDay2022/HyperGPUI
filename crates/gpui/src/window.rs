@@ -3357,6 +3357,8 @@ impl Window {
     }
 
     /// Use a piece of state that exists as long this element is being rendered in consecutive frames.
+    ///
+    /// This method should only be called during `Render::render`, `RenderOnce::render`, or the drawing functions of `Element`.
     pub fn use_keyed_state<S: 'static>(
         &mut self,
         key: impl Into<ElementId>,
@@ -3401,7 +3403,9 @@ impl Window {
     /// Updates or initializes state for an element with the given id that lives across multiple
     /// frames. If an element with this ID existed in the rendered frame, its state will be passed
     /// to the given closure. The state returned by the closure will be stored so it can be referenced
-    /// when drawing the next frame. This method should only be called as part of element drawing.
+    /// when drawing the next frame.
+    ///
+    /// This method should only be called during `Render::render`, `RenderOnce::render`, or the drawing functions of `Element`.
     pub fn with_element_state<S, R>(
         &mut self,
         global_id: &GlobalElementId,
@@ -3531,6 +3535,8 @@ impl Window {
     /// persist across renders as long as the key remains the same. This is the
     /// recommended method for most use cases where you want smooth, continuous
     /// animations.
+    ///
+    /// This method should only be called during `Render::render`, `RenderOnce::render`, or the drawing functions of `Element`.
     pub fn use_keyed_transition<T: Lerp + Clone + PartialEq + 'static>(
         &mut self,
         key: impl Into<ElementId>,
