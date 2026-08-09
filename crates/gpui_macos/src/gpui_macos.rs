@@ -11,6 +11,7 @@ mod events;
 mod haptic_feedback;
 mod keyboard;
 mod pasteboard;
+mod system_notifications;
 
 #[cfg(feature = "screen-capture")]
 mod screen_capture;
