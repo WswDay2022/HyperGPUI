@@ -2405,7 +2405,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "gpui"
+name = "gpui_ce"
 version = "0.2.2"
 dependencies = [
  "accesskit",
@@ -2435,15 +2435,15 @@ dependencies = [
  "futures",
  "futures-concurrency",
  "getrandom 0.3.4",
+ "gpui_ce_collections",
+ "gpui_ce_macros",
+ "gpui_ce_media",
+ "gpui_ce_refineable",
+ "gpui_ce_sum_tree",
  "gpui_ce_util",
- "gpui_collections",
- "gpui_macros",
- "gpui_media",
  "gpui_platform",
- "gpui_refineable",
  "gpui_scheduler",
  "gpui_shared_string",
- "gpui_sum_tree",
  "gpui_web",
  "hdrhistogram",
  "heapless",
@@ -2498,16 +2498,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "gpui_ce_util"
-version = "0.2.2"
-dependencies = [
- "anyhow",
- "log",
- "which",
-]
-
-[[package]]
-name = "gpui_collections"
+name = "gpui_ce_collections"
 version = "0.2.2"
 dependencies = [
  "gpui_ce_util",
@@ -2516,7 +2507,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "gpui_derive_refineable"
+name = "gpui_ce_derive_refineable"
 version = "0.2.2"
 dependencies = [
  "proc-macro2",
@@ -2525,10 +2516,63 @@ dependencies = [
 ]
 
 [[package]]
+name = "gpui_ce_macros"
+version = "0.1.0"
+dependencies = [
+ "gpui_ce",
+ "heck 0.5.0",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "gpui_ce_media"
+version = "0.2.2"
+dependencies = [
+ "anyhow",
+ "bindgen",
+ "core-foundation 0.10.0",
+ "core-video",
+ "ctor",
+ "foreign-types",
+ "metal",
+ "objc",
+]
+
+[[package]]
+name = "gpui_ce_refineable"
+version = "0.2.2"
+dependencies = [
+ "gpui_ce_derive_refineable",
+]
+
+[[package]]
+name = "gpui_ce_sum_tree"
+version = "0.2.2"
+dependencies = [
+ "heapless",
+ "log",
+ "proptest",
+ "rand 0.9.5",
+ "rayon",
+ "tracing",
+]
+
+[[package]]
+name = "gpui_ce_util"
+version = "0.2.6"
+dependencies = [
+ "anyhow",
+ "log",
+ "which",
+]
+
+[[package]]
 name = "gpui_elements"
 version = "0.1.0"
 dependencies = [
- "gpui",
+ "gpui_ce",
  "gpui_platform",
  "palette",
  "smallvec",
@@ -2550,9 +2594,9 @@ dependencies = [
  "calloop-wayland-source",
  "filedescriptor",
  "futures",
- "gpui",
+ "gpui_ce",
+ "gpui_ce_collections",
  "gpui_ce_util",
- "gpui_collections",
  "gpui_wgpu",
  "image",
  "itertools 0.14.0",
@@ -2608,10 +2652,10 @@ dependencies = [
  "etagere",
  "foreign-types",
  "futures",
- "gpui",
+ "gpui_ce",
+ "gpui_ce_collections",
+ "gpui_ce_media",
  "gpui_ce_util",
- "gpui_collections",
- "gpui_media",
  "image",
  "itertools 0.14.0",
  "libc",
@@ -2635,31 +2679,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gpui_macros"
-version = "0.1.0"
-dependencies = [
- "gpui",
- "heck 0.5.0",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "gpui_media"
-version = "0.2.2"
-dependencies = [
- "anyhow",
- "bindgen",
- "core-foundation 0.10.0",
- "core-video",
- "ctor",
- "foreign-types",
- "metal",
- "objc",
-]
-
-[[package]]
 name = "gpui_path"
 version = "0.2.2"
 dependencies = [
@@ -2674,18 +2693,11 @@ name = "gpui_platform"
 version = "0.1.0"
 dependencies = [
  "console_error_panic_hook",
- "gpui",
+ "gpui_ce",
  "gpui_linux",
  "gpui_macos",
  "gpui_web",
  "gpui_windows",
-]
-
-[[package]]
-name = "gpui_refineable"
-version = "0.2.2"
-dependencies = [
- "gpui_derive_refineable",
 ]
 
 [[package]]
@@ -2712,23 +2724,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "gpui_sum_tree"
-version = "0.2.2"
-dependencies = [
- "heapless",
- "log",
- "proptest",
- "rand 0.9.5",
- "rayon",
- "tracing",
-]
-
-[[package]]
 name = "gpui_tokio"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "gpui",
+ "gpui_ce",
  "gpui_ce_util",
  "tokio",
 ]
@@ -2740,7 +2740,7 @@ dependencies = [
  "anyhow",
  "console_error_panic_hook",
  "futures",
- "gpui",
+ "gpui_ce",
  "gpui_wgpu",
  "http",
  "js-sys",
@@ -2764,9 +2764,9 @@ dependencies = [
  "cosmic-text",
  "criterion",
  "etagere",
- "gpui",
+ "gpui_ce",
+ "gpui_ce_collections",
  "gpui_ce_util",
- "gpui_collections",
  "itertools 0.14.0",
  "js-sys",
  "log",
@@ -2795,9 +2795,9 @@ dependencies = [
  "dunce",
  "etagere",
  "futures",
- "gpui",
+ "gpui_ce",
+ "gpui_ce_collections",
  "gpui_ce_util",
- "gpui_collections",
  "gpui_wgpu",
  "image",
  "itertools 0.14.0",
@@ -2827,8 +2827,8 @@ dependencies = [
  "futures",
  "futures-lite",
  "globset",
+ "gpui_ce_collections",
  "gpui_ce_util",
- "gpui_collections",
  "gpui_path",
  "itertools 0.14.0",
  "libc",
@@ -4488,7 +4488,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 name = "perf"
 version = "0.1.0"
 dependencies = [
- "gpui_collections",
+ "gpui_ce_collections",
  "serde",
  "serde_json",
 ]

@@ -1,5 +1,5 @@
 [package]
-name = "gpui_macros"
+name = "gpui_ce_macros"
 version = "0.1.0"
 edition.workspace = true
 publish = true
@@ -13,6 +13,7 @@ workspace = true
 inspector = []
 
 [lib]
+name = "gpui_macros"
 path = "src/gpui_macros.rs"
 proc-macro = true
 doctest = true
