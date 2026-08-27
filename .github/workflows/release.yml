@@ -67,12 +67,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - uses: Swatinem/rust-cache@v2
+      - uses: hustcer/setup-nu@v3
+      - uses: extractions/setup-just@v2
       - name: Dry-run publish check
-        run: |
-          for crate in crates/gpui_shared_string crates/gpui_macros crates/gpui crates/gpui_wgpu crates/gpui_tokio crates/gpui_platform; do
-            echo "Checking $crate..."
-            cargo publish --dry-run --manifest-path "$crate/Cargo.toml" 2>&1 | head -5
-          done
+        run: just publish true
 
   # Publish to crates.io
   publish:

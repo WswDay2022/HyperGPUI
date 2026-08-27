@@ -395,11 +395,11 @@ publish dry="false":
     let dry_run = ('{{ dry }}' == "true")
 
     let status = (^git status --porcelain | str trim)
-    if ($status | str length) > 0 {
+    if not $dry_run and ($status | str length) > 0 {
         error make {msg: "Working directory is not clean. Commit or stash changes before publishing."}
     }
 
-    if not ("CARGO_REGISTRY_TOKEN" in $env) {
+    if not $dry_run and not ("CARGO_REGISTRY_TOKEN" in $env) {
         error make {msg: "CARGO_REGISTRY_TOKEN is not set"}
     }
 
@@ -414,6 +414,7 @@ publish dry="false":
         "crates/gpui_sum_tree/Cargo.toml"
         "crates/gpui_scheduler/Cargo.toml"
         "crates/gpui_media/Cargo.toml"
+        "crates/gpui_path/Cargo.toml"
         "crates/gpui_zed_util/Cargo.toml"
 
         # core
