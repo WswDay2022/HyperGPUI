@@ -59,8 +59,3 @@ MACOSX_DEPLOYMENT_TARGET = "10.15.7"
 # The component workspace is independently resolved, but CI runs some of its
 # checks from this repository root. Keep its unpublished GPUI CE dependencies
 # local during those checks; published component manifests still use crates.io.
-[patch.crates-io]
-gpui_ce = { path = "crates/gpui" }
-gpui_ce_platform = { path = "crates/gpui_platform" }
-gpui_ce_web = { path = "crates/gpui_web" }
-gpui_ce_macros = { path = "crates/gpui_macros" }

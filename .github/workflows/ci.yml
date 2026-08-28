@@ -108,7 +108,13 @@ jobs:
       - name: Check workspace lockfiles are up to date
         run: |
           cargo update
-          (cd crates/gpui_ce_components && cargo update)
+          component_patch_args=(
+            --config 'patch.crates-io.gpui_ce.path="../gpui"'
+            --config 'patch.crates-io.gpui_ce_platform.path="../gpui_platform"'
+            --config 'patch.crates-io.gpui_ce_web.path="../gpui_web"'
+            --config 'patch.crates-io.gpui_ce_macros.path="../gpui_macros"'
+          )
+          (cd crates/gpui_ce_components && cargo "${component_patch_args[@]}" update)
           git diff --exit-code Cargo.lock crates/gpui_ce_components/Cargo.lock
 
   # Unused dependencies
@@ -245,9 +251,23 @@ jobs:
             libxkbcommon-x11-dev libegl1-mesa-dev \
             libgles2-mesa-dev libglib2.0-dev libfontconfig-dev
       - name: Build components workspace
-        run: (cd crates/gpui_ce_components && cargo build --workspace --all-targets)
+        run: |
+          component_patch_args=(
+            --config 'patch.crates-io.gpui_ce.path="../gpui"'
+            --config 'patch.crates-io.gpui_ce_platform.path="../gpui_platform"'
+            --config 'patch.crates-io.gpui_ce_web.path="../gpui_web"'
+            --config 'patch.crates-io.gpui_ce_macros.path="../gpui_macros"'
+          )
+          (cd crates/gpui_ce_components && cargo "${component_patch_args[@]}" build --workspace --all-targets)
       - name: Test components workspace
-        run: (cd crates/gpui_ce_components && cargo test --workspace --no-fail-fast)
+        run: |
+          component_patch_args=(
+            --config 'patch.crates-io.gpui_ce.path="../gpui"'
+            --config 'patch.crates-io.gpui_ce_platform.path="../gpui_platform"'
+            --config 'patch.crates-io.gpui_ce_web.path="../gpui_web"'
+            --config 'patch.crates-io.gpui_ce_macros.path="../gpui_macros"'
+          )
+          (cd crates/gpui_ce_components && cargo "${component_patch_args[@]}" test --workspace --no-fail-fast)
 
   # Beta toolchain (scheduled only)
   beta-test:
