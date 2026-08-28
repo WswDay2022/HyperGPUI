@@ -1,5 +1,5 @@
 [package]
-name = "gpui_windows"
+name = "gpui_ce_windows"
 version = "0.1.0"
 edition.workspace = true
 publish.workspace = true

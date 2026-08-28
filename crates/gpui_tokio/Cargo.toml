@@ -1,5 +1,5 @@
 [package]
-name = "gpui_tokio"
+name = "gpui_ce_tokio"
 version = "0.1.0"
 edition.workspace = true
 publish.workspace = true
