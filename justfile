@@ -39,19 +39,19 @@ build-release *flags:
 [group('build')]
 build-linux:
     @echo "🐧 Building Linux crates..."
-    cargo build -p gpui_linux
+    cargo build -p gpui_ce_linux
 
 [doc('Build macOS-specific crates')]
 [group('build')]
 build-mac:
     @echo "🍎 Building macOS crates..."
-    cargo build -p gpui_macos
+    cargo build -p gpui_ce_macos
 
 [doc('Build Windows-specific crates')]
 [group('build')]
 build-windows:
     @echo "🪟 Building Windows crates..."
-    cargo build -p gpui_windows
+    cargo build -p gpui_ce_windows
 
 [doc('Build all GPUI examples')]
 [group('build')]
@@ -63,7 +63,7 @@ build-examples:
 [group('build')]
 check-wasm:
     @echo "🕸️ Checking WASM target (stable)..."
-    cargo check --target wasm32-unknown-unknown --no-default-features -p gpui_platform
+    cargo check --target wasm32-unknown-unknown --no-default-features -p gpui_ce_platform
 
 [doc('Check WASM target with atomics (nightly) — requires nightly + rust-src component')]
 [group('build')]
@@ -75,7 +75,7 @@ check-wasm-atomics:
     }
     print "🕸️ Checking WASM target with atomics (nightly)..."
     with-env {CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS: "-C target-feature=+atomics,+bulk-memory,+mutable-globals"} {
-        cargo +nightly -Zbuild-std=std,panic_abort check --target wasm32-unknown-unknown -p gpui_platform
+        cargo +nightly -Zbuild-std=std,panic_abort check --target wasm32-unknown-unknown -p gpui_ce_platform
     }
 
 [doc('Check examples + WASM web package — requires wasm32-unknown-unknown target to be installed')]
@@ -83,7 +83,7 @@ check-wasm-atomics:
 check-examples:
     @echo "📐 Checking examples..."
     cargo build --package gpui_ce --examples
-    cargo check --package gpui_web --target wasm32-unknown-unknown
+    cargo check --package gpui_ce_web --target wasm32-unknown-unknown
 
 
 [doc('Run all workspace unit and integration tests')]
@@ -216,12 +216,12 @@ ci:
         (run-check "cargo test" { cargo test --workspace --no-fail-fast })
         (run-check "doc tests" { cargo test --workspace --doc --no-fail-fast })
         (run-check "WASM stable" {
-            cargo check --target wasm32-unknown-unknown --no-default-features -p gpui_platform
+            cargo check --target wasm32-unknown-unknown --no-default-features -p gpui_ce_platform
         })
         (if (available "rustup") {
             run-check "WASM atomics" {
                 with-env {CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS: "-C target-feature=+atomics,+bulk-memory,+mutable-globals"} {
-                    cargo +nightly -Zbuild-std=std,panic_abort check --target wasm32-unknown-unknown -p gpui_platform
+                    cargo +nightly -Zbuild-std=std,panic_abort check --target wasm32-unknown-unknown -p gpui_ce_platform
                 }
             }
         } else {
@@ -229,7 +229,7 @@ ci:
         })
         (run-check "check examples" {
             cargo build --package gpui_ce --examples
-            cargo check --package gpui_web --target wasm32-unknown-unknown
+            cargo check --package gpui_ce_web --target wasm32-unknown-unknown
         })
         (if (available "typos") { run-check "typos" { typos } } else { skip "typos" "not installed" })
         (if (available "taplo") { run-check "taplo" { taplo fmt --check } } else { skip "taplo" "not installed" })
