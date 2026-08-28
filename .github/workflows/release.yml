@@ -25,6 +25,8 @@ jobs:
       version: ${{ steps.check.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - id: check
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
@@ -41,6 +43,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: clippy, rustfmt
@@ -86,6 +90,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - uses: Swatinem/rust-cache@v2
       - uses: hustcer/setup-nu@v3
@@ -100,6 +106,8 @@ jobs:
     if: github.event_name != 'workflow_dispatch' || github.event.inputs.dry_run != 'true'
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - uses: Swatinem/rust-cache@v2
       - uses: hustcer/setup-nu@v3
@@ -116,6 +124,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: softprops/action-gh-release@v2
         with:
           draft: true

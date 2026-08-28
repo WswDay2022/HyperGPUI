@@ -29,6 +29,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          submodules: recursive
           fetch-depth: ${{ github.ref == 'refs/heads/main' && 2 || 350 }}
       - id: filter
         run: |
@@ -58,6 +59,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: rustfmt
@@ -70,6 +73,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: clippy
@@ -87,6 +92,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: crate-ci/typos@v1.47.2
         with:
           config: typos.toml
@@ -96,6 +103,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: uncenter/setup-taplo@v1
       - run: taplo fmt --check
 
@@ -104,6 +113,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - name: Check workspace lockfiles are up to date
         run: |
@@ -122,6 +133,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@cargo-machete
       - uses: hustcer/setup-nu@v3
@@ -134,6 +147,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: 1.92.0
@@ -152,6 +167,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - name: Install nightly toolchain with rust-src and WASM target
         run: rustup toolchain install nightly --component rust-src --target wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
@@ -166,6 +183,8 @@ jobs:
     if: needs.orchestrate.outputs.run_tests == 'true'
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - uses: Swatinem/rust-cache@v2
       - name: Install system deps
@@ -190,6 +209,8 @@ jobs:
     if: needs.orchestrate.outputs.run_tests == 'true'
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - uses: Swatinem/rust-cache@v2
       - uses: hustcer/setup-nu@v3
@@ -205,6 +226,8 @@ jobs:
     if: needs.orchestrate.outputs.run_tests == 'true'
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - uses: Swatinem/rust-cache@v2
       - uses: hustcer/setup-nu@v3
@@ -219,6 +242,8 @@ jobs:
     if: github.event_name == 'pull_request' && needs.orchestrate.outputs.run_tests == 'true'
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - uses: Swatinem/rust-cache@v2
       - name: Install system deps
@@ -239,6 +264,8 @@ jobs:
     if: needs.orchestrate.outputs.run_tests == 'true'
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - uses: Swatinem/rust-cache@v2
       - name: Install system deps
@@ -276,6 +303,8 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - run: rustup update beta && rustup default beta
       - uses: Swatinem/rust-cache@v2
       - name: Install system deps
