@@ -50,7 +50,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             libxkbcommon-dev libwayland-dev libx11-dev \
-            libxcb-shape0-dev libxcb-xfixes0-dev
+            libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxcb-randr0-dev libxcb-xinput-dev \
+            libxkbcommon-x11-dev libegl1-mesa-dev \
+            libgles2-mesa-dev libglib2.0-dev libfontconfig-dev
       - uses: hustcer/setup-nu@v3
       - uses: extractions/setup-just@v2
       - run: just fmt-check
@@ -58,6 +61,10 @@ jobs:
       - run: just build
       - run: just test
       - run: just test-doc
+      - name: Build components workspace
+        run: (cd crates/gpui_ce_components && cargo build --workspace --all-targets)
+      - name: Test components workspace
+        run: (cd crates/gpui_ce_components && cargo test --workspace --no-fail-fast)
 
   # Verify packages are publishable
   verify-publish:
