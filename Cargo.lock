@@ -2406,7 +2406,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "gpui_ce"
+name = "gpui-ce"
 version = "0.2.2"
 dependencies = [
  "accesskit",
@@ -2439,13 +2439,11 @@ dependencies = [
  "gpui_ce_collections",
  "gpui_ce_macros",
  "gpui_ce_media",
- "gpui_ce_platform",
  "gpui_ce_refineable",
  "gpui_ce_scheduler",
  "gpui_ce_shared_string",
  "gpui_ce_sum_tree",
  "gpui_ce_util",
- "gpui_ce_web",
  "hdrhistogram",
  "heapless",
  "http",
@@ -2520,7 +2518,7 @@ dependencies = [
 name = "gpui_ce_elements"
 version = "0.1.0"
 dependencies = [
- "gpui_ce",
+ "gpui-ce",
  "gpui_ce_platform",
  "palette",
  "smallvec",
@@ -2542,7 +2540,7 @@ dependencies = [
  "calloop-wayland-source",
  "filedescriptor",
  "futures",
- "gpui_ce",
+ "gpui-ce",
  "gpui_ce_collections",
  "gpui_ce_util",
  "gpui_ce_wgpu",
@@ -2600,7 +2598,7 @@ dependencies = [
  "etagere",
  "foreign-types",
  "futures",
- "gpui_ce",
+ "gpui-ce",
  "gpui_ce_collections",
  "gpui_ce_media",
  "gpui_ce_util",
@@ -2665,7 +2663,7 @@ name = "gpui_ce_platform"
 version = "0.1.0"
 dependencies = [
  "console_error_panic_hook",
- "gpui_ce",
+ "gpui-ce",
  "gpui_ce_linux",
  "gpui_ce_macos",
  "gpui_ce_web",
@@ -2719,7 +2717,7 @@ name = "gpui_ce_tokio"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "gpui_ce",
+ "gpui-ce",
  "gpui_ce_util",
  "tokio",
 ]
@@ -2740,7 +2738,7 @@ dependencies = [
  "anyhow",
  "console_error_panic_hook",
  "futures",
- "gpui_ce",
+ "gpui-ce",
  "gpui_ce_wgpu",
  "http",
  "js-sys",
@@ -2764,7 +2762,7 @@ dependencies = [
  "cosmic-text",
  "criterion",
  "etagere",
- "gpui_ce",
+ "gpui-ce",
  "gpui_ce_collections",
  "gpui_ce_util",
  "itertools 0.14.0",
@@ -2795,7 +2793,7 @@ dependencies = [
  "dunce",
  "etagere",
  "futures",
- "gpui_ce",
+ "gpui-ce",
  "gpui_ce_collections",
  "gpui_ce_util",
  "gpui_ce_wgpu",

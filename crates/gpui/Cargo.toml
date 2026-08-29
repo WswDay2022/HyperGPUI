@@ -1,5 +1,5 @@
 [package]
-name = "gpui_ce"
+name = "gpui-ce"
 version = "0.2.2"
 edition.workspace = true
 authors = ["Nathan Sobo <nathan@zed.dev>"]
@@ -151,7 +151,6 @@ backtrace.workspace = true
 smol.workspace = true
 collections = { workspace = true, features = ["test-support"] }
 env_logger.workspace = true
-gpui_platform = { workspace = true, features = ["font-kit", "wayland", "x11"] }
 gpui_util = { workspace = true }
 lyon = { version = "1.0", features = ["extra"] }
 rand.workspace = true
@@ -162,7 +161,6 @@ proptest = { workspace = true }
 
 [target.'cfg(target_family = "wasm")'.dev-dependencies]
 wasm-bindgen = { workspace = true }
-gpui_web.workspace = true
 
 [build-dependencies]
 embed-resource = { version = "3.0", optional = true }
