@@ -120,7 +120,7 @@ jobs:
         run: |
           cargo update
           component_patch_args=(
-            --config 'patch.crates-io.gpui_ce.path="../gpui"'
+            --config 'patch.crates-io.gpui-ce.path="../gpui"'
             --config 'patch.crates-io.gpui_ce_platform.path="../gpui_platform"'
             --config 'patch.crates-io.gpui_ce_web.path="../gpui_web"'
             --config 'patch.crates-io.gpui_ce_macros.path="../gpui_macros"'
@@ -281,7 +281,7 @@ jobs:
       - name: Build components workspace
         run: |
           component_patch_args=(
-            --config 'patch.crates-io.gpui_ce.path="../gpui"'
+            --config 'patch.crates-io.gpui-ce.path="../gpui"'
             --config 'patch.crates-io.gpui_ce_platform.path="../gpui_platform"'
             --config 'patch.crates-io.gpui_ce_web.path="../gpui_web"'
             --config 'patch.crates-io.gpui_ce_macros.path="../gpui_macros"'
@@ -290,7 +290,7 @@ jobs:
       - name: Test components workspace
         run: |
           component_patch_args=(
-            --config 'patch.crates-io.gpui_ce.path="../gpui"'
+            --config 'patch.crates-io.gpui-ce.path="../gpui"'
             --config 'patch.crates-io.gpui_ce_platform.path="../gpui_platform"'
             --config 'patch.crates-io.gpui_ce_web.path="../gpui_web"'
             --config 'patch.crates-io.gpui_ce_macros.path="../gpui_macros"'
