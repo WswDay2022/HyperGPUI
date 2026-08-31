@@ -1400,10 +1400,13 @@ fn default_bounds(display_id: Option<DisplayId>, cx: &mut App) -> WindowBounds {
     let fits_horizontally = window_right <= display_right;
     let fits_vertically = window_bottom <= display_bottom;
 
+    // When the cascaded window no longer fits along one axis, clamp only
+    // that axis to the display edge and keep the cascade offset on the
+    // other one.
     let final_origin = match (fits_horizontally, fits_vertically) {
         (true, true) => proposed_origin,
-        (false, true) => point(display_bounds.origin.x, base_origin.y),
-        (true, false) => point(base_origin.x, display_bounds.origin.y),
+        (false, true) => point(display_bounds.origin.x, proposed_origin.y),
+        (true, false) => point(proposed_origin.x, display_bounds.origin.y),
         (false, false) => display_bounds.origin,
     };
     window_bounds_ctor(Bounds::new(final_origin, base_size))
