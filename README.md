@@ -1,9 +1,9 @@
-# HyperGPUI — gpui 研究 fork
+# HyperGPUI
 
 本项目是 [gpui-ce](https://github.com/gpui-ce/gpui-ce)(Zed [GPUI](https://gpui.rs) 的社区 fork)的独立 fork,用于:
 
 - **学习** gpui 的架构(元素树、渲染后端、窗口系统)
-- **自用扩展** — 在框架上持续添加自己需要的功能
+- **扩展** — 在框架上持续添加自己需要的功能
 
 > 远端: `git remote -v` 可见 `origin` 指向 gpui-ce 上游,`fork` 指向 `https://github.com/WswDay2022/HyperGPUI.git`。
 >
