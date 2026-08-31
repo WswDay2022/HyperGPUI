@@ -1,108 +1,75 @@
-# gpui - Community Edition
+# HyperGPUI — gpui 研究 fork
 
-A community fork of [GPUI](https://gpui.rs), Zed's GPU-accelerated UI framework.
+本项目是 [gpui-ce](https://github.com/gpui-ce/gpui-ce)(Zed [GPUI](https://gpui.rs) 的社区 fork)的独立 fork,用于:
 
-## Usage
+- **学习** gpui 的架构(元素树、渲染后端、窗口系统)
+- **自用扩展** — 在框架上持续添加自己需要的功能
 
-```toml
-[dependencies]
-gpui = { package = "gpui-ce", version = "0.3" }
-gpui_platform = { git = "https://github.com/gpui-ce/gpui-ce" }
+> 远端: `git remote -v` 可见 `origin` 指向 gpui-ce 上游,`fork` 指向 `https://github.com/WswDay2022/HyperGPUI.git`。
+>
+> 版本传承: **Zed GPUI** → **gpui-ce**(社区 fork)→ **本 fork(HyperGPUI)**。
 
-# for test support...
-[dev-dependencies]
-gpui = { package = "gpui-ce", version = "0.3", features = ["test-support"] }
-```
+---
 
-or for using the git version
+## 相对上游的本地改动
 
-```toml
-gpui = { package = "gpui", git = "https://github.com/gpui-ce/gpui-ce" }
-```
+以下提交为本 fork 相对 `origin/main`(gpui-ce)的独有内容,按提交时间倒序:
 
-Then use `gpui::{import}` as normal.
+### 1. `e3007b6be9` — BorderlessWindow 无边框窗口组件
 
-## FAQ
-#### How does the project compare to other forks in the ecosystem?
-Other efforts (namely WGPUI) are actively maintained, but have diverged quite a bit from mainline usage. They typically serve the interests of the projects that they're used within, leading to a diverse yet fragmented ecosystem. GPUI-CE strives to focus on the general use-case first, and over time, grow in the facilities to support the same outside adaptations through a single consistent API.
+将 `examples/learn/borderless_resizeable_window.rs` 中的无边框窗口模式封装为可复用组件,供应用直接使用:
 
-#### What is the long-term goal of GPUI-CE?
-We'd like to be a premiere Rust GUI library! For the time being, we're working incrementally, in an effort to better understand the codebase and where is the right direction to take it, so we're okay being limited by mainline Zed. We will not stay this way forever! The spirit of the project is independence, so "limited" is loose, and we have and will continue to add features that mainline will never have. We will make your contribution work :)
+- **文件**: `crates/gpui/src/elements/borderless_window.rs`(由 `elements/mod.rs` 导出)
+- **功能**:
+  - 透明全尺寸根节点 + 8 个不可见的边/角 resize 命中区(边 6px、角 12px)
+  - 左键按下边/角 → `window.start_window_resize(edge)` → 走**系统原生 resize 循环**(Windows 上为 `WM_SYSCOMMAND SC_SIZE`,自带实时预览与 snap layouts)
+  - 每个命中区显示对应的系统 resize 光标
+- **API**:
+  ```rust
+  // 打开窗口
+  cx.open_window(BorderlessWindow::options(Bounds::centered(None, size(px(480.), px(360.)), cx)), ...);
 
-If you'd like to join discussions and help us forge an path forward, please join the discord.
-
-#### Can I use GPUI-CE with gpui-component?
-100% Because we're a drop-in for GPUI, any component library or surrounding project should work 1:1 through the use of a [patch block](https://doc.rust-lang.org/cargo/reference/overriding-dependencies.html). DO NOTE: We track the latest upstream -- if there's breaking changes and the library you're pulling in hasn't updated yet, gpui-ce cannot help you. Otherwise, we treat any mismatches as bugs.
-
-Example:
-```toml
-# If they're using the crates release
-[patch.crates-io]
-gpui = { git = "https://github.com/gpui-ce/gpui-ce", package = "gpui-ce" }
-
-# If they're using the git remote
-[patch."https://github.com/zed-industries/zed.git"]
-gpui = { git = "https://github.com/gpui-ce/gpui-ce" }
-```
-
-#### Is there a community I could... join?
-For sure! Join the [discord](https://discord.gg/vNdskJSfWd)
-
-<!-- todo: rewrite below... -->
-
-# Welcome to GPUI!
-
-GPUI is a hybrid immediate and retained mode, GPU accelerated, UI framework
-for Rust, designed to support a wide variety of applications.
-
-Everything in GPUI starts with an `Application`. You can create one with `gpui_platform::application()`, and kick off your application by passing a callback to `Application::run()`. Inside this callback, you can create a new window with `App::open_window()`, and register your first root view. See [gpui.rs](https://www.gpui.rs/) for a complete example.
-
-### Dependencies
-
-GPUI has various system dependencies that it needs in order to work.
-
-#### macOS
-
-On macOS, GPUI uses Metal for rendering. In order to use Metal, you need to do the following:
-
-- Install [Xcode](https://apps.apple.com/us/app/xcode/id497799835?mt=12) from the macOS App Store, or from the [Apple Developer](https://developer.apple.com/download/all/) website. Note this requires a developer account.
-
-> Ensure you launch Xcode after installing, and install the macOS components, which is the default option.
-
-- Install [Xcode command line tools](https://developer.apple.com/xcode/resources/)
-
-  ```sh
-  xcode-select --install
+  // 渲染内容
+  BorderlessWindow::new()
+      .inset(px(12.))          // 内容四周留白(阴影边距)
+      .edge_size(px(6.))       // 边命中区厚度
+      .corner_size(px(12.))    // 角命中区大小
+      .child(div().size_full().bg(rgb(0xFFFFFF)).shadow_lg())
   ```
+- **已知坑**: `set_client_inset` 在 Windows 后端(`gpui_windows`)是 **no-op**,视觉阴影边距完全靠 `inset` 的内容 padding 实现;组件仍会调用它,以便在 Wayland/X11 上生效。
+- **前提**: 窗口 `is_resizable` 必须为 `true`(`WindowOptions::default()` 即默认 `true`)。
+- **配套示例**: `examples/learn/borderless_resizeable_window.rs` 演示完整用法(含 `.window_control_area(WindowControlArea::Drag)` 拖拽移动区域)。
 
-- Ensure that the Xcode command line tools are using your newly installed copy of Xcode:
+### 2. `c63cc55c29` — 完整 transform 支持(修复上游 #93)
 
-  ```sh
-  sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
-  ```
+为 `div` 元素补全 CSS 风格 transform(translate / rotate / scale 等),并在三个渲染后端落地:
 
-## The Big Picture
+- **核心**: 新增 `crates/gpui/src/css_transform.rs`(约 480 行),接入 `div` / `styled` / `style` / `window` / `scene` / `inspector`
+- **三后端着色器**:
+  - Windows:`gpui_windows/src/shaders.hlsl` + `directx_renderer.rs`(D3D11)
+  - macOS:`gpui_macos/src/shaders.metal`(Metal)
+  - WGPU:`gpui_wgpu/src/shaders.wgsl` + `wgpu_renderer.rs`
+- **附带修复(Windows)** — HLSL quad 渲染失效根因: `QuadVertexOutput` 声明了 `SV_ClipDistance` 而 `QuadFragmentInput` 没有,导致 FXC 按声明顺序分配寄存器时 TEXCOORD 错位、像素着色器不运行、矩形不绘制;已在两处对齐声明修复。
+- **附带工具(Windows)**: D3D11 debug layer(`D3D11_CREATE_DEVICE_DEBUG` + `ID3D11InfoQueue` 消息转储)调试工具链,以及 `shader_layout_tests.rs` 着色器签名布局测试。
+- **学习示例**(`crates/gpui/examples/learn/`): `blur_test`、`borderless_resizeable_window`、`button_feedback`、`counter`、`css_transform`。
 
-GPUI offers three different [registers](<https://en.wikipedia.org/wiki/Register_(sociolinguistics)>) depending on your needs:
+---
 
-- State management and communication with `Entity`'s. Whenever you need to store application state that communicates between different parts of your application, you'll want to use GPUI's entities. Entities are owned by GPUI and are only accessible through an owned smart pointer similar to an `Rc`. See the `app::context` module for more information.
+## 构建
 
-- High level, declarative UI with views. All UI in GPUI starts with a view. A view is simply an `Entity` that can be rendered, by implementing the `Render` trait. At the start of each frame, GPUI will call this render method on the root view of a given window. Views build a tree of `elements`, lay them out and style them with a tailwind-style API, and then give them to GPUI to turn into pixels. See the `div` element for an all purpose swiss-army knife of rendering.
+```sh
+# Windows(Git Bash)
+export PATH="/d/.cargo/bin:$PATH"
+cargo build -p gpui-ce -j 1        # 注意 -j 1:本机内存有限,并行编译易 OOM
+```
 
-- Low level, imperative UI with Elements. Elements are the building blocks of UI in GPUI, and they provide a nice wrapper around an imperative API that provides as much flexibility and control as you need. Elements have total control over how they and their child elements are rendered and can be used for making efficient views into large lists, implement custom layouting for a code editor, and anything else you can think of. See the `element` module for more information.
+- workspace 默认成员为 `./crates/gpui/`(即 `gpui-ce` crate)
+- 本 fork 的测试宏 `gpui::test` 导出 `test` 宏,平台 crate(`gpui_windows` 等)测试模块中禁止 `use super::*` 以避免冲突
 
-Each of these registers has one or more corresponding contexts that can be accessed from all GPUI services. This context is your main interface to GPUI, and is used extensively throughout the framework.
+## 来源与致谢
 
-## Other Resources
-
-In addition to the systems above, GPUI provides a range of smaller services that are useful for building complex applications:
-
-- Actions are user-defined structs that are used for converting keystrokes into logical operations in your UI. Use this for implementing keyboard shortcuts, such as cmd-q. See the `action` module for more information.
-
-- Platform services, such as `quit the app` or `open a URL` are available as methods on the `app::App`.
-
-- An async executor that is integrated with the platform's event loop. See the `executor` module for more information.,
-
-- The `[gpui::test]` macro provides a convenient way to write tests for your GPUI applications. Tests also have their own kind of context, a `TestAppContext` which provides ways of simulating common platform input. See `app::test_context` and `test` modules for more details.
-
-Currently, the best way to learn about these APIs is to read the Zed source code or drop a question in the [Zed Discord](https://zed.dev/community-links). We're working on improving the documentation, creating more examples, and will be publishing more guides to GPUI on our [blog](https://zed.dev/blog).
+- **Zed GPUI**: https://gpui.rs / https://github.com/zed-industries/zed — 原始框架,GPU 加速的 Rust UI
+- **gpui-ce**: https://github.com/gpui-ce/gpui-ce — 社区 fork,本 fork 的上游
+- **本 fork 远端**: https://github.com/WswDay2022/HyperGPUI
+- 无边框可调整窗口的原始模式参考 Zed 上游与 gpui-ce 的 `examples/learn/borderless_resizeable_window.rs`
+- **Claude (Anthropic)**: 协助实现完整 transform 支持与 HLSL quad 渲染修复、封装 BorderlessWindow 组件,并编写本文档
