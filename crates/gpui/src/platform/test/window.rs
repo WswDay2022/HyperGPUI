@@ -37,6 +37,7 @@ pub(crate) struct TestWindowState {
     appearance_change_callback: Option<Box<dyn FnMut()>>,
     input_handler: Option<PlatformInputHandler>,
     is_fullscreen: bool,
+    is_maximized: bool,
     appearance: WindowAppearance,
     external_drag_files: Vec<(PathBuf, bool)>,
     start_external_drag_result: bool,
@@ -80,7 +81,11 @@ impl TestWindow {
             handle,
             sprite_atlas,
             renderer,
-            title: Default::default(),
+            title: params
+                .titlebar
+                .as_ref()
+                .and_then(|t| t.title.clone())
+                .map(|s| s.to_string()),
             edited: false,
             document_path: None,
             should_close_handler: None,
@@ -159,7 +164,14 @@ impl PlatformWindow for TestWindow {
     }
 
     fn window_bounds(&self) -> WindowBounds {
-        WindowBounds::Windowed(self.bounds())
+        let state = self.0.lock();
+        if state.is_fullscreen {
+            WindowBounds::Fullscreen(state.bounds)
+        } else if state.is_maximized {
+            WindowBounds::Maximized(state.bounds)
+        } else {
+            WindowBounds::Windowed(state.bounds)
+        }
     }
 
     fn is_maximized(&self) -> bool {
@@ -253,6 +265,10 @@ impl PlatformWindow for TestWindow {
         self.0.lock().title = Some(title.to_owned());
     }
 
+    fn get_title(&self) -> String {
+        self.0.lock().title.clone().unwrap_or_default()
+    }
+
     fn set_app_id(&mut self, _app_id: &str) {}
 
     fn set_background_appearance(&self, _background: WindowBackgroundAppearance) {}
@@ -274,7 +290,8 @@ impl PlatformWindow for TestWindow {
     }
 
     fn zoom(&self) {
-        unimplemented!()
+        let mut lock = self.0.lock();
+        lock.is_maximized = !lock.is_maximized;
     }
 
     fn toggle_fullscreen(&self) {

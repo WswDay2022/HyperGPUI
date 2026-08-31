@@ -1325,14 +1325,6 @@ pub(crate) struct ElementStateBox {
 }
 
 fn default_bounds(display_id: Option<DisplayId>, cx: &mut App) -> WindowBounds {
-    // TODO, BUG: if you open a window with the currently active window
-    // on the stack, this will erroneously fallback to `None`
-    //
-    // TODO these should be the initial window bounds not considering maximized/fullscreen
-    let active_window_bounds = cx
-        .active_window()
-        .and_then(|w| w.update(cx, |_, window, _| window.window_bounds()).ok());
-
     const CASCADE_OFFSET: f32 = 25.0;
 
     let display = display_id
@@ -1347,26 +1339,54 @@ fn default_bounds(display_id: Option<DisplayId>, cx: &mut App) -> WindowBounds {
         .map(|d| d.visible_bounds())
         .unwrap_or_else(default_placement);
 
+    // The placement used when no window to cascade from is available.
+    let display_placement = || {
+        display
+            .as_ref()
+            .map(|d| d.default_bounds())
+            .unwrap_or_else(default_placement)
+    };
+
+    // Cascade new windows off the currently active window. If the active
+    // window is mid-update (opening a window from inside its own update
+    // takes it off the window stack, so querying it fails), fall back to
+    // scanning the remaining open windows instead.
+    //
+    // The cascade base is the source window's *placement*, ignoring its
+    // maximized/fullscreen geometry: those rects are anchored to the
+    // display corner, so cascading from them would pin every new window
+    // to the screen edge. The maximized/fullscreen state still carries
+    // over to the new window.
     let (
         Bounds {
             origin: base_origin,
             size: base_size,
         },
         window_bounds_ctor,
-    ): (_, fn(Bounds<Pixels>) -> WindowBounds) = match active_window_bounds {
-        Some(bounds) => match bounds {
-            WindowBounds::Windowed(bounds) => (bounds, WindowBounds::Windowed),
-            WindowBounds::Maximized(bounds) => (bounds, WindowBounds::Maximized),
-            WindowBounds::Fullscreen(bounds) => (bounds, WindowBounds::Fullscreen),
-        },
-        None => (
-            display
-                .as_ref()
-                .map(|d| d.default_bounds())
-                .unwrap_or_else(default_placement),
-            WindowBounds::Windowed,
-        ),
-    };
+    ): (_, fn(Bounds<Pixels>) -> WindowBounds) = cx
+        .active_window()
+        .and_then(|w| w.update(cx, |_, window, _| window.window_bounds()).ok())
+        .or_else(|| {
+            cx.window_stack()
+                .unwrap_or_else(|| cx.windows())
+                .iter()
+                .find_map(|w| w.update(cx, |_, window, _| window.window_bounds()).ok())
+        })
+        .map(|window_bounds| match window_bounds {
+            WindowBounds::Windowed(bounds) => (
+                bounds,
+                WindowBounds::Windowed as fn(Bounds<Pixels>) -> WindowBounds,
+            ),
+            WindowBounds::Maximized(_) => (
+                display_placement(),
+                WindowBounds::Maximized as fn(Bounds<Pixels>) -> WindowBounds,
+            ),
+            WindowBounds::Fullscreen(_) => (
+                display_placement(),
+                WindowBounds::Fullscreen as fn(Bounds<Pixels>) -> WindowBounds,
+            ),
+        })
+        .unwrap_or_else(|| (display_placement(), WindowBounds::Windowed));
 
     let cascade_offset = point(px(CASCADE_OFFSET), px(CASCADE_OFFSET));
     let proposed_origin = base_origin + cascade_offset;
@@ -7010,8 +7030,8 @@ mod tests {
         ExternalDragPayload, ExternalPaths, FileDragPaths, FileDropEvent, FocusHandle,
         InputEvent as _, InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent,
         MouseMoveEvent, ParentElement, Pixels, Point, Render, StatefulInteractiveElement as _,
-        Styled, TestAppContext, Window, WindowAppearance, WindowOptions, canvas, div, point, px,
-        size,
+        Styled, TestAppContext, Window, WindowAppearance, WindowBounds, WindowOptions, canvas, div,
+        point, px, size,
     };
 
     struct EmptyView;
@@ -7095,6 +7115,94 @@ mod tests {
         cx.run_until_parked();
 
         assert_eq!(observed_appearance.get(), Some(WindowAppearance::Dark));
+    }
+
+    #[gpui::test]
+    fn test_default_bounds_cascade_placement_from_maximized_window(cx: &mut TestAppContext) {
+        // A maximized window's rect is anchored to the display corner, so
+        // cascading from it would pin the new window to the screen edge.
+        // The placement must come from the display default instead, while
+        // the new window still opens maximized.
+        let window_a: AnyWindowHandle = cx
+            .update(|cx| {
+                cx.open_window(
+                    WindowOptions {
+                        window_bounds: Some(WindowBounds::Maximized(Bounds::from_corners(
+                            Point::default(),
+                            point(px(1920.), px(1080.)),
+                        ))),
+                        ..Default::default()
+                    },
+                    |_, cx| cx.new(|_| EmptyView),
+                )
+            })
+            .unwrap()
+            .into();
+
+        let window_b: AnyWindowHandle = cx
+            .update(|cx| cx.open_window(WindowOptions::default(), |_, cx| cx.new(|_| EmptyView)))
+            .unwrap()
+            .into();
+
+        // The 1920×1080 test display's default placement is (192, 0)+1536×1080
+        // (center-clipped to DEFAULT_WINDOW_SIZE); cascading 25px right and
+        // clamping into the visible bounds yields (217, 0).
+        let bounds = cx
+            .update_window(window_b, |_, window, _| window.window_bounds())
+            .unwrap();
+        assert_eq!(
+            bounds,
+            WindowBounds::Maximized(Bounds::from_corners(
+                point(px(217.), px(0.)),
+                point(px(1753.), px(1080.)),
+            ))
+        );
+    }
+
+    #[gpui::test]
+    fn test_default_bounds_falls_back_to_other_windows(cx: &mut TestAppContext) {
+        // A window with a small explicit rect: the cascade source that the
+        // fallback scan below is expected to find.
+        let window_a: AnyWindowHandle = cx
+            .update(|cx| {
+                cx.open_window(
+                    WindowOptions {
+                        window_bounds: Some(WindowBounds::Windowed(Bounds::from_corners(
+                            point(px(25.), px(25.)),
+                            point(px(325.), px(225.)),
+                        ))),
+                        ..Default::default()
+                    },
+                    |_, cx| cx.new(|_| EmptyView),
+                )
+            })
+            .unwrap()
+            .into();
+
+        // B is the most recently opened window. Opening C from inside B's
+        // own update leaves B mid-update (it is taken out of the window
+        // map), so `default_bounds` can't query it and must fall back to
+        // scanning the remaining windows.
+        let window_b = cx.add_window(|_, _| EmptyView);
+        let window_c: AnyWindowHandle = cx
+            .update_window(window_b.into(), |_, _window, cx| {
+                cx.open_window(WindowOptions::default(), |_, cx| cx.new(|_| EmptyView))
+            })
+            .unwrap()
+            .unwrap()
+            .into();
+
+        // Cascaded 25px from A's (25, 25)+300×200 rect.
+        let bounds = cx
+            .update_window(window_c, |_, window, _| window.window_bounds())
+            .unwrap();
+        assert_eq!(
+            bounds,
+            WindowBounds::Windowed(Bounds::from_corners(
+                point(px(50.), px(50.)),
+                point(px(350.), px(250.)),
+            ))
+        );
     }
 
     struct RootView {

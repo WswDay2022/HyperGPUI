@@ -101,8 +101,9 @@ impl Display for MarkdownString {
 ///
 /// * `;` is used in HTML entity syntax, but `&` is escaped, so they are parsed as plaintext.
 ///
-/// TODO: There is one escape this doesn't do currently. Period after numbers at the start of the
-/// line (`[0-9]*\.`) should also be escaped to avoid it being interpreted as a list item.
+/// A period following a run of digits at the start of a line (`[0-9]+\.`) is also escaped, so
+/// that text like `1. first` is not parsed as a list item. Any non-digit character breaks the
+/// run, so `1a.` and `a 1.` are left untouched.
 pub struct MarkdownEscaped<'a>(pub &'a str);
 
 /// Implements `Display` to format markdown inline code (wrapped in backticks), handling code that
@@ -122,6 +123,11 @@ pub struct MarkdownCodeBlock<'a> {
 impl Display for MarkdownEscaped<'_> {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         let mut start_of_unescaped = None;
+        // Tracks whether the line up to the current character is a run of digits, so that a `.`
+        // after it (e.g. `1. item`) can be escaped to avoid list-item parsing. Resets on `\n`;
+        // broken by any non-digit character.
+        let mut line_is_digit_run = true;
+        let mut saw_digit_on_line = false;
         for (ix, c) in self.0.char_indices() {
             match c {
                 // Always escaped.
@@ -165,10 +171,39 @@ impl Display for MarkdownEscaped<'_> {
                     write!(formatter, "&gt;")?;
                     start_of_unescaped = None;
                 }
+                // Escaped when it follows a run of digits at the start of the line, e.g. `1. item`,
+                // so that it is not parsed as a list item. Any non-digit character breaks the run,
+                // so `1a.` and `a 1.` are left untouched.
+                '.' => {
+                    if line_is_digit_run && saw_digit_on_line {
+                        if let Some(start_of_unescaped) = start_of_unescaped {
+                            write!(formatter, "{}", &self.0[start_of_unescaped..ix])?;
+                        }
+                        write!(formatter, "\\")?;
+                        // Can include this char in the "unescaped" text since a
+                        // backslash was just emitted.
+                        start_of_unescaped = Some(ix);
+                    } else if start_of_unescaped.is_none() {
+                        start_of_unescaped = Some(ix);
+                    }
+                }
                 _ => {
                     if start_of_unescaped.is_none() {
                         start_of_unescaped = Some(ix);
                     }
+                }
+            }
+
+            // Update the digit-run state after the match, so the `.` arm above sees the state of
+            // the characters that precede it.
+            if c == '\n' {
+                line_is_digit_run = true;
+                saw_digit_on_line = false;
+            } else if line_is_digit_run {
+                if c.is_ascii_digit() {
+                    saw_digit_on_line = true;
+                } else {
+                    line_is_digit_run = false;
                 }
             }
         }
@@ -309,6 +344,28 @@ mod tests {
         "#;
 
         assert_eq!(MarkdownEscaped(input).to_string(), expected);
+    }
+
+    #[test]
+    fn test_markdown_escaped_list_markers() {
+        // A digit run followed by a period at the start of a line would be
+        // parsed as a list item, so the period is escaped.
+        assert_eq!(MarkdownEscaped("1. First").to_string(), "1\\. First");
+        assert_eq!(MarkdownEscaped("42. Answer").to_string(), "42\\. Answer");
+        assert_eq!(
+            MarkdownEscaped("line\n1. First\n2. Second").to_string(),
+            "line\n1\\. First\n2\\. Second"
+        );
+        // A bare period, or a period after a broken digit run, is a plain
+        // period, not a list marker.
+        assert_eq!(MarkdownEscaped(". Nope").to_string(), ". Nope");
+        assert_eq!(MarkdownEscaped("1a. Nope").to_string(), "1a. Nope");
+        assert_eq!(MarkdownEscaped("a 1. Nope").to_string(), "a 1. Nope");
+        assert_eq!(MarkdownEscaped("·. Nope").to_string(), "·. Nope");
+        // Only the first period of a line is escaped; a second one after the
+        // run has been broken is left alone.
+        assert_eq!(MarkdownEscaped("1.5").to_string(), "1\\.5");
+        assert_eq!(MarkdownEscaped("1. 2.").to_string(), "1\\. 2.");
     }
 
     #[test]

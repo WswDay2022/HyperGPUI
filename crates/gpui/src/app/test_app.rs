@@ -373,11 +373,10 @@ impl<V: 'static + Render> TestAppWindow<V> {
     /// Get the window title.
     pub fn title(&self) -> Option<String> {
         let app = self.app.borrow();
-        app.read_window(&self.handle, |_, _cx| {
-            // TODO: expose title through Window API
-            None
-        })
-        .unwrap()
+        app.windows
+            .get(self.handle.window_id())
+            .and_then(|w| w.as_ref())
+            .map(|w| w.window_title())
     }
 
     /// Simulate a keystroke.
@@ -506,7 +505,7 @@ impl<V> Clone for TestAppWindow<V> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{FocusHandle, Focusable, div, prelude::*};
+    use crate::{FocusHandle, Focusable, TitlebarOptions, div, prelude::*};
 
     struct Counter {
         count: usize,
@@ -603,5 +602,26 @@ mod tests {
         app.read_global::<MyGlobal, _>(|global, _| {
             assert_eq!(global.0, "world");
         });
+    }
+
+    #[test]
+    fn test_window_title() {
+        let mut app = TestApp::new();
+
+        let window = app.open_window_with_options(
+            WindowOptions {
+                titlebar: Some(TitlebarOptions {
+                    title: Some("Expected Title".into()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            Counter::new,
+        );
+
+        assert_eq!(window.title(), Some("Expected Title".to_owned()));
+
+        drop(window);
+        app.update(|cx| cx.shutdown());
     }
 }

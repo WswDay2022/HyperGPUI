@@ -439,8 +439,11 @@ impl SystemWindowTabController {
             .find_map(|(group, tabs)| tabs.iter().find(|tab| tab.id == id).map(|_| group));
 
         let current_group = current_group?;
-        // TODO: `.keys()` returns arbitrary order, what does "next" mean?
+        // Sort the group ids so "next" is deterministic: `.keys()` alone
+        // returns an arbitrary order, which made the same call jump to a
+        // different tab group between runs.
         let mut group_ids: Vec<_> = controller.tab_groups.keys().collect();
+        group_ids.sort_unstable();
         let idx = group_ids.iter().position(|g| *g == current_group)?;
         let next_idx = (idx + 1) % group_ids.len();
 
@@ -464,8 +467,11 @@ impl SystemWindowTabController {
             .find_map(|(group, tabs)| tabs.iter().find(|tab| tab.id == id).map(|_| group));
 
         let current_group = current_group?;
-        // TODO: `.keys()` returns arbitrary order, what does "previous" mean?
+        // Sort the group ids so "previous" is deterministic: `.keys()` alone
+        // returns an arbitrary order, which made the same call jump to a
+        // different tab group between runs.
         let mut group_ids: Vec<_> = controller.tab_groups.keys().collect();
+        group_ids.sort_unstable();
         let idx = group_ids.iter().position(|g| *g == current_group)?;
         let prev_idx = if idx == 0 {
             group_ids.len() - 1
