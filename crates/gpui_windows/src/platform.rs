@@ -1205,7 +1205,7 @@ fn has_package_identity() -> bool {
     }
 }
 
-fn open_target(target: impl AsRef<OsStr>) -> Result<()> {
+pub(crate) fn open_target(target: impl AsRef<OsStr>) -> Result<()> {
     let target = target.as_ref();
     let ret = unsafe {
         ShellExecuteW(
@@ -1531,7 +1531,7 @@ unsafe extern "system" fn window_procedure(
 
 #[cfg(test)]
 mod tests {
-    use crate::{read_from_clipboard, write_to_clipboard};
+    use crate::{open_target, read_from_clipboard, write_to_clipboard};
     use gpui::ClipboardItem;
 
     #[test]
@@ -1547,5 +1547,12 @@ mod tests {
         let item = ClipboardItem::new_string_with_json_metadata("abcdef".to_string(), vec![3, 4]);
         write_to_clipboard(item.clone());
         assert_eq!(read_from_clipboard(), Some(item));
+    }
+
+    #[test]
+    #[ignore = "opens a GUI application; run manually"]
+    fn show_character_palette_launches_character_map() {
+        // Mirrors the launch performed by `WindowsWindow::show_character_palette`.
+        open_target("charmap.exe").expect("charmap.exe should launch");
     }
 }

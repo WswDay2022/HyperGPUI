@@ -502,6 +502,7 @@ struct Quad {
     Hsla border_color;
     Corners corner_radii;
     Edges border_widths;
+    TransformationMatrix transformation;
 };
 
 struct QuadVertexOutput {
@@ -512,6 +513,9 @@ struct QuadVertexOutput {
     nointerpolation float4 background_color0: COLOR2;
     nointerpolation float4 background_color1: COLOR3;
     float4 clip_distance: SV_ClipDistance;
+    // Position in the quad's untransformed (local) coordinate space, used by the fragment
+    // shader for the SDF/gradient so transforms don't distort corners or borders.
+    float2 local_position: TEXCOORD4;
 };
 
 struct QuadFragmentInput {
@@ -521,6 +525,15 @@ struct QuadFragmentInput {
     nointerpolation float4 background_solid: COLOR1;
     nointerpolation float4 background_color0: COLOR2;
     nointerpolation float4 background_color1: COLOR3;
+    // Must be declared here too, in the same position as in `QuadVertexOutput`. FXC assigns
+    // hardware input registers in declaration order, so this slot otherwise shifts
+    // `local_position` (TEXCOORD4) to a different register than the VS emits it on and the
+    // draw fails to link: "Semantic 'TEXCOORD' is defined for mismatched hardware registers"
+    // — the quad pixel shader never runs and no rectangles appear.
+    float4 clip_distance: SV_ClipDistance;
+    // Position in the quad's untransformed (local) coordinate space, used by the fragment
+    // shader for the SDF/gradient so transforms don't distort corners or borders.
+    float2 local_position: TEXCOORD4;
 };
 
 StructuredBuffer<Quad> quads: register(t1);
@@ -528,7 +541,14 @@ StructuredBuffer<Quad> quads: register(t1);
 QuadVertexOutput quad_vertex(uint vertex_id: SV_VertexID, uint quad_id: SV_InstanceID) {
     float2 unit_vertex = float2(float(vertex_id & 1u), 0.5 * float(vertex_id & 2u));
     Quad quad = quads[quad_id];
-    float4 device_position = to_device_position(unit_vertex, quad.bounds);
+    float2 local_position = unit_vertex * quad.bounds.size + quad.bounds.origin;
+    // Apply the transform around the quad's center, matching `CssTransform::to_matrix` on the
+    // Rust side. FXC packs structured-buffer matrices column-major (m00 m10 / m01 m11), i.e.
+    // the transpose of the Rust row-major `TransformationMatrix`, so the row-vector form
+    // `mul(vector, matrix)` — not `mul(matrix, vector)` — applies the Rust matrix correctly.
+    float2 transformed_position = mul(local_position, quad.transformation.rotation_scale)
+        + quad.transformation.translation;
+    float4 device_position = to_device_position_impl(transformed_position);
 
     GradientColor gradient = prepare_gradient_color(
         quad.background.tag,
@@ -536,7 +556,7 @@ QuadVertexOutput quad_vertex(uint vertex_id: SV_VertexID, uint quad_id: SV_Insta
         quad.background.solid,
         quad.background.colors
     );
-    float4 clip_distance = distance_from_clip_rect(unit_vertex, quad.bounds, quad.content_mask);
+    float4 clip_distance = distance_from_clip_rect_impl(transformed_position, quad.content_mask);
     float4 border_color = hsla_to_rgba(quad.border_color);
 
     QuadVertexOutput output;
@@ -547,12 +567,13 @@ QuadVertexOutput quad_vertex(uint vertex_id: SV_VertexID, uint quad_id: SV_Insta
     output.background_color0 = gradient.color0;
     output.background_color1 = gradient.color1;
     output.clip_distance = clip_distance;
+    output.local_position = local_position;
     return output;
 }
 
 float4 quad_fragment(QuadFragmentInput input): SV_Target {
     Quad quad = quads[input.quad_id];
-    float4 background_color = gradient_color(quad.background, input.position.xy, quad.bounds,
+    float4 background_color = gradient_color(quad.background, input.local_position, quad.bounds,
     input.background_solid, input.background_color0, input.background_color1);
 
     bool unrounded = quad.corner_radii.top_left == 0.0 &&
@@ -571,7 +592,7 @@ float4 quad_fragment(QuadFragmentInput input): SV_Target {
 
     float2 size = quad.bounds.size;
     float2 half_size = size / 2.;
-    float2 the_point = input.position.xy - quad.bounds.origin;
+    float2 the_point = input.local_position - quad.bounds.origin;
     float2 center_to_point = the_point - half_size;
 
     // Signed distance field threshold for inclusion of pixels. 0.5 is the

@@ -693,6 +693,8 @@ pub struct Quad {
     pub border_color: SceneHsla,
     pub corner_radii: Corners<ScaledPixels>,
     pub border_widths: Edges<ScaledPixels>,
+    /// Transform applied at draw time, around the element's center (defaults to the identity).
+    pub transformation: TransformationMatrix,
 }
 
 impl From<Quad> for Primitive {

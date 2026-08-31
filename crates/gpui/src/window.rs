@@ -712,10 +712,6 @@ impl HitboxId {
     ///
     /// See [`Hitbox::is_hovered`] for details.
     pub fn is_hovered(self, window: &Window) -> bool {
-        // If this hitbox has captured the pointer, it's always considered hovered
-        if window.captured_hitbox == Some(self) {
-            return true;
-        }
         if window.last_input_was_keyboard() {
             return false;
         }
@@ -727,11 +723,24 @@ impl HitboxId {
     ///
     /// See [`HitboxId::is_hovered`] for more details.
     pub(crate) fn is_hovered_ignoring_last_input(self, window: &Window) -> bool {
-        // If this hitbox has captured the pointer, it's always considered hovered
+        self.hit_test(window)
+    }
+
+    /// Whether this hitbox currently owns pointer capture: the mouse was pressed on it and has
+    /// not been released yet. A captured hitbox keeps receiving mouse-up events even after the
+    /// pointer moves outside its bounds.
+    pub fn is_captured(self, window: &Window) -> bool {
+        window.captured_hitbox == Some(self)
+    }
+
+    /// Whether a mouse-up event should be delivered to this hitbox. The hitbox that captured the
+    /// pointer always receives it (browser-like implicit capture on press); otherwise the hitbox
+    /// under the cursor receives it — but only while no other hitbox owns the capture.
+    pub(crate) fn should_receive_mouse_up(self, window: &Window) -> bool {
         if window.captured_hitbox == Some(self) {
             return true;
         }
-        self.hit_test(window)
+        window.captured_hitbox.is_none() && self.is_hovered(window)
     }
 
     fn hit_test(self, window: &Window) -> bool {
@@ -801,6 +810,17 @@ impl Hitbox {
     /// this sets `HitboxBehavior::BlockMouse` (`InteractiveElement::occlude`).
     pub fn should_handle_scroll(&self, window: &Window) -> bool {
         self.id.should_handle_scroll(window)
+    }
+
+    /// Whether this hitbox currently owns pointer capture. See [`HitboxId::is_captured`].
+    pub fn is_captured(&self, window: &Window) -> bool {
+        self.id.is_captured(window)
+    }
+
+    /// Whether a mouse-up event should be delivered to this hitbox.
+    /// See [`HitboxId::should_receive_mouse_up`].
+    pub(crate) fn should_receive_mouse_up(&self, window: &Window) -> bool {
+        self.id.should_receive_mouse_up(window)
     }
 }
 
@@ -1140,6 +1160,9 @@ pub struct Window {
     /// The hitbox that has captured the pointer, if any.
     /// While captured, mouse events route to this hitbox regardless of hit testing.
     captured_hitbox: Option<HitboxId>,
+    /// The mouse position when the pointer was captured, used to re-resolve the capture after a
+    /// re-render (hitbox ids are allocated per frame, so the captured id can go stale).
+    captured_position: Option<Point<Pixels>>,
     #[cfg(any(feature = "inspector", debug_assertions))]
     inspector: Option<Entity<Inspector>>,
     pub(crate) a11y: A11y,
@@ -1406,6 +1429,7 @@ impl Window {
             WindowParams {
                 bounds: window_bounds.get_bounds(),
                 titlebar,
+                window_decorations,
                 kind,
                 is_movable,
                 app_owns_titlebar_drag,
@@ -1883,6 +1907,7 @@ impl Window {
             client_inset: None,
             image_cache_stack: Vec::new(),
             captured_hitbox: None,
+            captured_position: None,
             #[cfg(any(feature = "inspector", debug_assertions))]
             inspector: None,
             a11y: A11y::new(
@@ -2771,11 +2796,13 @@ impl Window {
     /// The capture is automatically released on mouse up.
     pub fn capture_pointer(&mut self, hitbox_id: HitboxId) {
         self.captured_hitbox = Some(hitbox_id);
+        self.captured_position = Some(self.mouse_position());
     }
 
     /// Releases any active pointer capture.
     pub fn release_pointer(&mut self) {
         self.captured_hitbox = None;
+        self.captured_position = None;
     }
 
     /// Returns the hitbox that has captured the pointer, if any.
@@ -4113,6 +4140,7 @@ impl Window {
             corner_radii: quad.corner_radii.scale(self.scale_factor()),
             border_widths: snapped_border_widths,
             border_style: quad.border_style,
+            transformation: quad.transformation.unwrap_or(TransformationMatrix::unit()),
         };
 
         if !quad.background.is_transparent() {
@@ -5235,6 +5263,30 @@ impl Window {
             self.reset_cursor_style(cx);
         }
 
+        // Hitbox ids are allocated per frame, so a captured id can go stale when a re-render
+        // happens between the press and the release (e.g. the press itself repaints the element).
+        // Re-resolve the capture at the press position against the current frame so mouse-up
+        // delivery still reaches the element that received the press.
+        if let Some(captured) = self.captured_hitbox
+            && !self
+                .rendered_frame
+                .hitboxes
+                .iter()
+                .any(|hitbox| hitbox.id == captured)
+            && let Some(position) = self.captured_position
+        {
+            self.captured_hitbox = self.rendered_frame.hit_test(position).ids.first().copied();
+        }
+
+        // Implicit pointer capture: pressing the mouse captures the pointer to the topmost
+        // hitbox under the cursor, so the mouse-up is delivered to the element that received
+        // the press even when the pointer has moved outside its bounds (browser-like). The
+        // capture is released automatically when the mouse button goes up.
+        if event.is::<crate::MouseDownEvent>() {
+            self.captured_hitbox = self.mouse_hit_test.ids.first().copied();
+            self.captured_position = Some(self.mouse_position());
+        }
+
         #[cfg(any(feature = "inspector", debug_assertions))]
         if self.is_inspector_picking(cx) {
             self.handle_inspector_mouse_event(event, cx);
@@ -5283,6 +5335,7 @@ impl Window {
         // Auto-release pointer capture on mouse up
         if event.is::<MouseUpEvent>() && self.captured_hitbox.is_some() {
             self.captured_hitbox = None;
+            self.captured_position = None;
         }
     }
 
@@ -6219,7 +6272,13 @@ impl Window {
     #[cfg(any(feature = "inspector", debug_assertions))]
     pub fn toggle_inspector(&mut self, cx: &mut App) {
         self.inspector = match self.inspector {
-            None => Some(cx.new(|_| Inspector::new())),
+            None => {
+                // Ensure the default div inspector state renderer is available so that picking
+                // an element shows useful information even without a custom inspector renderer.
+                cx.inspector_element_registry
+                    .register_default_div_state_renderer();
+                Some(cx.new(|_| Inspector::new()))
+            }
             Some(_) => None,
         };
         self.refresh();
@@ -6841,6 +6900,9 @@ pub struct PaintQuad {
     pub border_color: Hsla,
     /// The style of the quad's borders.
     pub border_style: BorderStyle,
+    /// Optional transform applied at draw time, around the quad's center (device pixels).
+    /// `None` renders the quad untransformed.
+    pub transformation: Option<TransformationMatrix>,
 }
 
 impl PaintQuad {
@@ -6848,6 +6910,14 @@ impl PaintQuad {
     pub fn corner_radii(self, corner_radii: impl Into<Corners<Pixels>>) -> Self {
         PaintQuad {
             corner_radii: corner_radii.into(),
+            ..self
+        }
+    }
+
+    /// Sets the transform applied at draw time, around the quad's center (device pixels).
+    pub fn transformation(self, transformation: Option<TransformationMatrix>) -> Self {
+        PaintQuad {
+            transformation,
             ..self
         }
     }
@@ -6893,6 +6963,7 @@ pub fn quad(
         border_widths: border_widths.into(),
         border_color: border_color.into_color(),
         border_style,
+        transformation: None,
     }
 }
 
@@ -6905,6 +6976,7 @@ pub fn fill(bounds: impl Into<Bounds<Pixels>>, background: impl Into<Background>
         border_widths: (0.).into(),
         border_color: transparent_black(),
         border_style: BorderStyle::default(),
+        transformation: None,
     }
 }
 
@@ -6921,6 +6993,7 @@ pub fn outline(
         border_widths: (1.).into(),
         border_color: border_color.into_color(),
         border_style,
+        transformation: None,
     }
 }
 

@@ -912,7 +912,9 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn set_document_path(&self, _path: Option<&std::path::Path>) {}
     #[cfg(target_os = "macos")]
     fn set_traffic_light_position(&self, _position: Point<Pixels>) {}
-    fn show_character_palette(&self) {}
+    fn show_character_palette(&self) {
+        log::warn!("show_character_palette is not implemented on this platform");
+    }
     fn titlebar_double_click(&self) {}
     fn on_move_tab_to_new_window(&self, _callback: Box<dyn FnMut()>) {}
     fn on_merge_all_windows(&self, _callback: Box<dyn FnMut()>) {}
@@ -1950,6 +1952,12 @@ pub struct WindowParams {
     /// The titlebar configuration of the window
     #[cfg_attr(feature = "wayland", allow(dead_code))]
     pub titlebar: Option<TitlebarOptions>,
+
+    /// Whether the window should use client or server-side decorations. Platforms that decide the
+    /// decoration mode when creating the window (rather than via `request_decorations`) consult
+    /// this at creation time.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    pub window_decorations: Option<WindowDecorations>,
 
     /// The kind of window to create
     #[cfg_attr(any(target_os = "linux", target_os = "freebsd"), allow(dead_code))]

@@ -212,7 +212,7 @@ impl Interactivity {
             .push(Box::new(move |event, phase, hitbox, window, cx| {
                 if phase == DispatchPhase::Bubble
                     && event.button == button
-                    && hitbox.is_hovered(window)
+                    && hitbox.should_receive_mouse_up(window)
                 {
                     (listener)(event, window, cx)
                 }
@@ -245,7 +245,7 @@ impl Interactivity {
     ) {
         self.mouse_up_listeners
             .push(Box::new(move |event, phase, hitbox, window, cx| {
-                if phase == DispatchPhase::Bubble && hitbox.is_hovered(window) {
+                if phase == DispatchPhase::Bubble && hitbox.should_receive_mouse_up(window) {
                     (listener)(event, window, cx)
                 }
             }));

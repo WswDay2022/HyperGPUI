@@ -1,9 +1,9 @@
 use crate::{
     AbsoluteLength, App, Background, BackgroundTag, BorderStyle, Bounds, ColorExt, ContentMask,
-    Corners, CornersRefinement, CursorStyle, DefiniteLength, DevicePixels, Edges, EdgesRefinement,
-    Font, FontFallbacks, FontFeatures, FontStyle, FontWeight, GridLocation, Length, Pixels, Point,
-    PointRefinement, ScaledPixels, SharedString, Size, SizeRefinement, Styled, TextRun, Window,
-    black, phi, point, px, quad, rems, size,
+    Corners, CornersRefinement, CssTransform, CursorStyle, DefiniteLength, DevicePixels, Edges,
+    EdgesRefinement, Font, FontFallbacks, FontFeatures, FontStyle, FontWeight, GridLocation, Length,
+    Pixels, Point, PointRefinement, ScaledPixels, SharedString, Size, SizeRefinement, Styled,
+    TextRun, Window, black, phi, point, px, quad, rems, size,
 };
 use collections::HashSet;
 use palette::{Hsla, IntoColor, rgb::Rgba};
@@ -292,6 +292,10 @@ pub struct Style {
 
     /// Filters applied to the content rendered behind this element (CSS `backdrop-filter`).
     pub backdrop_filter: Vec<Filter>,
+
+    /// CSS-style transform applied at paint time (GPU only — layout and hit-testing keep the
+    /// untransformed bounds). See [`CssTransform`].
+    pub transform: Option<CssTransform>,
 
     /// The text style of this element
     #[refineable]
@@ -778,6 +782,13 @@ impl Style {
             .to_pixels(rem_size)
             .clamp_radii_for_quad_size(bounds.size);
 
+        // CSS-style transform (paint-time only): the element's own box is drawn through this
+        // matrix around its center. Layout and hit-testing keep the untransformed bounds.
+        let center = bounds.center();
+        let transformation = self.transform.as_ref().map(|transform| {
+            transform.to_matrix(center, window.scale_factor())
+        });
+
         window.paint_drop_shadows(bounds, corner_radii, &self.box_shadow);
 
         // Blur the content behind this element before its (typically translucent) background
@@ -814,7 +825,8 @@ impl Style {
                     Edges::default(),
                     border_color,
                     self.border_style,
-                ));
+                )
+                .transformation(transformation));
             }
 
             window.paint_inset_shadows(bounds, corner_radii, &self.box_shadow);
@@ -832,7 +844,8 @@ impl Style {
                     border_widths,
                     self.border_color.unwrap_or_default(),
                     self.border_style,
-                ));
+                )
+                .transformation(transformation));
             }
         };
 
@@ -896,6 +909,7 @@ impl Default for Style {
             box_shadow: Default::default(),
             filter: Default::default(),
             backdrop_filter: Default::default(),
+            transform: None,
             text: TextStyleRefinement::default(),
             mouse_cursor: None,
             opacity: None,

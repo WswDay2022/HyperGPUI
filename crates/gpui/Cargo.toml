@@ -34,6 +34,10 @@ screen-capture = ["scap"]
 windows-manifest = ["dep:embed-resource"]
 input-latency-histogram = ["dep:hdrhistogram"]
 profiler = []
+# Route the example/test platform backend through wgpu (WGSL) instead of the native
+# (HLSL/Metal) renderer. Windows defaults to the DirectX/HLSL backend; enabling this
+# feature is how examples and tests exercise the wgpu/WGSL path on Windows.
+wgpu = ["gpui_platform/wgpu"]
 
 [lib]
 name = "gpui"
@@ -223,6 +227,26 @@ path = "examples/learn/blur.rs"
 [[example]]
 name = "keyring"
 path = "examples/learn/keyring.rs"
+
+[[example]]
+name = "counter"
+path = "examples/learn/counter.rs"
+
+[[example]]
+name = "borderless-resizeable-window"
+path = "examples/learn/borderless_resizeable_window.rs"
+
+[[example]]
+name = "blur-test"
+path = "examples/learn/blur_test.rs"
+
+[[example]]
+name = "button-feedback"
+path = "examples/learn/button_feedback.rs"
+
+[[example]]
+name = "css-transform"
+path = "examples/learn/css_transform.rs"
 
 # ============================================================================
 # Bench Examples - Performance benchmarks

@@ -194,6 +194,9 @@ struct DirectXRenderPipelines {
 struct DirectXGlobalElements {
     global_params_buffer: Option<ID3D11Buffer>,
     sampler: Option<ID3D11SamplerState>,
+    /// Clamp-addressed sampler used by the blur passes: gaussian taps may leave the texture at
+    /// the window edges, and must clamp like CSS rather than wrap around to the far side.
+    blur_sampler: Option<ID3D11SamplerState>,
 }
 
 struct Annotation<'a>(&'a ID3DUserDefinedAnnotation);
@@ -466,7 +469,7 @@ impl DirectXRenderer {
                 }
                 ctx.OMSetRenderTargets(Some(slice::from_ref(&scene_rtv)), None);
             }
-            self.active_render_target = scene_rtv.clone();
+            self.active_render_target = scene_rtv;
         } else {
             self.active_render_target = swapchain_rtv.clone();
         }
@@ -1003,7 +1006,9 @@ impl DirectXRenderer {
             ctx.PSSetConstantBuffers(0, Some(slice::from_ref(&self.globals.global_params_buffer)));
             ctx.VSSetConstantBuffers(1, Some(&blur_params));
             ctx.PSSetConstantBuffers(1, Some(&blur_params));
-            ctx.PSSetSamplers(0, Some(slice::from_ref(&self.globals.sampler)));
+            // Blur passes sample with a clamp sampler: gaussian taps that leave the texture at
+            // the window edge must not wrap around to the opposite side.
+            ctx.PSSetSamplers(0, Some(slice::from_ref(&self.globals.blur_sampler)));
             ctx.PSSetShaderResources(0, Some(slice::from_ref(source_srv)));
             ctx.OMSetBlendState(blend, None, 0xFFFFFFFF);
             ctx.DrawInstanced(vertex_count, 1, 0, 0);
@@ -1455,9 +1460,30 @@ impl DirectXGlobalElements {
             output
         };
 
+        let blur_sampler = unsafe {
+            let desc = D3D11_SAMPLER_DESC {
+                Filter: D3D11_FILTER_MIN_MAG_MIP_LINEAR,
+                // Gaussian taps may leave the texture at the window edges; clamp them so the
+                // blur fades out like CSS instead of wrapping around to the far edge.
+                AddressU: D3D11_TEXTURE_ADDRESS_CLAMP,
+                AddressV: D3D11_TEXTURE_ADDRESS_CLAMP,
+                AddressW: D3D11_TEXTURE_ADDRESS_CLAMP,
+                MipLODBias: 0.0,
+                MaxAnisotropy: 1,
+                ComparisonFunc: D3D11_COMPARISON_ALWAYS,
+                BorderColor: [0.0; 4],
+                MinLOD: 0.0,
+                MaxLOD: D3D11_FLOAT32_MAX,
+            };
+            let mut output = None;
+            device.CreateSamplerState(&desc, Some(&mut output))?;
+            output
+        };
+
         Ok(Self {
             global_params_buffer,
             sampler,
+            blur_sampler,
         })
     }
 }
@@ -2594,5 +2620,275 @@ mod dxgi {
             (number >> 16) & 0xFFFF,
             number & 0xFFFF
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // NOTE: do NOT use `use super::*;` here — the top-level module glob-imports
+    // `gpui::*`, and gpui re-exports a macro named `test` (gpui.rs: `pub use
+    // gpui_macros::{..., test, ...}`). That glob chain shadows the built-in
+    // `#[test]` attribute and blows up `#[test]` expansion with an infinite
+    // recursion. Import only what this module needs, explicitly.
+    use super::{create_blend_state, update_buffer, GlobalParams, PipelineState, RENDER_TARGET_FORMAT};
+    use crate::directx_renderer::shader_resources::ShaderModule;
+    use anyhow::Result;
+    use gpui::{bounds, point, rgba, size, Background, ContentMask, Quad, ScaledPixels};
+    use std::slice;
+    use windows::core::Interface;
+    use windows::Win32::{
+        Foundation::HMODULE,
+        Graphics::{
+            Direct3D::D3D_DRIVER_TYPE_WARP,
+            Direct3D11::{
+                D3D11CreateDevice, D3D11_BIND_CONSTANT_BUFFER, D3D11_BIND_RENDER_TARGET,
+                D3D11_CPU_ACCESS_READ, D3D11_CPU_ACCESS_WRITE,
+                D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_CREATE_DEVICE_DEBUG, D3D11_MAP_READ,
+                D3D11_MAPPED_SUBRESOURCE, D3D11_MESSAGE, D3D11_SDK_VERSION,
+                D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, D3D11_USAGE_DYNAMIC,
+                D3D11_USAGE_STAGING, D3D11_VIEWPORT, ID3D11Device, ID3D11DeviceContext,
+                ID3D11InfoQueue, ID3D11RenderTargetView, ID3D11Texture2D,
+                D3D11_BUFFER_DESC,
+            },
+            Dxgi::Common::DXGI_SAMPLE_DESC,
+        },
+    };
+
+    const TEST_SIZE: u32 = 64;
+
+    fn create_warp_device() -> Option<(ID3D11Device, ID3D11DeviceContext)> {
+        unsafe {
+            let mut device: Option<ID3D11Device> = None;
+            let mut device_context: Option<ID3D11DeviceContext> = None;
+            // Prefer the debug layer so GPU-side errors (which WARP reports as device
+            // removal, 0x887A0005) surface with their real message via the info queue.
+            let mut result = D3D11CreateDevice(
+                None,
+                D3D_DRIVER_TYPE_WARP,
+                HMODULE::default(),
+                D3D11_CREATE_DEVICE_DEBUG | D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                None,
+                D3D11_SDK_VERSION,
+                Some(&mut device),
+                None,
+                Some(&mut device_context),
+            );
+            if result.is_err() {
+                // Debug layer not installed (Windows feature "Graphics Tools"); retry
+                // without it.
+                device = None;
+                device_context = None;
+                result = D3D11CreateDevice(
+                    None,
+                    D3D_DRIVER_TYPE_WARP,
+                    HMODULE::default(),
+                    D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                    None,
+                    D3D11_SDK_VERSION,
+                    Some(&mut device),
+                    None,
+                    Some(&mut device_context),
+                );
+            }
+            result.ok()?;
+            Some((device?, device_context?))
+        }
+    }
+
+    /// Dumps every stored debug-layer message (errors + warnings) to stderr and clears the
+    /// queue. WARP + debug layer describe the exact failure that caused a device removal.
+    fn dump_device_errors(device: &ID3D11Device) {
+        unsafe {
+            match device.GetDeviceRemovedReason() {
+                Ok(()) => eprintln!("[quad_offscreen] GetDeviceRemovedReason: S_OK"),
+                Err(e) => eprintln!(
+                    "[quad_offscreen] GetDeviceRemovedReason: {:#010X} ({})",
+                    e.code().0,
+                    e.message()
+                ),
+            }
+            let Ok(queue) = device.cast::<ID3D11InfoQueue>() else {
+                eprintln!("[quad_offscreen] no info queue (debug layer not present)");
+                return;
+            };
+            let count = queue.GetNumStoredMessages();
+            if count == 0 {
+                eprintln!("[quad_offscreen] info queue empty");
+                return;
+            }
+            for i in 0..count {
+                let mut len: usize = 0;
+                let _ = queue.GetMessage(i, None, &mut len);
+                let mut buf = vec![0u8; len];
+                let msg = buf.as_mut_ptr() as *mut D3D11_MESSAGE;
+                if queue.GetMessage(i, Some(msg), &mut len).is_ok() {
+                    let m = &*msg;
+                    let desc =
+                        std::ffi::CStr::from_ptr(m.pDescription as *const i8).to_string_lossy();
+                    eprintln!(
+                        "[quad_offscreen] D3D11 msg {i} (severity {:#X}): {desc}",
+                        m.Severity.0
+                    );
+                }
+            }
+            queue.ClearStoredMessages();
+        }
+    }
+
+    fn make_render_target(
+        device: &ID3D11Device,
+    ) -> Result<(ID3D11Texture2D, ID3D11RenderTargetView, ID3D11Texture2D)> {
+        let desc = D3D11_TEXTURE2D_DESC {
+            Width: TEST_SIZE,
+            Height: TEST_SIZE,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: RENDER_TARGET_FORMAT,
+            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+            Usage: D3D11_USAGE_DEFAULT,
+            BindFlags: D3D11_BIND_RENDER_TARGET.0 as u32,
+            CPUAccessFlags: 0,
+            MiscFlags: 0,
+        };
+        let mut texture = None;
+        unsafe { device.CreateTexture2D(&desc, None, Some(&mut texture)) }?;
+        let texture = texture.unwrap();
+
+        let mut rtv = None;
+        unsafe { device.CreateRenderTargetView(&texture, None, Some(&mut rtv)) }?;
+        let rtv = rtv.unwrap();
+
+        let staging_desc = D3D11_TEXTURE2D_DESC {
+            Usage: D3D11_USAGE_STAGING,
+            CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
+            BindFlags: 0,
+            ..desc
+        };
+        let mut staging = None;
+        unsafe { device.CreateTexture2D(&staging_desc, None, Some(&mut staging)) }?;
+        Ok((texture, rtv, staging.unwrap()))
+    }
+
+    fn read_pixel(
+        context: &ID3D11DeviceContext,
+        texture: &ID3D11Texture2D,
+        staging: &ID3D11Texture2D,
+        x: u32,
+        y: u32,
+    ) -> Result<[u8; 4]> {
+        unsafe {
+            // Both parameters are already `&ID3D11Texture2D`; pass them by value
+            // (windows 0.62 `Param<T> for &U` — `&` here would be a double reference).
+            context.CopyResource(staging, texture);
+            context.Flush();
+            let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+            context
+                .Map(staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
+                .map_err(|e| anyhow::anyhow!("Map(staging) failed: {e}"))?;
+            let row = (y as usize) * mapped.RowPitch as usize;
+            let px = [
+                *(mapped.pData as *const u8).add(row + x as usize * 4),
+                *(mapped.pData as *const u8).add(row + x as usize * 4 + 1),
+                *(mapped.pData as *const u8).add(row + x as usize * 4 + 2),
+                *(mapped.pData as *const u8).add(row + x as usize * 4 + 3),
+            ];
+            context.Unmap(staging, 0);
+            Ok(px)
+        }
+    }
+
+    /// Renders one solid quad through the real `quad_vertex`/`quad_fragment` shaders onto an
+    /// offscreen render target and reads the pixels back. If the quad pipeline fails to rasterize
+    /// anything (the "no rectangles" symptom on the DirectX backend), the center pixel assertion
+    /// fails here, separating "shader/pipeline broken" from "scene upload broken".
+    #[test]
+    fn hlsl_quad_offscreen_readback() -> Result<()> {
+        let Some((device, context)) = create_warp_device() else {
+            eprintln!("[quad_offscreen] WARP device unavailable, skipping");
+            return Ok(());
+        };
+        let (texture, rtv, staging) = make_render_target(&device)?;
+
+        let globals = GlobalParams {
+            gamma_ratios: [1.0, 1.0, 1.0, 1.0],
+            viewport_size: [TEST_SIZE as f32, TEST_SIZE as f32],
+            grayscale_enhanced_contrast: 0.0,
+            subpixel_enhanced_contrast: 0.0,
+            is_bgr: 0,
+            _pad: [0; 3],
+        };
+        // Must be a real constant buffer: `create_buffer` makes a structured SRV (bound as
+        // cbuffer → debug-layer error, device removal on WARP). Mirror the main renderer's
+        // `DirectXGlobalElements::new`.
+        let globals_buffer = unsafe {
+            let desc = D3D11_BUFFER_DESC {
+                ByteWidth: std::mem::size_of::<GlobalParams>() as u32,
+                Usage: D3D11_USAGE_DYNAMIC,
+                BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
+                CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
+                ..Default::default()
+            };
+            let mut buffer = None;
+            device.CreateBuffer(&desc, None, Some(&mut buffer))?;
+            buffer.unwrap()
+        };
+        update_buffer(&context, &globals_buffer, &[globals])?;
+
+        let blend = create_blend_state(&device)?;
+        let mut pipeline = PipelineState::<Quad>::new(&device, "test_quad", ShaderModule::Quad, 4, blend)?;
+
+        // Solid red quad covering [8,8]-[56,56] of the 64x64 viewport, identity transform.
+        let quad = Quad {
+            bounds: bounds(
+                point(ScaledPixels(8.0), ScaledPixels(8.0)),
+                size(ScaledPixels(48.0), ScaledPixels(48.0)),
+            ),
+            content_mask: ContentMask {
+                bounds: bounds(
+                    point(ScaledPixels(0.0), ScaledPixels(0.0)),
+                    size(ScaledPixels(64.0), ScaledPixels(64.0)),
+                ),
+            },
+            background: Background::from(rgba(0xff0000ff)),
+            ..Default::default()
+        };
+        pipeline.update_buffer(&device, &context, &[quad])?;
+
+        let viewport = D3D11_VIEWPORT {
+            TopLeftX: 0.0,
+            TopLeftY: 0.0,
+            Width: TEST_SIZE as f32,
+            Height: TEST_SIZE as f32,
+            MinDepth: 0.0,
+            MaxDepth: 1.0,
+        };
+        // Opaque purple background so any quad pixel is distinguishable from the clear color.
+        // ClearRenderTargetView takes RGBA float order; the B8G8R8A8 target stores memory in
+        // B,G,R,A order, so R=0.5 ends up in the B byte and vice versa.
+        let bg = [0.25, 0.125, 0.5, 1.0];
+        unsafe {
+            context.ClearRenderTargetView(&rtv, &bg);
+            context.OMSetRenderTargets(Some(slice::from_ref(&Some(rtv))), None);
+        }
+        pipeline.draw_range(&device, &context, &[viewport], &[Some(globals_buffer)], 4, 0, 1)?;
+        // If the draw killed the device (the "no rectangles" symptom), the debug layer
+        // tells us exactly why — dump before touching the render target again.
+        dump_device_errors(&device);
+
+        let center = read_pixel(&context, &texture, &staging, 32, 32)
+            .expect("readback of center pixel failed");
+        assert_eq!(
+            center,
+            [0, 0, 255, 255],
+            "center pixel should be solid red (B,G,R,A), got {center:?}"
+        );
+        let corner = read_pixel(&context, &texture, &staging, 2, 2)
+            .expect("readback of corner pixel failed");
+        assert_eq!(
+            corner,
+            [128, 32, 64, 255],
+            "corner pixel should be the clear color (B,G,R,A), got {corner:?}"
+        );
+        Ok(())
     }
 }
