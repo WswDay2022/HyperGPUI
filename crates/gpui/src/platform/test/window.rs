@@ -98,6 +98,7 @@ impl TestWindow {
             appearance_change_callback: None,
             input_handler: None,
             is_fullscreen: false,
+            is_maximized: false,
             appearance: WindowAppearance::Light,
             external_drag_files: Vec::new(),
             start_external_drag_result: false,

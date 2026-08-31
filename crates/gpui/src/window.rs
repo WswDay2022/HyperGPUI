@@ -7123,7 +7123,7 @@ mod tests {
         // cascading from it would pin the new window to the screen edge.
         // The placement must come from the display default instead, while
         // the new window still opens maximized.
-        let window_a: AnyWindowHandle = cx
+        let _window_a: AnyWindowHandle = cx
             .update(|cx| {
                 cx.open_window(
                     WindowOptions {
@@ -7163,7 +7163,7 @@ mod tests {
     fn test_default_bounds_falls_back_to_other_windows(cx: &mut TestAppContext) {
         // A window with a small explicit rect: the cascade source that the
         // fallback scan below is expected to find.
-        let window_a: AnyWindowHandle = cx
+        let _window_a: AnyWindowHandle = cx
             .update(|cx| {
                 cx.open_window(
                     WindowOptions {
