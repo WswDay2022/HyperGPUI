@@ -21,7 +21,10 @@ pub use conditional::*;
 #[cfg(any(feature = "inspector", debug_assertions))]
 mod conditional {
     use super::*;
-    use crate::{AnyElement, App, Context, Empty, IntoElement, Render, Window};
+    use crate::{
+        AnyElement, App, Context, DivInspectorState, FontWeight, InteractiveElement, IntoElement,
+        ParentElement, Render, StatefulInteractiveElement, Styled, Window, div, px, rgb,
+    };
     use collections::{FxHashMap, TypeIdHashMap};
     use std::any::{Any, TypeId};
 
@@ -193,9 +196,112 @@ mod conditional {
                 cx.inspector_renderer = Some(inspector_renderer);
                 result
             } else {
-                Empty.into_any_element()
+                default_inspector_panel(self, window, cx)
             }
         }
+    }
+
+    /// The default inspector panel, shown when no custom [`InspectorRenderer`] has been installed.
+    /// It provides a picking toggle and renders the registered inspector states of the currently
+    /// selected element.
+    fn default_inspector_panel(
+        inspector: &mut Inspector,
+        window: &mut Window,
+        cx: &mut Context<Inspector>,
+    ) -> AnyElement {
+        let is_picking = inspector.is_picking();
+        let active_element = inspector.active_element_id().cloned();
+        let state_elements = inspector.render_inspector_states(window, cx);
+
+        div()
+            .id("inspector")
+            .size_full()
+            .flex()
+            .flex_col()
+            .bg(rgb(0x161616))
+            .child(
+                div()
+                    .id("inspector-header")
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .px(px(8.0))
+                    .py(px(4.0))
+                    .child(
+                        div()
+                            .text_size(px(13.0))
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(rgb(0xffffff))
+                            .child("Inspector"),
+                    )
+                    .child(
+                        div()
+                            .id("inspector-pick-toggle")
+                            .px(px(4.0))
+                            .py(px(2.0))
+                            .rounded(px(4.0))
+                            .bg(if is_picking { rgb(0x3b82f6) } else { rgb(0x2a2a2a) })
+                            .text_size(px(11.0))
+                            .text_color(rgb(0xffffff))
+                            .cursor_pointer()
+                            .on_click(cx.listener(|this, _event, window, _cx| {
+                                if !this.is_picking() {
+                                    this.start_picking();
+                                    window.refresh();
+                                }
+                            }))
+                            .child(if is_picking { "Picking…" } else { "Pick element" }),
+                    ),
+            )
+            .child(
+                div()
+                    .id("inspector-body")
+                    .flex_1()
+                    .flex()
+                    .flex_col()
+                    .overflow_y_scroll()
+                    .child(
+                        div()
+                            .id("inspector-element-info")
+                            .p(px(8.0))
+                            .flex()
+                            .flex_col()
+                            .gap(px(4.0))
+                            .text_size(px(11.0))
+                            .text_color(rgb(0xcccccc))
+                            .child(match active_element {
+                                Some(id) => div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(4.0))
+                                    .child(format!("element: {}", id.path.global_id))
+                                    .child(format!("at {}", id.path.source_location)),
+                                None => div().child("No element selected"),
+                            }),
+                    )
+                    .children(state_elements),
+            )
+            .into_any_element()
+    }
+
+    /// Default renderer for [`DivInspectorState`]: displays the inspected element's computed
+    /// bounds and content size.
+    fn default_div_inspector_state_renderer(
+        _id: InspectorElementId,
+        state: &DivInspectorState,
+        _window: &mut Window,
+        _cx: &mut App,
+    ) -> impl IntoElement {
+        div()
+            .id("inspector-div-state")
+            .p(px(8.0))
+            .flex()
+            .flex_col()
+            .gap(px(4.0))
+            .text_size(px(11.0))
+            .text_color(rgb(0xcccccc))
+            .child(format!("bounds: {:?}", state.bounds))
+            .child(format!("content size: {:?}", state.content_size))
     }
 
     #[derive(Default)]
@@ -218,6 +324,50 @@ mod conditional {
                     f(id, value, window, cx).into_any_element()
                 }),
             );
+        }
+
+        /// Registers the default [`DivInspectorState`] renderer, unless a custom renderer for that
+        /// state type has already been registered.
+        pub(crate) fn register_default_div_state_renderer(&mut self) {
+            self.renderers_by_type_id
+                .entry(TypeId::of::<DivInspectorState>())
+                .or_insert_with(|| {
+                    Box::new(|id, value, window, cx| {
+                        let state = value.downcast_ref::<DivInspectorState>().unwrap();
+                        default_div_inspector_state_renderer(id, state, window, cx)
+                            .into_any_element()
+                    })
+                });
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use crate::{AppContext, Empty, TestAppContext};
+
+        #[test]
+        fn default_inspector_panel_renders() {
+            let mut test_app = TestAppContext::single();
+            let window = test_app.add_window(|_, _| Empty);
+            let any_window = window.into();
+
+            test_app
+                .update_window(any_window, |_, window, cx| {
+                    window.toggle_inspector(cx);
+                    // Opening the inspector starts element picking immediately.
+                    assert!(window.is_inspector_picking(cx));
+                    window.draw(cx).clear(cx);
+                })
+                .unwrap();
+            test_app.run_until_parked();
+
+            // The inspector keeps its default panel across frames.
+            test_app
+                .update_window(any_window, |_, window, cx| {
+                    window.draw(cx).clear(cx);
+                })
+                .unwrap();
+            test_app.run_until_parked();
         }
     }
 }

@@ -2019,19 +2019,30 @@ impl WgpuRenderer {
         let blur_width = (full_w / 2).max(1) as f32;
         let blur_height = (full_h / 2).max(1) as f32;
 
-        // Limit the half-res passes to the element bounds dilated by the kernel radius (3·sigma,
-        // full-res) — outside that the composite never samples, so there's no reason to blur it.
-        let dilation = 3.0 * blur_radius;
+        // The composite covers `bounds` (backdrop) or `bounds` dilated by the kernel reach
+        // (content blur bleeds past the box like CSS `filter: blur`). The gaussian reads up to
+        // one kernel reach beyond every pixel it computes, so the scissored passes must carry
+        // an extra kernel reach of valid data around the composite region — otherwise taps near
+        // the scissor edge read stale texels and paint a contaminated band along the border.
+        let kernel_reach = 3.0 * blur_radius; // 3σ at half resolution, in full-res pixels
+        let composite_dilation = if clip_rounded { 0.0 } else { kernel_reach };
+        let scissor_dilation = composite_dilation + kernel_reach;
         let hw = (full_w / 2).max(1);
         let hh = (full_h / 2).max(1);
-        let x0 = (((bounds.origin.x.0 - dilation) * 0.5).floor().max(0.0) as u32).min(hw);
-        let y0 = (((bounds.origin.y.0 - dilation) * 0.5).floor().max(0.0) as u32).min(hh);
-        let x1 = ((((bounds.origin.x.0 + bounds.size.width.0 + dilation) * 0.5)
+        let x0 = (((bounds.origin.x.0 - scissor_dilation) * 0.5)
+            .floor()
+            .max(0.0) as u32)
+            .min(hw);
+        let y0 = (((bounds.origin.y.0 - scissor_dilation) * 0.5)
+            .floor()
+            .max(0.0) as u32)
+            .min(hh);
+        let x1 = ((((bounds.origin.x.0 + bounds.size.width.0 + scissor_dilation) * 0.5)
             .ceil()
             .max(0.0) as u32)
             .min(hw))
         .max(x0);
-        let y1 = ((((bounds.origin.y.0 + bounds.size.height.0 + dilation) * 0.5)
+        let y1 = ((((bounds.origin.y.0 + bounds.size.height.0 + scissor_dilation) * 0.5)
             .ceil()
             .max(0.0) as u32)
             .min(hh))
@@ -2104,7 +2115,7 @@ impl WgpuRenderer {
         let composite_bounds = if clip_rounded {
             bounds
         } else {
-            bounds.dilate(ScaledPixels(dilation))
+            bounds.dilate(ScaledPixels(composite_dilation))
         };
         let params = BlurParams {
             bounds: composite_bounds.into(),

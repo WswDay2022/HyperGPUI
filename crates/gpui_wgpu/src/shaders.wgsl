@@ -525,6 +525,9 @@ struct Quad {
     border_color: Hsla,
     corner_radii: Corners,
     border_widths: Edges,
+    // Must match the Rust `scene::Quad` layout (184 bytes, repr(C)):
+    // `transformation` sits at byte offset 160 (mat2x2<f32> aligns to 8).
+    transformation: TransformationMatrix,
 }
 @group(1) @binding(0) var<storage, read> b_quads: array<Quad>;
 
@@ -537,6 +540,9 @@ struct QuadVarying {
     @location(3) @interpolate(flat) background_solid: vec4<f32>,
     @location(4) @interpolate(flat) background_color0: vec4<f32>,
     @location(5) @interpolate(flat) background_color1: vec4<f32>,
+    // Position in the quad's untransformed (local) coordinate space, used by the fragment
+    // shader for the SDF/gradient so transforms don't distort corners or borders.
+    @location(6) local_position: vec2<f32>,
 }
 
 @vertex
@@ -545,7 +551,11 @@ fn vs_quad(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index) insta
     let quad = b_quads[instance_id];
 
     var out = QuadVarying();
-    out.position = to_device_position(unit_vertex, quad.bounds);
+    let local_position = unit_vertex * vec2<f32>(quad.bounds.size) + quad.bounds.origin;
+    // Apply the transform around the quad's center, matching `CssTransform::to_matrix` on the
+    // Rust side. The Rust side stores the matrix row-major, so transpose to column-major first.
+    out.position = to_device_position_transformed(unit_vertex, quad.bounds, quad.transformation);
+    out.local_position = local_position;
 
     let gradient = prepare_gradient_color(
         quad.background.tag,
@@ -558,7 +568,7 @@ fn vs_quad(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index) insta
     out.background_color1 = gradient.color1;
     out.border_color = hsla_to_rgba(quad.border_color);
     out.quad_id = instance_id;
-    out.clip_distances = distance_from_clip_rect(unit_vertex, quad.bounds, quad.content_mask);
+    out.clip_distances = distance_from_clip_rect_transformed(unit_vertex, quad.bounds, quad.content_mask, quad.transformation);
     return out;
 }
 
@@ -571,7 +581,7 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
 
     let quad = b_quads[input.quad_id];
 
-    let background_color = gradient_color(quad.background, input.position.xy, quad.bounds,
+    let background_color = gradient_color(quad.background, input.local_position, quad.bounds,
         input.background_solid, input.background_color0, input.background_color1);
 
     let unrounded = quad.corner_radii.top_left == 0.0 &&
@@ -590,7 +600,7 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
 
     let size = quad.bounds.size;
     let half_size = size / 2.0;
-    let point = input.position.xy - quad.bounds.origin;
+    let point = input.local_position - quad.bounds.origin;
     let center_to_point = point - half_size;
 
     // Signed distance field threshold for inclusion of pixels. 0.5 is the

@@ -1,8 +1,8 @@
 use crate::{
-    self as gpui, AbsoluteLength, AlignContent, AlignItems, AlignSelf, BorderStyle, CursorStyle,
-    DefiniteLength, Display, Fill, Filter, FlexDirection, FlexWrap, Font, FontFeatures, FontStyle,
-    FontWeight, GridPlacement, GridTemplate, GridTemplateMinSize, JustifyContent, Length, Pixels,
-    SharedString, StrikethroughStyle, StyleRefinement, TextAlign, TextOverflow,
+    self as gpui, AbsoluteLength, AlignContent, AlignItems, AlignSelf, BorderStyle, CssTransform,
+    CursorStyle, DefiniteLength, Display, Fill, Filter, FlexDirection, FlexWrap, Font, FontFeatures,
+    FontStyle, FontWeight, GridPlacement, GridTemplate, GridTemplateMinSize, JustifyContent, Length,
+    Pixels, SharedString, StrikethroughStyle, StyleRefinement, TextAlign, TextOverflow,
     TextStyleRefinement, TextTransform, UnderlineStyle, WhiteSpace, px, relative, rems,
 };
 pub use gpui_macros::{
@@ -78,6 +78,22 @@ pub trait Styled: Sized {
     /// convenience setters such as [`Styled::backdrop_blur`].
     fn backdrop_filter(mut self, filters: impl Into<Vec<Filter>>) -> Self {
         self.style().backdrop_filter = Some(filters.into());
+        self
+    }
+
+    /// Applies a CSS-style transform to this element, like CSS `transform`.
+    ///
+    /// The transform affects painting only: layout and hit-testing keep using the element's
+    /// untransformed bounds (matching CSS semantics, where transforms don't affect layout).
+    /// Currently the transform is applied to the element's own background and border quads;
+    /// drop shadows and child elements are not transformed yet.
+    ///
+    /// ```
+    /// # use gpui::*;
+    /// div().transform(CssTransform::identity().translateX(px(10.)).scale(1.5, 1.5))
+    /// ```
+    fn transform(mut self, transform: impl Into<CssTransform>) -> Self {
+        self.style().transform = Some(transform.into());
         self
     }
 
@@ -560,6 +576,12 @@ pub trait Styled: Sized {
         Self: Sized,
     {
         self.style().background = Some(fill.into());
+        self
+    }
+
+    /// Sets the transparent background of the element.
+    fn transparent_background(mut self) -> Self {
+        self.style().background = None;
         self
     }
 

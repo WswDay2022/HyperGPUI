@@ -52,6 +52,9 @@ struct QuadVertexOutput {
   float4 background_color0 [[flat]];
   float4 background_color1 [[flat]];
   float clip_distance [[clip_distance]][4];
+  // Position in the quad's untransformed (local) coordinate space, used by the fragment
+  // shader for the SDF/gradient so transforms don't distort corners or borders.
+  float2 local_position;
 };
 
 struct QuadFragmentInput {
@@ -61,6 +64,7 @@ struct QuadFragmentInput {
   float4 background_solid [[flat]];
   float4 background_color0 [[flat]];
   float4 background_color1 [[flat]];
+  float2 local_position;
 };
 
 vertex QuadVertexOutput quad_vertex(uint unit_vertex_id [[vertex_id]],
@@ -73,10 +77,12 @@ vertex QuadVertexOutput quad_vertex(uint unit_vertex_id [[vertex_id]],
                                     [[buffer(QuadInputIndex_ViewportSize)]]) {
   float2 unit_vertex = unit_vertices[unit_vertex_id];
   Quad quad = quads[quad_id];
+  float2 local_position = unit_vertex * float2(quad.bounds.size.width, quad.bounds.size.height) +
+      float2(quad.bounds.origin.x, quad.bounds.origin.y);
   float4 device_position =
-      to_device_position(unit_vertex, quad.bounds, viewport_size);
-  float4 clip_distance = distance_from_clip_rect(unit_vertex, quad.bounds,
-                                                 quad.content_mask.bounds);
+      to_device_position_transformed(unit_vertex, quad.bounds, quad.transformation, viewport_size);
+  float4 clip_distance = distance_from_clip_rect_transformed(unit_vertex, quad.bounds,
+                                                 quad.content_mask.bounds, quad.transformation);
   float4 border_color = hsla_to_rgba(quad.border_color);
 
   GradientColor gradient = prepare_fill_color(
@@ -94,14 +100,15 @@ vertex QuadVertexOutput quad_vertex(uint unit_vertex_id [[vertex_id]],
       gradient.solid,
       gradient.color0,
       gradient.color1,
-      {clip_distance.x, clip_distance.y, clip_distance.z, clip_distance.w}};
+      {clip_distance.x, clip_distance.y, clip_distance.z, clip_distance.w},
+      local_position};
 }
 
 fragment float4 quad_fragment(QuadFragmentInput input [[stage_in]],
                               constant Quad *quads
                               [[buffer(QuadInputIndex_Quads)]]) {
   Quad quad = quads[input.quad_id];
-  float4 background_color = fill_color(quad.background, input.position.xy, quad.bounds,
+  float4 background_color = fill_color(quad.background, input.local_position, quad.bounds,
     input.background_solid, input.background_color0, input.background_color1);
 
   bool unrounded = quad.corner_radii.top_left == 0.0 &&
@@ -120,7 +127,7 @@ fragment float4 quad_fragment(QuadFragmentInput input [[stage_in]],
 
   float2 size = float2(quad.bounds.size.width, quad.bounds.size.height);
   float2 half_size = size / 2.0;
-  float2 point = input.position.xy - float2(quad.bounds.origin.x, quad.bounds.origin.y);
+  float2 point = input.local_position - float2(quad.bounds.origin.x, quad.bounds.origin.y);
   float2 center_to_point = point - half_size;
 
   // Signed distance field threshold for inclusion of pixels. 0.5 is the

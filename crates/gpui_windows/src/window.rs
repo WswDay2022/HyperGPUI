@@ -487,11 +487,18 @@ impl WindowsWindow {
         } else {
             None
         };
-        let hide_title_bar = params
-            .titlebar
-            .as_ref()
-            .map(|titlebar| titlebar.appears_transparent)
-            .unwrap_or(true);
+        // A window with client-side decorations draws its own chrome, so the system frame is
+        // suppressed. When decorations are unspecified, fall back to the historical behavior of
+        // keying the frame off `TitlebarOptions::appears_transparent`.
+        let hide_title_bar = match params.window_decorations {
+            Some(WindowDecorations::Client) => true,
+            Some(WindowDecorations::Server) => false,
+            None => params
+                .titlebar
+                .as_ref()
+                .map(|titlebar| titlebar.appears_transparent)
+                .unwrap_or(true),
+        };
         let window_name = HSTRING::from(
             params
                 .titlebar
@@ -503,6 +510,12 @@ impl WindowsWindow {
 
         let (mut dwexstyle, dwstyle) = if params.kind == WindowKind::PopUp {
             (WS_EX_TOOLWINDOW | WS_EX_TOPMOST, WINDOW_STYLE(0x0))
+        } else if hide_title_bar {
+            // Frameless windows draw their own chrome. A plain popup has no system frame, no
+            // title bar and no resize border; moving, resizing and window controls are handled
+            // by the application (see `start_window_move`, `start_window_resize` and
+            // `WindowControlArea`).
+            (WS_EX_APPWINDOW, WS_POPUP)
         } else {
             let mut dwstyle = WS_SYSMENU;
 
@@ -942,6 +955,18 @@ impl PlatformWindow for WindowsWindow {
             .ok();
     }
 
+    fn show_character_palette(&self) {
+        // Windows has no native character palette; open the classic Character
+        // Map application as the closest platform equivalent.
+        self.executor
+            .spawn(async move {
+                open_target("charmap.exe")
+                    .with_context(|| "Opening character map")
+                    .log_err();
+            })
+            .detach();
+    }
+
     fn set_background_appearance(&self, background_appearance: WindowBackgroundAppearance) {
         self.state.background_appearance.set(background_appearance);
         let hwnd = self.0.hwnd;
@@ -1031,6 +1056,31 @@ impl PlatformWindow for WindowsWindow {
                 WM_NCLBUTTONDOWN,
                 WPARAM(HTCAPTION as usize),
                 LPARAM(&points as *const _ as isize),
+            )
+        };
+    }
+
+    fn start_window_resize(&self, edge: ResizeEdge) {
+        // Hand the resize to the system sizing loop via `SC_SIZE`: `DefWindowProc` runs the
+        // standard modal resize loop, which works for borderless windows and keeps the usual
+        // live preview. `WM_SYSCOMMAND` bypasses the non-client mouse handling, so the posted
+        // message is delivered to the default window procedure directly.
+        self.state.dragging.set(true);
+
+        let cursor_pos = {
+            let mut pos = unsafe { std::mem::zeroed() };
+            let _ = unsafe { GetCursorPos(&mut pos) };
+            pos
+        };
+        let lparam = LPARAM(((cursor_pos.x as u32) | ((cursor_pos.y as u32) << 16)) as isize);
+
+        let _ = unsafe { ReleaseCapture() };
+        let _ = unsafe {
+            PostMessageW(
+                Some(self.0.hwnd),
+                WM_SYSCOMMAND,
+                WPARAM((SC_SIZE | resize_edge_to_size_command(edge)) as usize),
+                lparam,
             )
         };
     }
@@ -1755,11 +1805,40 @@ fn set_non_rude_hwnd(hwnd: HWND, non_rude: bool) {
     }
 }
 
+/// Maps a [`ResizeEdge`] to the `WM_SYSCOMMAND` `SC_SIZE` arrow code that resizes the window
+/// from that edge or corner. The arrow codes are the same values used by keyboard-driven sizing
+/// (VK_LEFT=1, VK_RIGHT=2, VK_UP=3, VK_UPLEFT=4, VK_UPRIGHT=5, VK_DOWN=6, VK_DOWNLEFT=7,
+/// VK_DOWNRIGHT=8).
+fn resize_edge_to_size_command(edge: ResizeEdge) -> u32 {
+    match edge {
+        ResizeEdge::Top => 3,
+        ResizeEdge::TopRight => 5,
+        ResizeEdge::Right => 2,
+        ResizeEdge::BottomRight => 8,
+        ResizeEdge::Bottom => 6,
+        ResizeEdge::BottomLeft => 7,
+        ResizeEdge::Left => 1,
+        ResizeEdge::TopLeft => 4,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::ClickState;
-    use gpui::{DevicePixels, MouseButton, point};
+    use super::{resize_edge_to_size_command, ClickState};
+    use gpui::{DevicePixels, MouseButton, ResizeEdge, point};
     use std::time::Duration;
+
+    #[test]
+    fn test_resize_edge_to_size_command() {
+        assert_eq!(resize_edge_to_size_command(ResizeEdge::Top), 3);
+        assert_eq!(resize_edge_to_size_command(ResizeEdge::TopRight), 5);
+        assert_eq!(resize_edge_to_size_command(ResizeEdge::Right), 2);
+        assert_eq!(resize_edge_to_size_command(ResizeEdge::BottomRight), 8);
+        assert_eq!(resize_edge_to_size_command(ResizeEdge::Bottom), 6);
+        assert_eq!(resize_edge_to_size_command(ResizeEdge::BottomLeft), 7);
+        assert_eq!(resize_edge_to_size_command(ResizeEdge::Left), 1);
+        assert_eq!(resize_edge_to_size_command(ResizeEdge::TopLeft), 4);
+    }
 
     #[test]
     fn test_double_click_interval() {
