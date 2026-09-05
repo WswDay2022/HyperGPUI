@@ -15,7 +15,7 @@ use calloop::{
 use calloop_wayland_source::WaylandSource;
 use collections::HashMap;
 use filedescriptor::Pipe;
-use gpui_util::ResultExt as _;
+use gpui::ResultExt as _;
 use smallvec::SmallVec;
 use url::Url;
 use wayland_backend::client::ObjectId;

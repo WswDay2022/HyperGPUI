@@ -21,6 +21,8 @@ use crate::{
     WindowParams, WindowTextSystem, point, prelude::*, profiler, px, rems, size, transparent_black,
 };
 
+use crate::post_inc;
+use crate::{ResultExt, measure};
 use anyhow::{Context as _, Result, anyhow};
 use collections::{FxHashMap, FxHashSet};
 #[cfg(target_os = "macos")]
@@ -28,8 +30,6 @@ use core_video::pixel_buffer::CVPixelBuffer;
 use derive_more::{Deref, DerefMut};
 use futures::FutureExt;
 use futures::channel::oneshot;
-use gpui_util::post_inc;
-use gpui_util::{ResultExt, measure};
 #[cfg(feature = "input-latency-histogram")]
 use hdrhistogram::Histogram;
 use itertools::FoldWhile::{Continue, Done};

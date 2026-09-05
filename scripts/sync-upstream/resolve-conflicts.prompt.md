@@ -11,7 +11,7 @@ monorepo (`zed-industries/zed`). Two groups:
 deps but now vendored in-tree by the fork:
 `collections`→`gpui_collections`, `sum_tree`→`gpui_sum_tree`, `refineable`→`gpui_refineable`,
 `refineable/derive_refineable`→`gpui_derive_refineable`, `scheduler`→`gpui_scheduler`,
-`media`→`gpui_media`, `util`→`gpui_zed_util`, `gpui_util`→`gpui_ce_util`, `path`→`gpui_path`.
+`media`→`gpui_media`, `util`→`gpui_zed_util`, `path`→`gpui_path`.
 The sync remaps upstream's
 content into these fork dirs, so a conflict here is upstream's version of the crate vs. the fork's
 vendored+adapted version. Preserve the fork's adaptations (see rule 4) while taking upstream's real

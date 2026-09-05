@@ -407,7 +407,6 @@ publish dry="false":
     # then renderers/platform leaves, with gpui_platform LAST (it has
     # target-conditional deps on every platform crate).
     let crates = [
-        "crates/gpui_ce_util/Cargo.toml"
         "crates/gpui_collections/Cargo.toml"
         "crates/gpui_derive_refineable/Cargo.toml"
         "crates/gpui_refineable/Cargo.toml"

@@ -23,13 +23,13 @@ use parking_lot::RwLock;
 use slotmap::SlotMap;
 
 use crate::http_client::{HttpClient, NullHttpClient};
+use crate::{ResultExt, debug_panic};
 pub use async_context::*;
 #[cfg(feature = "bench")]
 pub use bench_context::{BenchAppContext, BenchReport, BenchWindowContext, bench_platform};
 use collections::{FxHashMap, FxHashSet, HashMap, TypeIdHashMap, TypeIdHashSet, VecDeque};
 pub use context::*;
 pub use entity_map::*;
-use gpui_util::{ResultExt, debug_panic};
 #[cfg(any(test, feature = "test-support"))]
 pub use headless_app_context::*;
 use smallvec::SmallVec;

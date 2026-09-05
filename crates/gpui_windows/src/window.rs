@@ -12,7 +12,7 @@ use std::{
 
 use anyhow::{Context as _, Result};
 use futures::channel::oneshot::{self, Receiver};
-use gpui_util::ResultExt;
+use gpui::ResultExt;
 use raw_window_handle as rwh;
 use smallvec::SmallVec;
 use windows::{

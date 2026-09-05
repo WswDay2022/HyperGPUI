@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use calloop::{EventLoop, LoopHandle};
-use gpui_util::ResultExt;
+use gpui::ResultExt;
 
 use crate::linux::headless::window::{HeadlessDisplay, HeadlessWindow};
 use crate::linux::{LinuxClient, LinuxCommon, LinuxKeyboardLayout};

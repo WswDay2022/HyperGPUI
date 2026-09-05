@@ -45,13 +45,13 @@ impl Render for CssTransformExample {
                     .text_color(rgb(0xffffff))
                     .child("CSS transforms — reference (left) vs transformed (right)"),
             )
-            .child(transform_row("translateX(40px)", rgb(0x3b82f6), CssTransform::identity().translateX(px(40.0))))
-            .child(transform_row("translateY(40px)", rgb(0xe2b714), CssTransform::identity().translateY(px(40.0))))
+            .child(transform_row("translateX(40px)", rgb(0x3b82f6), CssTransform::identity().translate_x(px(40.0))))
+            .child(transform_row("translateY(40px)", rgb(0xe2b714), CssTransform::identity().translate_y(px(40.0))))
             .child(transform_row("translate(-30, 20)", rgb(0xd14d42), CssTransform::identity().translate(px(-30.0), px(20.0))))
             .child(transform_row("scale(1.5)", rgb(0x2d8f5e), CssTransform::identity().scale(1.5, 1.5)))
-            .child(transform_row("scaleX(0.7)", rgb(0x8b5cf6), CssTransform::identity().scaleX(0.7)))
+            .child(transform_row("scaleX(0.7)", rgb(0x8b5cf6), CssTransform::identity().scale_x(0.7)))
             .child(transform_row("rotate(22.5°)", rgb(0xec6d3d), CssTransform::identity().rotate(radians(FRAC_PI_8))))
-            .child(transform_row("skewX(15°)", rgb(0x0e9f9f), CssTransform::identity().skewX(radians(FRAC_PI_8))))
+            .child(transform_row("skewX(15°)", rgb(0x0e9f9f), CssTransform::identity().skew_x(radians(FRAC_PI_8))))
             .child(transform_row("matrix(1,0,0.3,1,0,0)", rgb(0x9b5de5), CssTransform::identity().matrix(1.0, 0.0, 0.3, 1.0, px(0.0), px(0.0))))
     }
 }

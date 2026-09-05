@@ -2,7 +2,7 @@ use std::sync::OnceLock;
 
 #[cfg(not(feature = "wgpu"))]
 use anyhow::Context;
-use gpui_util::ResultExt;
+use gpui::ResultExt;
 use windows::{
     UI::{
         Color,

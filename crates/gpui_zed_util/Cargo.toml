@@ -37,7 +37,7 @@ tempfile = "3.20.0"
 unicase = "2.6"
 url = "2.2"
 percent-encoding = "2.3.2"
-gpui_util = { package = "gpui_ce_util", version = "0.2.6", path = "../gpui_ce_util" }
+gpui = { package = "gpui-ce", version = "0.2.3", path = "../gpui" }
 path = { package = "gpui_ce_path", version = "0.2.2", path = "../gpui_path", features = [
   "serde",
 ] }

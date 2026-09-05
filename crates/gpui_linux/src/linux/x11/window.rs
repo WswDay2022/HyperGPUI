@@ -12,7 +12,7 @@ use gpui::{
 use gpui_wgpu::{CompositorGpuHint, WgpuRenderer, WgpuSurfaceConfig};
 
 use collections::FxHashSet;
-use gpui_util::{ResultExt, maybe};
+use gpui::{ResultExt, maybe};
 use raw_window_handle as rwh;
 use x11rb::{
     connection::Connection,

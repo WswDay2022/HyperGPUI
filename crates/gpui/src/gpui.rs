@@ -58,6 +58,7 @@ mod taffy;
 pub mod test;
 mod text_system;
 mod transition;
+#[expect(missing_docs)]
 mod util;
 mod view;
 mod window;
@@ -133,7 +134,8 @@ macro_rules! bench_main {
     };
 }
 pub use gpui_shared_string::*;
-pub use gpui_util::arc_cow::ArcCow;
+pub use util::arc_cow;
+pub use util::arc_cow::ArcCow;
 /// HTTP client abstraction for making requests.
 pub mod http_client;
 pub use input::*;
@@ -162,7 +164,13 @@ pub use taffy::{AvailableSpace, LayoutId};
 pub use test::*;
 pub use text_system::*;
 pub use transition::*;
-pub use util::{FutureExt, Timeout};
+#[cfg(target_os = "windows")]
+pub use util::get_windows_system_shell;
+pub use util::{
+    Deferred, FutureExt, LogErrorFuture, LogErrorWithBacktraceFuture, ResultExt, Timeout,
+    TryFutureExt, TryFutureExtBacktrace, UnwrapFuture, defer, log_err, measure, new_std_command,
+    post_inc, some_or_debug_panic, truncate_to_bottom_n_sorted_by,
+};
 pub use view::*;
 pub use window::*;
 

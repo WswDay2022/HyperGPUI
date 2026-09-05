@@ -9,9 +9,9 @@ or a test failure (see the output above). Fix it so the gate passes.
 
 1. **Fix only what the merge/sync caused.** Address the issues in the output: items moved/renamed
    upstream, changed function signatures or trait bounds, added/removed enum variants, and any
-   fallout in gpui-ce's own patches. NOTE: the util crates (`collections`, `util`, `gpui_util`,
-   `sum_tree`, `refineable`, `scheduler`, `media`) are now **vendored in-tree** as `gpui_collections`,
-   `gpui_zed_util`, `gpui_ce_util`, `gpui_sum_tree`, `gpui_refineable`, `gpui_scheduler`,
+   fallout in gpui-ce's own patches. NOTE: the util crates (`collections`, `util`, `sum_tree`,
+   `refineable`, `scheduler`, `media`) are now **vendored in-tree** as `gpui_collections`,
+   `gpui_zed_util`, `gpui_sum_tree`, `gpui_refineable`, `gpui_scheduler`,
    `gpui_media` and are **synced by this same tool** — so if gpui needs a new API from one of them,
    it should already be present from the merge. Prefer using that API; only hand-add to a vendored
    crate if the merge genuinely didn't bring it (and say so in your summary).

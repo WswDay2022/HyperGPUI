@@ -86,7 +86,6 @@ TRACKED_CRATES: dict[str, str] = {
     "gpui_scheduler": "scheduler",
     "gpui_media": "media",
     "gpui_zed_util": "util",
-    "gpui_ce_util": "gpui_util",
     # Created mid-range by upstream's "Split out `RelPath` into a separate crate" (#61029),
     # which MOVED crates/util/src/rel_path.rs into it. Tracked so the split arrives through the
     # merge (see MOVE detection below) instead of leaving a stale duplicate in gpui_zed_util.

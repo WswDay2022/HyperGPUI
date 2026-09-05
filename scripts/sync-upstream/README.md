@@ -58,7 +58,7 @@ Synced 1:1 (same path): `gpui`, `gpui_linux`, `gpui_macos`, `gpui_macros`, `gpui
 Synced with **path remapping** — vendored + renamed by the fork (PR #91 removed the git sources):
 `gpui_collections`←`collections`, `gpui_sum_tree`←`sum_tree`, `gpui_refineable`←`refineable`,
 `gpui_derive_refineable`←`refineable/derive_refineable`, `gpui_scheduler`←`scheduler`,
-`gpui_media`←`media`, `gpui_zed_util`←`util`, `gpui_ce_util`←`gpui_util`, `gpui_path`←`path`.
+`gpui_media`←`media`, `gpui_zed_util`←`util`, `gpui_path`←`path`.
 The merge preserves each
 crate's gpui-ce adaptations (package rename, path deps, `ztracing`→`tracing`, `zlog` removal) via
 conflict resolution while taking upstream's real changes — so upstream API additions land through the

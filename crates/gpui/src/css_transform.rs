@@ -183,14 +183,14 @@ impl CssTransform {
     }
 
     /// `translateX(tx)`
-    pub fn translateX(mut self, x: impl Into<Pixels>) -> Self {
+    pub fn translate_x(mut self, x: impl Into<Pixels>) -> Self {
         self.functions
             .push(CssTransformFunction::TranslateX(x.into()));
         self
     }
 
     /// `translateY(ty)`
-    pub fn translateY(mut self, y: impl Into<Pixels>) -> Self {
+    pub fn translate_y(mut self, y: impl Into<Pixels>) -> Self {
         self.functions
             .push(CssTransformFunction::TranslateY(y.into()));
         self
@@ -203,13 +203,13 @@ impl CssTransform {
     }
 
     /// `scaleX(sx)`
-    pub fn scaleX(mut self, x: f32) -> Self {
+    pub fn scale_x(mut self, x: f32) -> Self {
         self.functions.push(CssTransformFunction::ScaleX(x));
         self
     }
 
     /// `scaleY(sy)`
-    pub fn scaleY(mut self, y: f32) -> Self {
+    pub fn scale_y(mut self, y: f32) -> Self {
         self.functions.push(CssTransformFunction::ScaleY(y));
         self
     }
@@ -222,14 +222,14 @@ impl CssTransform {
     }
 
     /// `skewX(a)`, in radians.
-    pub fn skewX(mut self, angle: impl Into<Radians>) -> Self {
+    pub fn skew_x(mut self, angle: impl Into<Radians>) -> Self {
         self.functions
             .push(CssTransformFunction::SkewX(angle.into()));
         self
     }
 
     /// `skewY(a)`, in radians.
-    pub fn skewY(mut self, angle: impl Into<Radians>) -> Self {
+    pub fn skew_y(mut self, angle: impl Into<Radians>) -> Self {
         self.functions
             .push(CssTransformFunction::SkewY(angle.into()));
         self
@@ -273,7 +273,7 @@ impl CssTransform {
     }
 
     /// `translateZ(z)` — declared for CSS parity; not implemented yet (identity).
-    pub fn translateZ(mut self, z: impl Into<Pixels>) -> Self {
+    pub fn translate_z(mut self, z: impl Into<Pixels>) -> Self {
         self.functions
             .push(CssTransformFunction::TranslateZ(z.into()));
         self
@@ -286,27 +286,27 @@ impl CssTransform {
     }
 
     /// `scaleZ(z)` — declared for CSS parity; not implemented yet (identity).
-    pub fn scaleZ(mut self, z: f32) -> Self {
+    pub fn scale_z(mut self, z: f32) -> Self {
         self.functions.push(CssTransformFunction::ScaleZ(z));
         self
     }
 
     /// `rotateX(a)` — declared for CSS parity; not implemented yet (identity).
-    pub fn rotateX(mut self, angle: impl Into<Radians>) -> Self {
+    pub fn rotate_x(mut self, angle: impl Into<Radians>) -> Self {
         self.functions
             .push(CssTransformFunction::RotateX(angle.into()));
         self
     }
 
     /// `rotateY(a)` — declared for CSS parity; not implemented yet (identity).
-    pub fn rotateY(mut self, angle: impl Into<Radians>) -> Self {
+    pub fn rotate_y(mut self, angle: impl Into<Radians>) -> Self {
         self.functions
             .push(CssTransformFunction::RotateY(angle.into()));
         self
     }
 
     /// `rotateZ(a)` — clockwise rotation in radians (same as `rotate`).
-    pub fn rotateZ(mut self, angle: impl Into<Radians>) -> Self {
+    pub fn rotate_z(mut self, angle: impl Into<Radians>) -> Self {
         self.functions
             .push(CssTransformFunction::RotateZ(angle.into()));
         self
@@ -385,12 +385,12 @@ mod tests {
     #[test]
     fn translate_x_and_y_are_axis_aligned() {
         let mx = CssTransform::identity()
-            .translateX(px(15.0))
+            .translate_x(px(15.0))
             .to_matrix(point(px(0.0), px(0.0)), 1.0);
         assert_point(&mx, (5.0, 7.0), (20.0, 7.0));
 
         let my = CssTransform::identity()
-            .translateY(px(-6.0))
+            .translate_y(px(-6.0))
             .to_matrix(point(px(0.0), px(0.0)), 1.0);
         assert_point(&my, (5.0, 7.0), (5.0, 1.0));
     }
@@ -420,7 +420,7 @@ mod tests {
     fn skew_x_shifts_x_by_tangent_times_y() {
         // skewX(45°): x' = x + y.
         let m = CssTransform::identity()
-            .skewX(radians(FRAC_PI_4))
+            .skew_x(radians(FRAC_PI_4))
             .to_matrix(point(px(0.0), px(0.0)), 1.0);
         assert_point(&m, (10.0, 5.0), (15.0, 5.0));
     }
@@ -428,7 +428,7 @@ mod tests {
     #[test]
     fn skew_y_shifts_y_by_tangent_times_x() {
         let m = CssTransform::identity()
-            .skewY(radians(FRAC_PI_4))
+            .skew_y(radians(FRAC_PI_4))
             .to_matrix(point(px(0.0), px(0.0)), 1.0);
         assert_point(&m, (10.0, 5.0), (10.0, 15.0));
     }
@@ -447,7 +447,7 @@ mod tests {
         // transform: translateX(10px) scale(2) — scale first (around the origin), then
         // translate: (0,0) -> scale -> (0,0) -> translate -> (10, 0).
         let m = CssTransform::identity()
-            .translateX(px(10.0))
+            .translate_x(px(10.0))
             .scale(2.0, 2.0)
             .to_matrix(point(px(0.0), px(0.0)), 1.0);
         assert_point(&m, (0.0, 0.0), (10.0, 0.0));
@@ -457,7 +457,7 @@ mod tests {
     #[test]
     fn scale_factor_scales_translations() {
         let m = CssTransform::identity()
-            .translateX(px(10.0))
+            .translate_x(px(10.0))
             .to_matrix(point(px(0.0), px(0.0)), 2.0);
         assert_point(&m, (0.0, 0.0), (20.0, 0.0));
     }
@@ -466,7 +466,7 @@ mod tests {
     fn three_d_transforms_are_identity_for_now() {
         let m = CssTransform::identity()
             .translate3d(px(10.0), px(10.0), px(10.0))
-            .rotateX(radians(FRAC_PI_4))
+            .rotate_x(radians(FRAC_PI_4))
             .perspective(px(100.0))
             .to_matrix(point(px(0.0), px(0.0)), 1.0);
         assert_point(&m, (5.0, 5.0), (5.0, 5.0));
@@ -475,8 +475,8 @@ mod tests {
     #[test]
     fn translate_accepts_floats() {
         let m = CssTransform::identity()
-            .translateX(15.0)
-            .translateY(3.0)
+            .translate_x(15.0)
+            .translate_y(3.0)
             .to_matrix(point(px(0.0), px(0.0)), 1.0);
         assert_point(&m, (0.0, 0.0), (15.0, 3.0));
     }

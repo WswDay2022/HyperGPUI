@@ -43,7 +43,6 @@ etagere.workspace = true
 font-kit = { version = "0.14.1-zed", package = "zed-font-kit", optional = true }
 foreign-types.workspace = true
 futures.workspace = true
-gpui_util.workspace = true
 image.workspace = true
 itertools.workspace = true
 libc.workspace = true

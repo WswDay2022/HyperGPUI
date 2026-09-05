@@ -11,7 +11,7 @@ use std::{
 
 use anyhow::{Context as _, Result, anyhow};
 use futures::channel::oneshot::{self, Receiver};
-use gpui_util::{ResultExt, get_windows_system_shell, new_std_command};
+use gpui::{ResultExt, get_windows_system_shell, new_std_command};
 use itertools::Itertools;
 use parking_lot::RwLock;
 use smallvec::SmallVec;

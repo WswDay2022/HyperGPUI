@@ -16,7 +16,7 @@ use std::{
 use anyhow::{Context as _, anyhow};
 use calloop::{LoopSignal, channel::Sender};
 use futures::channel::oneshot;
-use gpui_util::{ResultExt as _, new_std_command};
+use gpui::{ResultExt as _, new_std_command};
 #[cfg(any(feature = "wayland", feature = "x11"))]
 use xkbcommon::xkb::{self, Keycode, Keysym, State};
 

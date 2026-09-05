@@ -5,7 +5,6 @@
       <sourceFolder url="file://$MODULE_DIR$/crates/gpui/examples" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/gpui/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/gpui/tests" isTestSource="true" />
-      <sourceFolder url="file://$MODULE_DIR$/crates/gpui_ce_util/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/gpui_collections/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/gpui_derive_refineable/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/gpui_elements/examples" isTestSource="false" />

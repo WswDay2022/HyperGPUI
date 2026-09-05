@@ -1,4 +1,4 @@
-use gpui_util::ResultExt;
+use gpui::ResultExt;
 use itertools::Itertools;
 use smallvec::SmallVec;
 use std::rc::Rc;

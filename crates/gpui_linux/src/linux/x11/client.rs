@@ -6,8 +6,8 @@ use calloop::{
 };
 use collections::HashMap;
 use core::str;
+use gpui::ResultExt as _;
 use gpui::{Capslock, profiler};
-use gpui_util::ResultExt as _;
 use log::Level;
 use smallvec::SmallVec;
 use std::{

@@ -11,7 +11,7 @@ pub use darwin::{Child, Command, Stdio};
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000_u32;
 
-pub use gpui_util::new_std_command;
+pub use gpui::new_std_command;
 
 pub fn new_command(program: impl AsRef<OsStr>) -> Command {
     Command::new(program)

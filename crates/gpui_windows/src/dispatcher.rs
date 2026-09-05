@@ -7,7 +7,7 @@ use std::{
 };
 
 use anyhow::Context;
-use gpui_util::ResultExt;
+use gpui::ResultExt;
 use windows::Win32::{
     Foundation::{FILETIME, LPARAM, WPARAM},
     Media::{timeBeginPeriod, timeEndPeriod},
@@ -166,7 +166,7 @@ impl PlatformDispatcher for WindowsDispatcher {
         unsafe {
             timeBeginPeriod(1);
         }
-        gpui_util::defer(Box::new(|| unsafe {
+        gpui::defer(Box::new(|| unsafe {
             timeEndPeriod(1);
         }))
     }

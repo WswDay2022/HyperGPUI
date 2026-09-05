@@ -7,8 +7,8 @@ use crate::{
 };
 use anyhow::Result;
 
+use crate::ResultExt;
 use futures::Future;
-use gpui_util::ResultExt;
 use image::{
     AnimationDecoder, ImageError, ImageFormat, Rgba,
     codecs::{gif::GifDecoder, webp::WebPDecoder},
