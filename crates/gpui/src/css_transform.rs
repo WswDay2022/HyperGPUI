@@ -201,6 +201,12 @@ impl CssTransform {
         self.functions.push(CssTransformFunction::Scale { x, y });
         self
     }
+    
+    /// `scale_both(sxy)`
+    pub fn scale_both(mut self, factor: f32) -> Self {
+        self.functions.push(CssTransformFunction::Scale { x: factor, y: factor });
+        self
+    }
 
     /// `scaleX(sx)`
     pub fn scale_x(mut self, x: f32) -> Self {

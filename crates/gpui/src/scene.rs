@@ -714,6 +714,11 @@ pub struct Underline {
     pub color: SceneHsla,
     pub thickness: ScaledPixels,
     pub wavy: PaddedBool32,
+    /// The matrix the underline's vertices are drawn through (an ancestor CSS
+    /// transform). Passed alongside the bounds so shaders can transform the
+    /// axis-aligned position into the ancestor's space before rounding it to
+    /// device pixels.
+    pub transformation: TransformationMatrix,
 }
 
 impl From<Underline> for Primitive {
@@ -962,6 +967,10 @@ pub struct PolychromeSprite {
     pub content_mask: ContentMask<ScaledPixels>,
     pub corner_radii: Corners<ScaledPixels>,
     pub tile: AtlasTile,
+    /// The matrix the sprite is drawn through (an ancestor CSS transform).
+    /// Only the vertex positions are transformed; the fragment shader samples
+    /// the tile via `local_position` in the untransformed (pre-paint) space.
+    pub transformation: TransformationMatrix,
 }
 
 impl From<PolychromeSprite> for Primitive {

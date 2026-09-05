@@ -1084,6 +1084,7 @@ struct Underline {
     Hsla color;
     float thickness;
     uint wavy;
+    TransformationMatrix transformation;
 };
 
 struct UnderlineVertexOutput {
@@ -1091,12 +1092,19 @@ struct UnderlineVertexOutput {
   float4 position: SV_Position;
   nointerpolation float4 color: COLOR;
   float4 clip_distance: SV_ClipDistance;
+  // Position in the underline's untransformed (local) coordinate space, used by the
+  // fragment shader for the wavy SDF so it isn't distorted by an ancestor transform.
+  float2 local_position: TEXCOORD1;
 };
 
 struct UnderlineFragmentInput {
   nointerpolation uint underline_id: TEXCOORD0;
   float4 position: SV_Position;
   nointerpolation float4 color: COLOR;
+  // Must be declared here too, in the same position as in `UnderlineVertexOutput`: FXC assigns
+  // hardware input registers in declaration order, so a slot mismatch shifts `local_position`
+  // to a different register than the VS emits it on and the draw fails to link.
+  float2 local_position: TEXCOORD1;
 };
 
 StructuredBuffer<Underline> underlines: register(t1);
@@ -1104,9 +1112,11 @@ StructuredBuffer<Underline> underlines: register(t1);
 UnderlineVertexOutput underline_vertex(uint vertex_id: SV_VertexID, uint underline_id: SV_InstanceID) {
     float2 unit_vertex = float2(float(vertex_id & 1u), 0.5 * float(vertex_id & 2u));
     Underline underline = underlines[underline_id];
-    float4 device_position = to_device_position(unit_vertex, underline.bounds);
-    float4 clip_distance = distance_from_clip_rect(unit_vertex, underline.bounds,
-                                                    underline.content_mask);
+    float2 local_position = unit_vertex * underline.bounds.size + underline.bounds.origin;
+    float4 device_position =
+        to_device_position_transformed(unit_vertex, underline.bounds, underline.transformation);
+    float4 clip_distance = distance_from_clip_rect_transformed(unit_vertex, underline.bounds,
+                                                    underline.content_mask, underline.transformation);
     float4 color = hsla_to_rgba(underline.color);
 
     UnderlineVertexOutput output;
@@ -1114,6 +1124,7 @@ UnderlineVertexOutput underline_vertex(uint vertex_id: SV_VertexID, uint underli
     output.color = color;
     output.underline_id = underline_id;
     output.clip_distance = clip_distance;
+    output.local_position = local_position;
     return output;
 }
 
@@ -1126,7 +1137,7 @@ float4 underline_fragment(UnderlineFragmentInput input): SV_Target {
         float half_thickness = underline.thickness * 0.5;
         float2 origin = underline.bounds.origin;
 
-        float2 st = ((input.position.xy - origin) / underline.bounds.size.y) - float2(0., 0.5);
+        float2 st = ((input.local_position - origin) / underline.bounds.size.y) - float2(0., 0.5);
         float frequency = (M_PI_F * WAVE_FREQUENCY * underline.thickness) / underline.bounds.size.y;
         float amplitude = (underline.thickness * WAVE_HEIGHT_RATIO) / underline.bounds.size.y;
 
@@ -1231,6 +1242,7 @@ struct PolychromeSprite {
     Bounds content_mask;
     Corners corner_radii;
     AtlasTile tile;
+    TransformationMatrix transformation;
 };
 
 struct PolychromeSpriteVertexOutput {
@@ -1238,12 +1250,19 @@ struct PolychromeSpriteVertexOutput {
     float4 position: SV_Position;
     float2 tile_position: POSITION;
     float4 clip_distance: SV_ClipDistance;
+    // Position in the sprite's untransformed (local) coordinate space, used by the
+    // fragment shader for the corner-radius SDF so it isn't distorted by the transform.
+    float2 local_position: TEXCOORD1;
 };
 
 struct PolychromeSpriteFragmentInput {
     nointerpolation uint sprite_id: TEXCOORD0;
     float4 position: SV_Position;
     float2 tile_position: POSITION;
+    // Must be declared here too, in the same position as in `PolychromeSpriteVertexOutput`:
+    // FXC assigns hardware input registers in declaration order, so a slot mismatch shifts
+    // `local_position` to a different register than the VS emits it on and the draw fails to link.
+    float2 local_position: TEXCOORD1;
 };
 
 StructuredBuffer<PolychromeSprite> poly_sprites: register(t1);
@@ -1251,9 +1270,11 @@ StructuredBuffer<PolychromeSprite> poly_sprites: register(t1);
 PolychromeSpriteVertexOutput polychrome_sprite_vertex(uint vertex_id: SV_VertexID, uint sprite_id: SV_InstanceID) {
     float2 unit_vertex = float2(float(vertex_id & 1u), 0.5 * float(vertex_id & 2u));
     PolychromeSprite sprite = poly_sprites[sprite_id];
-    float4 device_position = to_device_position(unit_vertex, sprite.bounds);
-    float4 clip_distance = distance_from_clip_rect(unit_vertex, sprite.bounds,
-                                                    sprite.content_mask);
+    float2 local_position = unit_vertex * sprite.bounds.size + sprite.bounds.origin;
+    float4 device_position =
+        to_device_position_transformed(unit_vertex, sprite.bounds, sprite.transformation);
+    float4 clip_distance = distance_from_clip_rect_transformed(unit_vertex, sprite.bounds,
+                                                    sprite.content_mask, sprite.transformation);
     float2 tile_position = to_tile_position(unit_vertex, sprite.tile);
 
     PolychromeSpriteVertexOutput output;
@@ -1261,13 +1282,14 @@ PolychromeSpriteVertexOutput polychrome_sprite_vertex(uint vertex_id: SV_VertexI
     output.tile_position = tile_position;
     output.sprite_id = sprite_id;
     output.clip_distance = clip_distance;
+    output.local_position = local_position;
     return output;
 }
 
 float4 polychrome_sprite_fragment(PolychromeSpriteFragmentInput input): SV_Target {
     PolychromeSprite sprite = poly_sprites[input.sprite_id];
     float4 sample = t_sprite.Sample(s_sprite, input.tile_position);
-    float distance = quad_sdf(input.position.xy, sprite.bounds, sprite.corner_radii);
+    float distance = quad_sdf(input.local_position, sprite.bounds, sprite.corner_radii);
 
     float4 color = sample;
     if (sprite.grayscale != 0u) {

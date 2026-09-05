@@ -918,6 +918,11 @@ pub(crate) struct DeferredDraw {
     element_id_stack: SmallVec<[ElementId; 32]>,
     text_style_stack: Vec<TextStyleRefinement>,
     content_mask: Option<ContentMask<Pixels>>,
+    /// The composite CSS transform of the deferred element's styled ancestors,
+    /// captured at the moment the draw was deferred. The element is reprepainted
+    /// and painted under this matrix, since it leaves its ancestor stack once
+    /// the main tree's prepaint and paint phases have unwound.
+    transform: Option<TransformationMatrix>,
     rem_size: Pixels,
     element: Option<AnyElement>,
     absolute_offset: Point<Pixels>,
@@ -1115,6 +1120,7 @@ pub struct Window {
     pub(crate) element_offset_stack: Vec<Point<Pixels>>,
     pub(crate) element_opacity: f32,
     pub(crate) content_mask_stack: Vec<ContentMask<Pixels>>,
+    pub(crate) transform_stack: Vec<TransformationMatrix>,
     pub(crate) requested_autoscroll: Option<Bounds<Pixels>>,
     pub(crate) image_cache_stack: Vec<AnyImageCache>,
     pub(crate) rendered_frame: Frame,
@@ -1868,6 +1874,7 @@ impl Window {
             element_offset_stack: Vec::new(),
             content_mask_stack: Vec::new(),
             element_opacity: 1.0,
+            transform_stack: Vec::new(),
             requested_autoscroll: None,
             rendered_frame: Frame::new(DispatchTree::new(cx.keymap.clone(), cx.actions.clone())),
             next_frame: Frame::new(DispatchTree::new(cx.keymap.clone(), cx.actions.clone())),
@@ -1934,13 +1941,15 @@ pub struct DispatchEventResult {
 }
 
 /// Indicates which region of the window is visible. Content falling outside of this mask will not be
-/// rendered. Currently, only rectangular content masks are supported, but we give the mask its own type
-/// to leave room to support more complex shapes in the future.
+/// rendered. Currently, the mask is an axis-aligned box, optionally rounded by [`ContentMask::corner_radii`];
+/// a zero radius on a corner leaves that corner square.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 #[repr(C)]
 pub struct ContentMask<P: Clone + Debug + Default + PartialEq> {
     /// The bounds
     pub bounds: Bounds<P>,
+    /// Corner radii applied when clipping to `bounds`; zero means a square corner.
+    pub corner_radii: Corners<P>,
 }
 
 impl ContentMask<Pixels> {
@@ -1948,13 +1957,55 @@ impl ContentMask<Pixels> {
     pub fn scale(&self, factor: f32) -> ContentMask<ScaledPixels> {
         ContentMask {
             bounds: self.bounds.scale(factor),
+            corner_radii: self.corner_radii.map(|radius| *radius * factor),
         }
     }
 
     /// Intersect the content mask with the given content mask.
+    ///
+    /// The resulting mask is the intersection of both boxes. Per corner, the effective
+    /// radius is the other mask's radius when only one of the two corners is rounded
+    /// (square corners don't cut), and the tighter of the two radii when both are
+    /// rounded (the visible corner arc is the inner one). Radii are then clamped to
+    /// the intersected box so an arc can never cross the box.
     pub fn intersect(&self, other: &Self) -> Self {
         let bounds = self.bounds.intersect(&other.bounds);
-        ContentMask { bounds }
+        let corner_radii = Corners {
+            top_left: Self::fold_corner(self.corner_radii.top_left, other.corner_radii.top_left),
+            top_right: Self::fold_corner(self.corner_radii.top_right, other.corner_radii.top_right),
+            bottom_right: Self::fold_corner(
+                self.corner_radii.bottom_right,
+                other.corner_radii.bottom_right,
+            ),
+            bottom_left: Self::fold_corner(
+                self.corner_radii.bottom_left,
+                other.corner_radii.bottom_left,
+            ),
+        }
+        .clamp_radii_for_quad_size(bounds.size);
+        ContentMask {
+            bounds,
+            corner_radii,
+        }
+    }
+
+    fn fold_corner(self_radius: Pixels, other_radius: Pixels) -> Pixels {
+        let self_zero = self_radius == Pixels::ZERO;
+        let other_zero = other_radius == Pixels::ZERO;
+        match (self_zero, other_zero) {
+            // Square corners don't cut anything; keep the rounded one.
+            (true, false) => other_radius,
+            (false, true) => self_radius,
+            (true, true) => Pixels::ZERO,
+            // Both rounded: the tighter arc governs.
+            (false, false) => {
+                if self_radius < other_radius {
+                    self_radius
+                } else {
+                    other_radius
+                }
+            }
+        }
     }
 }
 
@@ -3224,7 +3275,7 @@ impl Window {
             traversal_order.sort_by_key(|ix| self.next_frame.deferred_draws[*ix].priority);
 
             for deferred_draw_ix in traversal_order {
-                let (element, parent_node, current_view, rem_size, absolute_offset, prepaint_range) = {
+                let (element, parent_node, current_view, transform, rem_size, absolute_offset, prepaint_range) = {
                     let deferred_draw = &mut self.next_frame.deferred_draws[deferred_draw_ix];
                     self.element_id_stack
                         .clone_from(&deferred_draw.element_id_stack);
@@ -3234,6 +3285,7 @@ impl Window {
                         deferred_draw.element.take(),
                         deferred_draw.parent_node,
                         deferred_draw.current_view,
+                        deferred_draw.transform,
                         deferred_draw.rem_size,
                         deferred_draw.absolute_offset,
                         deferred_draw.prepaint_range.clone(),
@@ -3244,9 +3296,14 @@ impl Window {
                 let prepaint_start = self.prepaint_index();
                 if let Some(mut element) = element {
                     self.with_rendered_view(current_view, |window| {
-                        window.with_rem_size(Some(rem_size), |window| {
-                            window.with_absolute_element_offset(absolute_offset, |window| {
-                                element.prepaint(window, cx);
+                        // Re-prepaint under the composite transform captured at defer time, so
+                        // nested deferred draws prepainted here inherit the same matrix they
+                        // were captured with.
+                        window.with_transform(transform, |window| {
+                            window.with_rem_size(Some(rem_size), |window| {
+                                window.with_absolute_element_offset(absolute_offset, |window| {
+                                    element.prepaint(window, cx);
+                                });
                             });
                         });
                     });
@@ -3291,12 +3348,17 @@ impl Window {
 
             let paint_start = self.paint_index();
             let content_mask = deferred_draw.content_mask;
+            let transform = deferred_draw.transform;
             if let Some(element) = deferred_draw.element.as_mut() {
                 self.with_rendered_view(deferred_draw.current_view, |window| {
-                    window.with_content_mask(content_mask, |window| {
-                        window.with_rem_size(Some(deferred_draw.rem_size), |window| {
-                            element.paint(window, cx);
-                        });
+                    // The main tree's transform stack has unwound by the time deferred draws
+                    // are painted, so replay under the matrix captured at defer time.
+                    window.with_transform(transform, |window| {
+                        window.with_content_mask(content_mask, |window| {
+                            window.with_rem_size(Some(deferred_draw.rem_size), |window| {
+                                element.paint(window, cx);
+                            });
+                        })
                     })
                 })
             } else {
@@ -3368,6 +3430,7 @@ impl Window {
                     element_id_stack: deferred_draw.element_id_stack.clone(),
                     text_style_stack: deferred_draw.text_style_stack.clone(),
                     content_mask: deferred_draw.content_mask,
+                    transform: deferred_draw.transform,
                     rem_size: deferred_draw.rem_size,
                     priority: deferred_draw.priority,
                     element: None,
@@ -3549,6 +3612,43 @@ impl Window {
         let result = f(self);
         self.element_opacity = previous_opacity;
         result
+    }
+
+    /// Paint an element's subtree under the given CSS transform, restoring the
+    /// previous transform when the closure returns.
+    ///
+    /// A `None` transform (the common case — most elements have no transform)
+    /// short-circuits without touching the stack. Otherwise the new effective
+    /// transform is `inherited ∘ local`: the inherited transform applies first,
+    /// then this element's local transform, matching CSS nesting semantics.
+    /// [`current_transform`](Self::current_transform) reflects the stack top
+    /// inside `f`, and is automatically applied by every `paint_*` primitive.
+    pub(crate) fn with_transform<R>(
+        &mut self,
+        transformation: Option<TransformationMatrix>,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        self.invalidator.debug_assert_paint_or_prepaint();
+        let Some(transformation) = transformation else {
+            return f(self);
+        };
+
+        let previous = self.transform_stack.last().copied();
+        let next = previous.map_or(transformation, |inherited| inherited.compose(transformation));
+        self.transform_stack.push(next);
+        let result = f(self);
+        self.transform_stack.pop();
+        result
+    }
+
+    /// The transform currently in effect for primitives painted during this
+    /// phase: the composition of all ancestor `with_transform` calls, or the
+    /// identity matrix when no ancestor has a transform.
+    pub fn current_transform(&self) -> TransformationMatrix {
+        self.transform_stack
+            .last()
+            .copied()
+            .unwrap_or_else(TransformationMatrix::unit)
     }
 
     /// Perform prepaint on child elements in a "retryable" manner, so that any side effects
@@ -3907,6 +4007,7 @@ impl Window {
             element_id_stack: self.element_id_stack.clone(),
             text_style_stack: self.text_style_stack.clone(),
             content_mask,
+            transform: self.transform_stack.last().copied(),
             rem_size: self.rem_size(),
             priority,
             element: Some(element),
@@ -4140,7 +4241,9 @@ impl Window {
             corner_radii: quad.corner_radii.scale(self.scale_factor()),
             border_widths: snapped_border_widths,
             border_style: quad.border_style,
-            transformation: quad.transformation.unwrap_or(TransformationMatrix::unit()),
+            transformation: self
+                .current_transform()
+                .compose(quad.transformation.unwrap_or(TransformationMatrix::unit())),
         };
 
         if !quad.background.is_transparent() {
@@ -4266,6 +4369,7 @@ impl Window {
                 .into(),
             thickness,
             wavy: style.wavy.into(),
+            transformation: self.current_transform(),
         });
     }
 
@@ -4296,6 +4400,7 @@ impl Window {
             thickness: self.snap_stroke(style.thickness),
             color: style.color.unwrap_or_default().opacity(opacity).into(),
             wavy: false.into(),
+            transformation: self.current_transform(),
         });
     }
 
@@ -4359,6 +4464,7 @@ impl Window {
                 size: tile.bounds.size.map(Into::into),
             };
             let content_mask = self.snapped_content_mask();
+            let transformation = self.current_transform();
 
             if subpixel_rendering {
                 self.next_frame.scene.insert_primitive(SubpixelSprite {
@@ -4368,7 +4474,7 @@ impl Window {
                     content_mask,
                     color: color.opacity(element_opacity).into(),
                     tile,
-                    transformation: TransformationMatrix::unit(),
+                    transformation,
                 });
             } else {
                 self.next_frame.scene.insert_primitive(MonochromeSprite {
@@ -4378,7 +4484,7 @@ impl Window {
                     content_mask,
                     color: color.opacity(element_opacity).into(),
                     tile,
-                    transformation: TransformationMatrix::unit(),
+                    transformation,
                 });
             }
         }
@@ -4461,6 +4567,7 @@ impl Window {
                 content_mask,
                 tile,
                 opacity,
+                transformation: self.current_transform(),
             });
         }
         Ok(())
@@ -4525,7 +4632,7 @@ impl Window {
             content_mask,
             color: color.opacity(element_opacity).into(),
             tile,
-            transformation,
+            transformation: self.current_transform().compose(transformation),
         });
 
         Ok(())
@@ -4633,6 +4740,7 @@ impl Window {
             corner_radii,
             tile: sub_tile,
             opacity,
+            transformation: self.current_transform(),
         });
         Ok(())
     }
@@ -7001,17 +7109,18 @@ pub fn outline(
 mod tests {
     use std::{
         cell::{Cell, RefCell},
+        f32::consts::FRAC_PI_8,
         path::PathBuf,
         rc::Rc,
     };
 
     use crate::{
-        AnyWindowHandle, AppContext as _, Bounds, Context, DragMoveEvent, Empty,
+        AnyWindowHandle, AppContext as _, Bounds, Context, CssTransform, DragMoveEvent, Empty,
         ExternalDragPayload, ExternalPaths, FileDragPaths, FileDropEvent, FocusHandle,
         InputEvent as _, InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent,
         MouseMoveEvent, ParentElement, Pixels, Point, Render, StatefulInteractiveElement as _,
-        Styled, TestAppContext, Window, WindowAppearance, WindowOptions, canvas, div, point, px,
-        size,
+        Styled, TestAppContext, TransformationMatrix, Window, WindowAppearance, WindowOptions,
+        canvas, deferred, div, point, px, radians, size,
     };
 
     struct EmptyView;
@@ -7069,6 +7178,165 @@ mod tests {
         // The deferred clear must actually run once the outer draw unwinds:
         // subsequent draws of both windows work against a fresh arena.
         cx.update_window(window.into(), |_, window, cx| window.draw(cx).clear(cx))
+            .unwrap();
+    }
+
+    struct TransformStackProbe;
+
+    impl Render for TransformStackProbe {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(canvas(
+                |_, window, _| {
+                    let unit = TransformationMatrix::unit();
+                    assert_eq!(window.current_transform(), unit);
+
+                    // `None` (the common case — most elements have no transform)
+                    // short-circuits without pushing onto the stack.
+                    window.with_transform(None, |window| {
+                        assert_eq!(window.current_transform(), unit);
+                    });
+                    assert_eq!(window.current_transform(), unit);
+
+                    // A lone transform becomes the stack top...
+                    let scale_x = TransformationMatrix {
+                        rotation_scale: [[2.0, 0.0], [0.0, 1.0]],
+                        translation: [0.0, 0.0],
+                    };
+                    window.with_transform(Some(scale_x), |window| {
+                        assert_eq!(window.current_transform(), scale_x);
+
+                        // ...and nested transforms compose so the inner one
+                        // applies first, then the outer one:
+                        // p = (5, 3) --translate(10, 0)--> (15, 3) --scale_x(2)-->
+                        // (30, 3).
+                        let translate = TransformationMatrix {
+                            rotation_scale: [[1.0, 0.0], [0.0, 1.0]],
+                            translation: [10.0, 0.0],
+                        };
+                        window.with_transform(Some(translate), |window| {
+                            assert_eq!(
+                                window.current_transform().apply(point(px(5.), px(3.))),
+                                point(px(30.), px(3.))
+                            );
+                        });
+                        // The inner transform was popped on exit.
+                        assert_eq!(window.current_transform(), scale_x);
+                    });
+                    // The outer transform was popped on exit; nothing leaks.
+                    assert_eq!(window.current_transform(), unit);
+                },
+                |_, _, _, _| {},
+            ))
+        }
+    }
+
+    /// The transform stack starts empty, `None` short-circuits without pushing,
+    /// nested `with_transform` calls compose (inner transform applies first),
+    /// and every push is popped on exit so no transform leaks past its element.
+    #[gpui::test]
+    fn transform_stack_composes_nested_transforms_and_restores(cx: &mut TestAppContext) {
+        cx.add_window(|_, _| TransformStackProbe);
+    }
+
+    struct DeferredTransformProbe {
+        /// `current_transform` at a sibling canvas during the main prepaint pass.
+        main: Rc<Cell<TransformationMatrix>>,
+        /// `current_transform` at a canvas inside the deferred subtree, during
+        /// the re-prepaint round of the deferred draw.
+        re_prepaint: Rc<Cell<TransformationMatrix>>,
+        /// `current_transform` at the same canvas, during `paint_deferred_draws`.
+        painted: Rc<Cell<TransformationMatrix>>,
+    }
+
+    impl Render for DeferredTransformProbe {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            let main = self.main.clone();
+            let re_prepaint = self.re_prepaint.clone();
+            let painted = self.painted.clone();
+            div().size_full().child(
+                // Outer styled div: rotate.
+                div()
+                    .ml(px(100.))
+                    .mt(px(100.))
+                    .w(px(200.))
+                    .h(px(100.))
+                    .transform(CssTransform::identity().rotate(radians(FRAC_PI_8)))
+                    .child(
+                        // Inner styled div: scale, so the deferred element is
+                        // deferred under the composite rotate ∘ scale.
+                        div()
+                            .w(px(200.))
+                            .h(px(100.))
+                            .transform(CssTransform::identity().scale(1.5, 1.))
+                            // Sibling canvas: prepaints in the main pass under
+                            // the same composite the deferred element captures.
+                            .child(canvas(
+                                move |_, window, _| main.set(window.current_transform()),
+                                |_, _, _, _| {},
+                            ))
+                            .child(deferred(
+                                // The deferred subtree carries its own transform
+                                // (translate); replaying it must not apply the
+                                // captured ancestor composite twice around it.
+                                div()
+                                    .w(px(40.))
+                                    .h(px(40.))
+                                    .transform(CssTransform::identity().translate_x(px(40.)))
+                                    .child(canvas(
+                                        move |_, window, _| {
+                                            re_prepaint.set(window.current_transform())
+                                        },
+                                        move |_, _, window, _| {
+                                            painted.set(window.current_transform())
+                                        },
+                                    )),
+                            )),
+                    ),
+            )
+        }
+    }
+
+    /// A `deferred` element records the composite transform of its styled
+    /// ancestors at defer time (during the main prepaint), and its content is
+    /// later re-prepainted and painted under that same composite — with the
+    /// subtree's own transforms applied once on top, never twice. Prior to the
+    /// capture, the re-paint ran with an empty transform stack, so the inner
+    /// subtree lost every ancestor transform.
+    #[gpui::test]
+    fn deferred_draws_capture_and_replay_ancestor_transforms(cx: &mut TestAppContext) {
+        let main = Rc::new(Cell::new(TransformationMatrix::unit()));
+        let re_prepaint = Rc::new(Cell::new(TransformationMatrix::unit()));
+        let painted = Rc::new(Cell::new(TransformationMatrix::unit()));
+
+        let window = cx.add_window({
+            let main = main.clone();
+            let re_prepaint = re_prepaint.clone();
+            let painted = painted.clone();
+            move |_, _| DeferredTransformProbe {
+                main,
+                re_prepaint,
+                painted,
+            }
+        });
+
+        window
+            .update(cx, |_, window, _| {
+                assert_eq!(window.rendered_frame.deferred_draws.len(), 1);
+                let captured = window.rendered_frame.deferred_draws[0].transform;
+
+                // The sibling canvas prepaints at the same point of the
+                // ancestor stack where the element was deferred, so the
+                // captured matrix is the composite of both outer transforms.
+                assert_eq!(captured, Some(main.get()));
+                assert_ne!(main.get(), TransformationMatrix::unit());
+
+                // Re-prepaint and paint both run under the captured composite
+                // with the deferred subtree's own translate applied once:
+                // the two stacks agree, and they extend — not repeat — the
+                // ancestors' composite.
+                assert_eq!(re_prepaint.get(), painted.get());
+                assert_ne!(re_prepaint.get(), main.get());
+            })
             .unwrap();
     }
 

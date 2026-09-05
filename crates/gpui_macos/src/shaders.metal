@@ -566,12 +566,16 @@ struct UnderlineVertexOutput {
   float4 color [[flat]];
   uint underline_id [[flat]];
   float clip_distance [[clip_distance]][4];
+  // Position in the underline's untransformed (local) coordinate space, used by the fragment
+  // shader for the wavy SDF so transforms don't distort the wave.
+  float2 local_position;
 };
 
 struct UnderlineFragmentInput {
   float4 position [[position]];
   float4 color [[flat]];
   uint underline_id [[flat]];
+  float2 local_position;
 };
 
 vertex UnderlineVertexOutput underline_vertex(
@@ -582,16 +586,19 @@ vertex UnderlineVertexOutput underline_vertex(
     [[buffer(ShadowInputIndex_ViewportSize)]]) {
   float2 unit_vertex = unit_vertices[unit_vertex_id];
   Underline underline = underlines[underline_id];
+  float2 local_position = unit_vertex * float2(underline.bounds.size.width, underline.bounds.size.height) +
+      float2(underline.bounds.origin.x, underline.bounds.origin.y);
   float4 device_position =
-      to_device_position(unit_vertex, underline.bounds, viewport_size);
-  float4 clip_distance = distance_from_clip_rect(unit_vertex, underline.bounds,
-                                                 underline.content_mask.bounds);
+      to_device_position_transformed(unit_vertex, underline.bounds, underline.transformation, viewport_size);
+  float4 clip_distance = distance_from_clip_rect_transformed(unit_vertex, underline.bounds,
+                                                 underline.content_mask.bounds, underline.transformation);
   float4 color = hsla_to_rgba(underline.color);
   return UnderlineVertexOutput{
       device_position,
       color,
       underline_id,
-      {clip_distance.x, clip_distance.y, clip_distance.z, clip_distance.w}};
+      {clip_distance.x, clip_distance.y, clip_distance.z, clip_distance.w},
+      local_position};
 }
 
 fragment float4 underline_fragment(UnderlineFragmentInput input [[stage_in]],
@@ -606,7 +613,7 @@ fragment float4 underline_fragment(UnderlineFragmentInput input [[stage_in]],
     float2 origin =
         float2(underline.bounds.origin.x, underline.bounds.origin.y);
 
-    float2 st = ((input.position.xy - origin) / underline.bounds.size.height) -
+    float2 st = ((input.local_position - origin) / underline.bounds.size.height) -
                 float2(0., 0.5);
     float frequency = (M_PI_F * WAVE_FREQUENCY * underline.thickness) / underline.bounds.size.height;
     float amplitude = (underline.thickness * WAVE_HEIGHT_RATIO) / underline.bounds.size.height;
@@ -684,12 +691,16 @@ struct PolychromeSpriteVertexOutput {
   float2 tile_position;
   uint sprite_id [[flat]];
   float clip_distance [[clip_distance]][4];
+  // Position in the sprite's untransformed (local) coordinate space, used by the fragment
+  // shader for the corner-radius SDF so transforms don't distort rounded corners.
+  float2 local_position;
 };
 
 struct PolychromeSpriteFragmentInput {
   float4 position [[position]];
   float2 tile_position;
   uint sprite_id [[flat]];
+  float2 local_position;
 };
 
 vertex PolychromeSpriteVertexOutput polychrome_sprite_vertex(
@@ -703,16 +714,19 @@ vertex PolychromeSpriteVertexOutput polychrome_sprite_vertex(
 
   float2 unit_vertex = unit_vertices[unit_vertex_id];
   PolychromeSprite sprite = sprites[sprite_id];
+  float2 local_position = unit_vertex * float2(sprite.bounds.size.width, sprite.bounds.size.height) +
+      float2(sprite.bounds.origin.x, sprite.bounds.origin.y);
   float4 device_position =
-      to_device_position(unit_vertex, sprite.bounds, viewport_size);
-  float4 clip_distance = distance_from_clip_rect(unit_vertex, sprite.bounds,
-                                                 sprite.content_mask.bounds);
+      to_device_position_transformed(unit_vertex, sprite.bounds, sprite.transformation, viewport_size);
+  float4 clip_distance = distance_from_clip_rect_transformed(unit_vertex, sprite.bounds,
+                                                 sprite.content_mask.bounds, sprite.transformation);
   float2 tile_position = to_tile_position(unit_vertex, sprite.tile, atlas_size);
   return PolychromeSpriteVertexOutput{
       device_position,
       tile_position,
       sprite_id,
-      {clip_distance.x, clip_distance.y, clip_distance.z, clip_distance.w}};
+      {clip_distance.x, clip_distance.y, clip_distance.z, clip_distance.w},
+      local_position};
 }
 
 fragment float4 polychrome_sprite_fragment(
@@ -725,7 +739,7 @@ fragment float4 polychrome_sprite_fragment(
   float4 sample =
       atlas_texture.sample(atlas_texture_sampler, input.tile_position);
   float distance =
-      quad_sdf(input.position.xy, sprite.bounds, sprite.corner_radii);
+      quad_sdf(input.local_position, sprite.bounds, sprite.corner_radii);
 
   float4 color = sample;
   if (sprite.grayscale) {

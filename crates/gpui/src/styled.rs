@@ -83,14 +83,20 @@ pub trait Styled: Sized {
 
     /// Applies a CSS-style transform to this element, like CSS `transform`.
     ///
-    /// The transform affects painting only: layout and hit-testing keep using the element's
-    /// untransformed bounds (matching CSS semantics, where transforms don't affect layout).
-    /// Currently the transform is applied to the element's own background and border quads;
-    /// drop shadows and child elements are not transformed yet.
+    /// The transform follows the CSS model: it applies to the element's whole painted
+    /// output — background, border, text, images, and child elements — as one group,
+    /// and it composes down the tree (a child's transform applies inside its parent's).
+    /// Layout and hit-testing keep using the element's untransformed bounds, matching
+    /// CSS semantics where transforms don't affect layout.
+    ///
+    /// Paint-time limitations: drop/inset shadows, `path`, `Surface`, and
+    /// `backdrop_filter` on a transformed element are not transformed yet, and an
+    /// ancestor's clip (e.g. `overflow: hidden`) is applied against the untransformed
+    /// bounds, in the ancestor's own space.
     ///
     /// ```
     /// # use gpui::*;
-    /// div().transform(CssTransform::identity().translateX(px(10.)).scale(1.5, 1.5))
+    /// let _ = div().transform(CssTransform::identity().translate_x(px(10.)).scale(1.5, 1.5));
     /// ```
     fn transform(mut self, transform: impl Into<CssTransform>) -> Self {
         self.style().transform = Some(transform.into());

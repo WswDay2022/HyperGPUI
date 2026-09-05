@@ -8,6 +8,9 @@
 //!
 //! - `Quad`: 184 bytes; `transformation.rotation_scale` at offset 160, `translation` at 176
 //! - `Shadow`: 112 bytes, `element_corner_radii` ending at 112
+//! - `Underline` / `PolychromeSprite`: appended `transformation` fields (offsets printed by
+//!   `underline_vertex` / `polychrome_sprite_vertex` below — appended fields shift nothing
+//!   already in the struct, so the trailing offsets simply pin the match)
 //!
 //! Any `ld_structured` byteOffset for `transformation` other than 160/176 means the Rust
 //! and HLSL layouts disagree and every quad except element 0 reads garbage transforms.
@@ -105,6 +108,8 @@ fn hlsl_quad_layout_probe() -> Result<()> {
         ("quad_vertex", "vs_4_1"),
         ("quad_fragment", "ps_4_1"),
         ("shadow_vertex", "vs_4_1"),
+        ("underline_vertex", "vs_4_1"),
+        ("polychrome_sprite_vertex", "vs_4_1"),
     ] {
         let blob = compile(entry, target)?;
         let asm = disassemble(&blob)?;

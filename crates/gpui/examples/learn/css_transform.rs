@@ -1,9 +1,13 @@
 //! CSS Transform Example
 //!
 //! Demonstrates the CSS-style `transform` support added to `Styled`: `translate`,
-//! `scale`, `rotate`, `skew` and `matrix`, composed left-to-right like CSS. The
-//! transform is applied at paint time on the GPU — layout and hit-testing keep the
-//! element's untransformed bounds (CSS semantics).
+//! `scale`, `rotate`, `skew` and `matrix`, composed left-to-right like CSS.
+//! Layout and hit-testing keep the element's untransformed bounds (CSS semantics),
+//! while the transform applies at paint time to the element's **whole subtree**:
+//! its background and border, its text glyphs, emoji, underline/strikethrough
+//! rules, and its child elements — whose own transforms compose with the
+//! ancestor's (`rotate` a card containing a `translate_x` child and the child
+//! shifts along the card's rotated axis).
 //!
 //! Every row pairs a **reference card** (untransformed, left) with a **transformed
 //! card** (same size, right) so the effect is immediately visible. Hover the cards:
@@ -53,6 +57,94 @@ impl Render for CssTransformExample {
             .child(transform_row("rotate(22.5°)", rgb(0xec6d3d), CssTransform::identity().rotate(radians(FRAC_PI_8))))
             .child(transform_row("skewX(15°)", rgb(0x0e9f9f), CssTransform::identity().skew_x(radians(FRAC_PI_8))))
             .child(transform_row("matrix(1,0,0.3,1,0,0)", rgb(0x9b5de5), CssTransform::identity().matrix(1.0, 0.0, 0.3, 1.0, px(0.0), px(0.0))))
+            .child(subtree_row(
+                "rotate(22.5°): text, emoji, underline & a nested child follow",
+                rgb(0x5d3fd3),
+                CssTransform::identity().rotate(radians(FRAC_PI_8)),
+            ))
+            .child(subtree_row(
+                "skewX(15°): the same subtree under shear",
+                rgb(0x0e7490),
+                CssTransform::identity().skew_x(radians(FRAC_PI_8)),
+            ))
+    }
+}
+
+/// A row exercising "subtree follow": on the right, the *whole* painted subtree —
+/// glyphs, emoji, underline/strikethrough rules and a child element with its own
+/// transform — moves with the card's outer transform. In the transformed card the
+/// nested `translate_x` child shifts along the card's rotated/sheared axis, proving
+/// the inner transform composes with the outer one.
+fn subtree_row(label: &'static str, color: gpui::Rgba, transform: CssTransform) -> impl IntoElement {
+    div()
+        .id(label)
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(14.0))
+        .child(content_card(color, None))
+        .child(
+            div()
+                .w(px(150.0))
+                .text_size(px(11.0))
+                .text_color(rgb(0xffffff99))
+                .child(label),
+        )
+        .child(content_card(color, Some(transform)))
+}
+
+/// A content card: colored background + border, a text line mixing CJK glyphs and an
+/// emoji, an underlined / struck-through word line, and a nested child element that
+/// carries its own transform. Pass `None` for the plain reference card.
+fn content_card(color: gpui::Rgba, transform: Option<CssTransform>) -> impl IntoElement {
+    let card = div()
+        .w(px(190.0))
+        .h(px(96.0))
+        .rounded(px(10.0))
+        .p(px(8.0))
+        .background(color)
+        .border_1()
+        .border_color(rgb(0xffffff33))
+        .flex()
+        .flex_col()
+        .gap(px(4.0))
+        .child(
+            div()
+                .text_size(px(13.0))
+                .text_color(rgb(0xffffff))
+                .child("Text 字形 follows 🚀"),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .gap(px(10.0))
+                .text_size(px(13.0))
+                .child(div().underline().text_color(rgb(0xffffff)).child("underlined"))
+                .child(
+                    div()
+                        .line_through()
+                        .text_color(rgb(0xffffffaa))
+                        .child("struck"),
+                ),
+        )
+        .child(
+            div()
+                .mt(px(2.0))
+                .w(px(64.0))
+                .h(px(16.0))
+                .rounded(px(5.0))
+                .background(rgb(0x00000033))
+                .flex()
+                .items_center()
+                .justify_center()
+                .transform(CssTransform::identity().translate_x(px(8.0)))
+                .child(div().text_size(px(10.0)).text_color(rgb(0xffffff)).child("nested ↷")),
+        );
+
+    match transform {
+        Some(transform) => card.transform(transform),
+        None => card,
     }
 }
 
@@ -101,7 +193,7 @@ fn transformed_card(color: gpui::Rgba, transform: CssTransform) -> impl IntoElem
 
 fn main() {
     gpui_platform::application().run(|cx: &mut App| {
-        let bounds = Bounds::centered(None, size(px(720.0), px(760.0)), cx);
+        let bounds = Bounds::centered(None, size(px(720.0), px(1020.0)), cx);
 
         let _ = cx.open_window(
             WindowOptions {

@@ -3,7 +3,7 @@ use crate::{
     Corners, CornersRefinement, CssTransform, CursorStyle, DefiniteLength, DevicePixels, Edges,
     EdgesRefinement, Font, FontFallbacks, FontFeatures, FontStyle, FontWeight, GridLocation, Length,
     Pixels, Point, PointRefinement, ScaledPixels, SharedString, Size, SizeRefinement, Styled,
-    TextRun, Window, black, phi, point, px, quad, rems, size,
+    TextRun, TransformationMatrix, Window, black, phi, point, px, quad, rems, size,
 };
 use collections::HashSet;
 use palette::{Hsla, IntoColor, rgb::Rgba};
@@ -782,12 +782,7 @@ impl Style {
             .to_pixels(rem_size)
             .clamp_radii_for_quad_size(bounds.size);
 
-        // CSS-style transform (paint-time only): the element's own box is drawn through this
-        // matrix around its center. Layout and hit-testing keep the untransformed bounds.
-        let center = bounds.center();
-        let transformation = self.transform.as_ref().map(|transform| {
-            transform.to_matrix(center, window.scale_factor())
-        });
+        let transformation = self.paint_transform(bounds, window.scale_factor());
 
         window.paint_drop_shadows(bounds, corner_radii, &self.box_shadow);
 
@@ -825,8 +820,7 @@ impl Style {
                     Edges::default(),
                     border_color,
                     self.border_style,
-                )
-                .transformation(transformation));
+                ));
             }
 
             window.paint_inset_shadows(bounds, corner_radii, &self.box_shadow);
@@ -844,16 +838,15 @@ impl Style {
                     border_widths,
                     self.border_color.unwrap_or_default(),
                     self.border_style,
-                )
-                .transformation(transformation));
+                ));
             }
         };
 
         if self.filter.is_empty() {
-            paint_box(window, cx);
+            window.with_transform(transformation, |window| paint_box(window, cx));
         } else {
             window.with_filter_layer(bounds, corner_radii, &self.filter, |window| {
-                paint_box(window, cx);
+                window.with_transform(transformation, |window| paint_box(window, cx));
             });
         }
 
@@ -861,6 +854,22 @@ impl Style {
         if self.debug_below {
             cx.remove_global::<DebugBelow>();
         }
+    }
+
+    /// The CSS transform this style applies to its box and subtree, as a matrix around the
+    /// element's center — or `None` when the style has no transform. Layout and hit-testing
+    /// keep the untransformed bounds. Shared by the paint phase ([`Style::paint`]) and the
+    /// prepaint phase ([`crate::Window::with_transform`] in `div.rs`), so a subtree
+    /// prepainted through this matrix (e.g. inside a deferred draw) is captured under the
+    /// same matrix it is later painted with.
+    pub(crate) fn paint_transform(
+        &self,
+        bounds: Bounds<Pixels>,
+        scale_factor: f32,
+    ) -> Option<TransformationMatrix> {
+        self.transform
+            .as_ref()
+            .map(|transform| transform.to_matrix(bounds.center(), scale_factor))
     }
 
     fn is_border_visible(&self) -> bool {

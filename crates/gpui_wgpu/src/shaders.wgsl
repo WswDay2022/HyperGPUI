@@ -1166,6 +1166,7 @@ struct Underline {
     color: Hsla,
     thickness: f32,
     wavy: u32,
+    transformation: TransformationMatrix,
 }
 @group(1) @binding(0) var<storage, read> b_underlines: array<Underline>;
 
@@ -1175,6 +1176,9 @@ struct UnderlineVarying {
     @location(1) @interpolate(flat) underline_id: u32,
     //TODO: use `clip_distance` once Naga supports it
     @location(3) clip_distances: vec4<f32>,
+    // Position in the underline's untransformed (local) coordinate space, used by the
+    // fragment shader for the wavy SDF so it isn't distorted by an ancestor transform.
+    @location(2) local_position: vec2<f32>,
 }
 
 @vertex
@@ -1183,10 +1187,11 @@ fn vs_underline(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index) 
     let underline = b_underlines[instance_id];
 
     var out = UnderlineVarying();
-    out.position = to_device_position(unit_vertex, underline.bounds);
+    out.position = to_device_position_transformed(unit_vertex, underline.bounds, underline.transformation);
     out.color = hsla_to_rgba(underline.color);
     out.underline_id = instance_id;
-    out.clip_distances = distance_from_clip_rect(unit_vertex, underline.bounds, underline.content_mask);
+    out.clip_distances = distance_from_clip_rect_transformed(unit_vertex, underline.bounds, underline.content_mask, underline.transformation);
+    out.local_position = unit_vertex * vec2<f32>(underline.bounds.size) + underline.bounds.origin;
     return out;
 }
 
@@ -1208,7 +1213,7 @@ fn fs_underline(input: UnderlineVarying) -> @location(0) vec4<f32> {
 
     let half_thickness = underline.thickness * 0.5;
 
-    let st = (input.position.xy - underline.bounds.origin) / underline.bounds.size.y - vec2<f32>(0.0, 0.5);
+    let st = (input.local_position - underline.bounds.origin) / underline.bounds.size.y - vec2<f32>(0.0, 0.5);
     let frequency = M_PI_F * WAVE_FREQUENCY * underline.thickness / underline.bounds.size.y;
     let amplitude = (underline.thickness * WAVE_HEIGHT_RATIO) / underline.bounds.size.y;
 
@@ -1280,6 +1285,7 @@ struct PolychromeSprite {
     content_mask: Bounds,
     corner_radii: Corners,
     tile: AtlasTile,
+    transformation: TransformationMatrix,
 }
 @group(1) @binding(0) var<storage, read> b_poly_sprites: array<PolychromeSprite>;
 
@@ -1288,6 +1294,9 @@ struct PolySpriteVarying {
     @location(0) tile_position: vec2<f32>,
     @location(1) @interpolate(flat) sprite_id: u32,
     @location(3) clip_distances: vec4<f32>,
+    // Position in the sprite's untransformed (local) coordinate space, used by the
+    // fragment shader for the corner-radius SDF so it isn't distorted by the transform.
+    @location(2) local_position: vec2<f32>,
 }
 
 @vertex
@@ -1296,10 +1305,11 @@ fn vs_poly_sprite(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index
     let sprite = b_poly_sprites[instance_id];
 
     var out = PolySpriteVarying();
-    out.position = to_device_position(unit_vertex, sprite.bounds);
+    out.position = to_device_position_transformed(unit_vertex, sprite.bounds, sprite.transformation);
     out.tile_position = to_tile_position(unit_vertex, sprite.tile);
     out.sprite_id = instance_id;
-    out.clip_distances = distance_from_clip_rect(unit_vertex, sprite.bounds, sprite.content_mask);
+    out.clip_distances = distance_from_clip_rect_transformed(unit_vertex, sprite.bounds, sprite.content_mask, sprite.transformation);
+    out.local_position = unit_vertex * vec2<f32>(sprite.bounds.size) + sprite.bounds.origin;
     return out;
 }
 
@@ -1312,7 +1322,7 @@ fn fs_poly_sprite(input: PolySpriteVarying) -> @location(0) vec4<f32> {
     }
 
     let sprite = b_poly_sprites[input.sprite_id];
-    let distance = quad_sdf(input.position.xy, sprite.bounds, sprite.corner_radii);
+    let distance = quad_sdf(input.local_position, sprite.bounds, sprite.corner_radii);
 
     var color = sample;
     if (sprite.grayscale != 0u) {

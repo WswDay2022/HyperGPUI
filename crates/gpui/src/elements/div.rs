@@ -675,10 +675,7 @@ impl Interactivity {
     /// See [`Context::listener`](crate::Context::listener) to get access to a view's state from this callback.
     pub fn on_hover(&mut self, listener: impl Fn(&bool, &mut Window, &mut App) + 'static)
     where
-        Self: Sized,
-    {
-        self.hover_listeners.push(Rc::new(listener));
-    }
+        Self: Sized, { self.hover_listeners.push(Rc::new(listener)); }
 
     /// Use the given callback to construct a new tooltip view when the mouse hovers over this element.
     /// The imperative API equivalent to [`StatefulInteractiveElement::tooltip`].
@@ -2398,7 +2395,14 @@ impl Interactivity {
 
                             let scroll_offset =
                                 self.clamp_scroll_position(bounds, &style, window, cx);
-                            let result = f(&style, scroll_offset, hitbox, window, cx);
+                            // Mirror the transform `Style::paint` applies to the subtree during
+                            // the paint phase, so children prepainted here — e.g. a `deferred`
+                            // element capturing its surroundings — record the same composite
+                            // matrix they are later painted under. Hitboxes stay untransformed.
+                            let result = window.with_transform(
+                                style.paint_transform(bounds, window.scale_factor()),
+                                |window| f(&style, scroll_offset, hitbox, window, cx),
+                            );
                             (result, element_state)
                         },
                     )
