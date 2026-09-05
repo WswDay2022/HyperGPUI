@@ -250,7 +250,7 @@ impl Render for AsyncTasksExample {
             .id("main")
             .size_full()
             .p_6()
-            .bg(colors.background)
+            .background(colors.background)
             .overflow_scroll()
             .child(
                 div()
@@ -361,8 +361,8 @@ impl Render for AsyncTasksExample {
                                     .text_sm()
                                     .text_color(colors.text)
                                     .cursor_pointer()
-                                    .bg(bg)
-                                    .hover(move |style| style.bg(bg_hover))
+                                    .background(bg)
+                                    .hover(move |style| style.background(bg_hover))
                                     .child(if is_running { "Stop" } else { "Start Counter" })
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.cancellable_demo.update(cx, |demo, cx| {
@@ -447,7 +447,7 @@ fn demo_section(
         .gap_3()
         .p_4()
         .rounded_lg()
-        .bg(colors.container)
+        .background(colors.container)
         .border_1()
         .border_color(colors.border)
         .child(
@@ -492,13 +492,13 @@ fn button(
         .text_sm()
         .text_color(text)
         .when(disabled, |el| {
-            el.bg(disabled_bg).cursor_not_allowed().opacity(0.6)
+            el.background(disabled_bg).cursor_not_allowed().opacity(0.6)
         })
         .when(!disabled, |el| {
-            el.bg(bg)
+            el.background(bg)
                 .cursor_pointer()
-                .hover(move |style| style.bg(bg_hover))
-                .active(move |style| style.bg(bg_active))
+                .hover(move |style| style.background(bg_hover))
+                .active(move |style| style.background(bg_active))
         })
         .child(label)
 }
@@ -519,9 +519,9 @@ fn secondary_button(
         .rounded_md()
         .text_sm()
         .text_color(text)
-        .bg(bg)
+        .background(bg)
         .cursor_pointer()
-        .hover(move |style| style.bg(bg_hover))
+        .hover(move |style| style.background(bg_hover))
         .child(label)
 }
 
@@ -534,13 +534,13 @@ fn progress_bar(colors: &Colors, progress: u32) -> impl IntoElement {
         .h_2()
         .w_full()
         .rounded_full()
-        .bg(bar_bg)
+        .background(bar_bg)
         .overflow_hidden()
         .child(
             div()
                 .h_full()
                 .rounded_full()
-                .bg(bar_fill)
+                .background(bar_fill)
                 .w(gpui::relative(clamped as f32 / 100.0)),
         )
 }

@@ -60,7 +60,7 @@ pub trait Styled: Sized {
     }
 
     /// Blur the content rendered behind this element — a frosted-glass effect — like CSS
-    /// `backdrop-filter: blur(<radius>)`. Typically paired with a translucent [`Styled::bg`]
+    /// `backdrop-filter: blur(<radius>)`. Typically paired with a translucent [`Styled::background`]
     /// so the background tints the blurred backdrop.
     ///
     /// *Appends* to the element's backdrop-filter chain. To replace the whole chain, use
@@ -570,7 +570,7 @@ pub trait Styled: Sized {
     }
 
     /// Sets the background color of the element.
-    fn bg<F>(mut self, fill: F) -> Self
+    fn background<F>(mut self, fill: F) -> Self
     where
         F: Into<Fill>,
         Self: Sized,
@@ -616,7 +616,7 @@ pub trait Styled: Sized {
     /// Sets the background color of this element.
     ///
     /// This value cascades to its child elements.
-    fn text_bg(mut self, bg: impl IntoColor<Hsla>) -> Self {
+    fn text_background(mut self, bg: impl IntoColor<Hsla>) -> Self {
         self.text_style().background_color = Some(bg.into_color());
         self
     }

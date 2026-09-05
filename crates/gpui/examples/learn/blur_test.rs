@@ -37,7 +37,7 @@ impl Render for BlurTest {
             .id("blur-test-root")
             .relative()
             .size_full()
-            .bg(rgb(0x14141a))
+            .background(rgb(0x14141a))
             // High-frequency background: a strip of small colored squares across the top.
             .child(
                 div()
@@ -56,7 +56,7 @@ impl Render for BlurTest {
                         div()
                             .w(px(8.0))
                             .h(px(52.0))
-                            .bg(hsla(hue / 360.0, 0.8, 0.55, 1.0))
+                            .background(hsla(hue / 360.0, 0.8, 0.55, 1.0))
                     })),
             )
             // Bright marker at the right edge: with a wrapping sampler, blur taps leaving the
@@ -69,7 +69,7 @@ impl Render for BlurTest {
                     .top(px(110.0))
                     .w(px(60.0))
                     .h(px(200.0))
-                    .bg(rgb(0xff2222)),
+                    .background(rgb(0xff2222)),
             )
             .child(blur_panel("center r=16", 16.0, 330.0, 90.0, 260.0, 140.0, true))
             .child(blur_panel("left edge r=24", 24.0, 8.0, 80.0, 220.0, 110.0, true))
@@ -87,19 +87,19 @@ impl Render for BlurTest {
                     .h(px(150.0))
                     .blur(px(18.0))
                     .rounded(px(12.0))
-                    .bg(rgb(0x2d8f5e))
+                    .background(rgb(0x2d8f5e))
                     .flex()
                     .flex_row()
                     .gap(px(10.0))
                     .items_center()
                     .justify_center()
-                    .child(div().w(px(60.0)).h(px(60.0)).bg(rgb(0xe2b714)))
-                    .child(div().w(px(60.0)).h(px(60.0)).rounded_full().bg(rgb(0xd14d42)))
+                    .child(div().w(px(60.0)).h(px(60.0)).background(rgb(0xe2b714)))
+                    .child(div().w(px(60.0)).h(px(60.0)).rounded_full().background(rgb(0xd14d42)))
                     .child(
                         div()
                             .w(px(80.0))
                             .h(px(60.0))
-                            .bg(rgb(0x1e66f5))
+                            .background(rgb(0x1e66f5))
                             .child("blur(18)"),
                     ),
             )
@@ -136,7 +136,7 @@ fn blur_panel(
         .w(px(width))
         .h(px(height))
         .backdrop_blur(px(radius))
-        .bg(rgba(0xffffff22))
+        .background(rgba(0xffffff22))
         .flex()
         .items_center()
         .justify_center()

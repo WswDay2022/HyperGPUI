@@ -218,7 +218,7 @@ mod conditional {
             .size_full()
             .flex()
             .flex_col()
-            .bg(rgb(0x161616))
+            .background(rgb(0x161616))
             .child(
                 div()
                     .id("inspector-header")
@@ -240,7 +240,7 @@ mod conditional {
                             .px(px(4.0))
                             .py(px(2.0))
                             .rounded(px(4.0))
-                            .bg(if is_picking { rgb(0x3b82f6) } else { rgb(0x2a2a2a) })
+                            .background(if is_picking { rgb(0x3b82f6) } else { rgb(0x2a2a2a) })
                             .text_size(px(11.0))
                             .text_color(rgb(0xffffff))
                             .cursor_pointer()

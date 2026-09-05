@@ -295,7 +295,7 @@ impl Render for DrawingCanvas {
                     .id("drawing-area")
                     .h_48()
                     .rounded_lg()
-                    .bg(surface)
+                    .background(surface)
                     .border_1()
                     .border_color(border)
                     .cursor_crosshair()
@@ -330,11 +330,11 @@ impl Render for DrawingCanvas {
                             .px_3()
                             .py_1()
                             .rounded_md()
-                            .bg(error)
+                            .background(error)
                             .text_sm()
                             .text_color(text)
                             .cursor_pointer()
-                            .hover(move |s| s.bg(error_hover))
+                            .hover(move |s| s.background(error_hover))
                             .child("Clear")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.clear(cx);
@@ -372,7 +372,7 @@ impl Render for CustomDrawingExample {
             .id("main")
             .size_full()
             .p_6()
-            .bg(colors.background)
+            .background(colors.background)
             .overflow_scroll()
             .child(
                 div()
@@ -439,7 +439,7 @@ fn section(
         .gap_3()
         .p_4()
         .rounded_lg()
-        .bg(surface.opacity(0.5))
+        .background(surface.opacity(0.5))
         .border_1()
         .border_color(colors.border)
         .child(

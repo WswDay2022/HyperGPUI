@@ -52,7 +52,7 @@ mod example {
                 .text_size(rems(4.5))
                 .font_weight(FontWeight::EXTRA_BOLD)
                 .text_color(white())
-                .bg(rgba(0x0000044))
+                .background(rgba(0x0000044))
                 .rounded_xl()
                 .child(format!("{:02}:{:02}:{:02}", hours, minutes, seconds))
         }

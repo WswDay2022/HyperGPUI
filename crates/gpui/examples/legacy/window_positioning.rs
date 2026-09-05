@@ -17,7 +17,7 @@ impl Render for WindowContent {
         div()
             .flex()
             .flex_col()
-            .bg(self.bg)
+            .background(self.bg)
             .size_full()
             .items_center()
             .text_color(rgb(0xffffff))

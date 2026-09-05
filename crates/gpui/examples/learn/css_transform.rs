@@ -38,7 +38,7 @@ impl Render for CssTransformExample {
             .flex_col()
             .gap(px(14.0))
             .p(px(28.0))
-            .bg(rgb(0x14141a))
+            .background(rgb(0x14141a))
             .child(
                 div()
                     .text_size(px(18.0))
@@ -81,7 +81,7 @@ fn reference_card(color: gpui::Rgba) -> impl IntoElement {
         .w(px(140.0))
         .h(px(70.0))
         .rounded(px(10.0))
-        .bg(color)
+        .background(color)
         .border_1()
         .border_color(rgb(0xffffff33))
 }
@@ -92,7 +92,7 @@ fn transformed_card(color: gpui::Rgba, transform: CssTransform) -> impl IntoElem
         .w(px(140.0))
         .h(px(70.0))
         .rounded(px(10.0))
-        .bg(color)
+        .background(color)
         .border_1()
         .border_color(rgb(0xffffff33))
         .cursor(gpui::CursorStyle::PointingHand)

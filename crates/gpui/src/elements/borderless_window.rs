@@ -150,7 +150,7 @@ impl RenderOnce for BorderlessWindow {
             .id(id.clone())
             .relative()
             .size_full()
-            .bg(transparent_black())
+            .background(transparent_black())
             .child(div().size_full().p(inset).children(children))
             .children(RESIZE_EDGES.map(move |(edge, cursor)| {
                 resize_handle(id.clone(), edge, cursor, edge_size, corner_size)

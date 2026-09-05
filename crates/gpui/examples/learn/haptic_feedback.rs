@@ -74,10 +74,10 @@ impl HapticFeedbackExample {
             .px_4()
             .py_3()
             .rounded_md()
-            .bg(color)
+            .background(color)
             .cursor_pointer()
-            .hover(move |s| s.bg(color.opacity(0.8)))
-            .active(move |s| s.bg(color.opacity(0.6)))
+            .hover(move |s| s.background(color.opacity(0.8)))
+            .active(move |s| s.background(color.opacity(0.6)))
             .child(
                 div()
                     .text_base()
@@ -139,7 +139,7 @@ impl Render for HapticFeedbackExample {
             .flex()
             .flex_col()
             .size_full()
-            .bg(colors.background)
+            .background(colors.background)
             .p_8()
             .gap_6()
             .child(
@@ -168,7 +168,7 @@ impl Render for HapticFeedbackExample {
                     .px_4()
                     .py_2()
                     .rounded_md()
-                    .bg(if self.supported {
+                    .background(if self.supported {
                         rgb(0x22c55e)
                     } else {
                         rgb(0xf59e0b)
@@ -180,7 +180,7 @@ impl Render for HapticFeedbackExample {
                         } else {
                             rgb(0xf59e0b)
                         };
-                        div().size_2().rounded_full().bg(dot)
+                        div().size_2().rounded_full().background(dot)
                     })
                     .child(
                         div()
@@ -281,7 +281,7 @@ impl Render for HapticFeedbackExample {
                                     .w_full()
                                     .h_1p5()
                                     .rounded_full()
-                                    .bg(colors.text.opacity(0.12))
+                                    .background(colors.text.opacity(0.12))
                                     .flex()
                                     .items_center()
                                     .justify_between()
@@ -289,7 +289,7 @@ impl Render for HapticFeedbackExample {
                                         div()
                                             .size_1p5()
                                             .rounded_full()
-                                            .bg(colors.disabled)
+                                            .background(colors.disabled)
                                             .into_any()
                                     }))
                                     .child(
@@ -298,7 +298,7 @@ impl Render for HapticFeedbackExample {
                                             .h_full()
                                             .left(px(0.))
                                             .right(relative(1.0 - slider_percentage))
-                                            .bg(slider_color.opacity(0.7))
+                                            .background(slider_color.opacity(0.7))
                                             .rounded_full(),
                                     )
                                     .child(
@@ -309,7 +309,7 @@ impl Render for HapticFeedbackExample {
                                             .ml(px(-8.))
                                             .size_4()
                                             .rounded_full()
-                                            .bg(slider_color)
+                                            .background(slider_color)
                                             .shadow_md(),
                                     ),
                             ),

@@ -45,7 +45,7 @@ impl Render for SvgExample {
             .justify_center()
             .items_center()
             .gap_8()
-            .bg(rgb(0xffffff))
+            .background(rgb(0xffffff))
             .child(
                 svg()
                     .path("svg/dragon.svg")

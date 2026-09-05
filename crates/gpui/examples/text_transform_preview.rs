@@ -11,7 +11,7 @@ impl Render for TextTransformPreview {
             .flex()
             .flex_col()
             .gap_4()
-            .bg(rgb(0x10141c))
+            .background(rgb(0x10141c))
             .size(px(720.))
             .p_8()
             .text_color(rgb(0xe5e7eb))
@@ -27,7 +27,7 @@ impl Render for TextTransformPreview {
                     .flex_col()
                     .gap_2()
                     .p_4()
-                    .bg(rgb(0x1f2937))
+                    .background(rgb(0x1f2937))
                     .rounded_md()
                     .child(div().text_sm().text_color(rgb(0x9ca3af)).child("Uppercase"))
                     .child(
@@ -46,7 +46,7 @@ impl Render for TextTransformPreview {
                     .flex_col()
                     .gap_2()
                     .p_4()
-                    .bg(rgb(0x1f2937))
+                    .background(rgb(0x1f2937))
                     .rounded_md()
                     .child(
                         div()

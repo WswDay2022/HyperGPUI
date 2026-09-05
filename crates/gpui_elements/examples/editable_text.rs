@@ -11,7 +11,7 @@ impl Render for Example {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .size_full()
-            .bg(rgb(0x505050))
+            .background(rgb(0x505050))
             .flex()
             .flex_col()
             .p_2()

@@ -39,7 +39,7 @@ impl Render for BorderlessResizableWindow {
             .id("borderless-root")
             .relative()
             .size_full()
-            .bg(transparent_black())
+            .background(transparent_black())
             .child(
                 div()
                     .id("borderless-content")
@@ -50,7 +50,7 @@ impl Render for BorderlessResizableWindow {
                             .id("borderless-window")
                             .size_full()
                             .rounded(px(10.0))
-                            .bg(rgb(0x1e1e2e))
+                            .background(rgb(0x1e1e2e))
                             .border_1()
                             .border_color(rgb(0x3b82f6))
                             .shadow(vec![

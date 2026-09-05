@@ -105,7 +105,7 @@ impl Render for FallbackPromptRenderer {
             .cursor_default()
             .track_focus(&self.focus)
             .w_72()
-            .bg(white())
+            .background(white())
             .rounded_lg()
             .overflow_hidden()
             .p_3()
@@ -152,7 +152,7 @@ impl Render for FallbackPromptRenderer {
             .child(
                 div()
                     .size_full()
-                    .bg(opaque_grey(0.5, 0.6))
+                    .background(opaque_grey(0.5, 0.6))
                     .absolute()
                     .top_0()
                     .left_0(),

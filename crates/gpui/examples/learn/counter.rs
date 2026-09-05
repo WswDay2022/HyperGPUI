@@ -199,7 +199,7 @@ impl Render for Counter {
             .size_full()
             .flex()
             .flex_col()
-            .bg(rgb(0x0f0f0f))
+            .background(rgb(0x0f0f0f))
             // Titlebar: a drag region for the window, with a close button.
             .child(
                 div()
@@ -254,7 +254,7 @@ impl Render for Counter {
                             .rounded_full()
                             .border(px(2.0))
                             .border_color(rgb(0x3b82f6))
-                            .bg(rgb(0x1d4ed8))
+                            .background(rgb(0x1d4ed8))
                             .cursor_pointer()
                             .overflow_hidden()
                             .relative()
@@ -311,7 +311,7 @@ fn kbd_hint(key: &'static str, label: &'static str) -> impl IntoElement {
                 .rounded(px(5.0))
                 .border(px(1.0))
                 .border_color(rgba(0xffffff18))
-                .bg(rgba(0xffffff0a))
+                .background(rgba(0xffffff0a))
                 .text_color(rgba(0xffffff55))
                 .text_size(px(11.0))
                 .child(key),

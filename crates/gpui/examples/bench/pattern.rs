@@ -12,7 +12,7 @@ impl Render for PatternExample {
             .flex()
             .flex_col()
             .gap_3()
-            .bg(rgb(0xffffff))
+            .background(rgb(0xffffff))
             .size(px(600.0))
             .justify_center()
             .items_center()
@@ -26,22 +26,22 @@ impl Render for PatternExample {
                     .flex_col()
                     .border_1()
                     .border_color(gpui::blue())
-                    .child(div().w(px(54.0)).h(px(18.0)).bg(pattern_slash(
+                    .child(div().w(px(54.0)).h(px(18.0)).background(pattern_slash(
                         gpui::red(),
                         18.0 / 4.0,
                         18.0 / 4.0,
                     )))
-                    .child(div().w(px(54.0)).h(px(18.0)).bg(pattern_slash(
+                    .child(div().w(px(54.0)).h(px(18.0)).background(pattern_slash(
                         gpui::red(),
                         18.0 / 4.0,
                         18.0 / 4.0,
                     )))
-                    .child(div().w(px(54.0)).h(px(18.0)).bg(pattern_slash(
+                    .child(div().w(px(54.0)).h(px(18.0)).background(pattern_slash(
                         gpui::red(),
                         18.0 / 4.0,
                         18.0 / 4.0,
                     )))
-                    .child(div().w(px(54.0)).h(px(18.0)).bg(pattern_slash(
+                    .child(div().w(px(54.0)).h(px(18.0)).background(pattern_slash(
                         gpui::red(),
                         18.0 / 4.0,
                         18.0 / 2.0,
@@ -53,24 +53,24 @@ impl Render for PatternExample {
                     .flex_col()
                     .border_1()
                     .border_color(gpui::blue())
-                    .bg(gpui::green().with_alpha(0.16))
+                    .background(gpui::green().with_alpha(0.16))
                     .child("Elements the same height should align")
-                    .child(div().w(px(256.0)).h(px(56.0)).bg(pattern_slash(
+                    .child(div().w(px(256.0)).h(px(56.0)).background(pattern_slash(
                         gpui::red(),
                         56.0 / 6.0,
                         56.0 / 6.0,
                     )))
-                    .child(div().w(px(256.0)).h(px(56.0)).bg(pattern_slash(
+                    .child(div().w(px(256.0)).h(px(56.0)).background(pattern_slash(
                         gpui::green(),
                         56.0 / 6.0,
                         56.0 / 6.0,
                     )))
-                    .child(div().w(px(256.0)).h(px(56.0)).bg(pattern_slash(
+                    .child(div().w(px(256.0)).h(px(56.0)).background(pattern_slash(
                         gpui::blue(),
                         56.0 / 6.0,
                         56.0 / 6.0,
                     )))
-                    .child(div().w(px(256.0)).h(px(26.0)).bg(pattern_slash(
+                    .child(div().w(px(256.0)).h(px(26.0)).background(pattern_slash(
                         gpui::yellow(),
                         56.0 / 6.0,
                         56.0 / 6.0,
@@ -82,7 +82,7 @@ impl Render for PatternExample {
                     .border_color(gpui::blue())
                     .w(px(240.0))
                     .h(px(40.0))
-                    .bg(gpui::red()),
+                    .background(gpui::red()),
             )
             .child(
                 div()
@@ -90,7 +90,7 @@ impl Render for PatternExample {
                     .border_color(gpui::blue())
                     .w(px(240.0))
                     .h(px(40.0))
-                    .bg(linear_gradient(
+                    .background(linear_gradient(
                         45.,
                         linear_color_stop(gpui::red(), 0.),
                         linear_color_stop(gpui::blue(), 1.),

@@ -57,7 +57,7 @@ impl Render for AnimationExample {
             .id("main")
             .size_full()
             .p_6()
-            .bg(colors.background)
+            .background(colors.background)
             .overflow_scroll()
             .child(
                 div()
@@ -249,7 +249,7 @@ fn section(colors: &Colors, title: &'static str, content: impl IntoElement) -> i
         .flex_col()
         .gap_2()
         .p_4()
-        .bg(surface.opacity(0.5))
+        .background(surface.opacity(0.5))
         .rounded_lg()
         .child(
             div()

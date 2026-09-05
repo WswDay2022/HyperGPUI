@@ -13,7 +13,7 @@ impl Render for HelloWorld {
             .flex()
             .flex_col()
             .gap_3()
-            .bg(rgb(0x505050))
+            .background(rgb(0x505050))
             .size(px(500.0))
             .justify_center()
             .items_center()
@@ -30,7 +30,7 @@ impl Render for HelloWorld {
                     .child(
                         div()
                             .size_8()
-                            .bg(gpui::red())
+                            .background(gpui::red())
                             .border_1()
                             .border_dashed()
                             .rounded_md()
@@ -39,7 +39,7 @@ impl Render for HelloWorld {
                     .child(
                         div()
                             .size_8()
-                            .bg(gpui::green())
+                            .background(gpui::green())
                             .border_1()
                             .border_dashed()
                             .rounded_md()
@@ -48,7 +48,7 @@ impl Render for HelloWorld {
                     .child(
                         div()
                             .size_8()
-                            .bg(gpui::blue())
+                            .background(gpui::blue())
                             .border_1()
                             .border_dashed()
                             .rounded_md()
@@ -57,7 +57,7 @@ impl Render for HelloWorld {
                     .child(
                         div()
                             .size_8()
-                            .bg(gpui::yellow())
+                            .background(gpui::yellow())
                             .border_1()
                             .border_dashed()
                             .rounded_md()
@@ -66,7 +66,7 @@ impl Render for HelloWorld {
                     .child(
                         div()
                             .size_8()
-                            .bg(gpui::black())
+                            .background(gpui::black())
                             .border_1()
                             .border_dashed()
                             .rounded_md()
@@ -76,7 +76,7 @@ impl Render for HelloWorld {
                     .child(
                         div()
                             .size_8()
-                            .bg(gpui::white())
+                            .background(gpui::white())
                             .border_1()
                             .border_dashed()
                             .rounded_md()

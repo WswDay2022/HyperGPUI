@@ -45,7 +45,7 @@ fn busy_background() -> impl IntoElement {
                         div()
                             .flex_1()
                             .h_full()
-                            .bg(rgb(hex))
+                            .background(rgb(hex))
                             .flex()
                             .items_center()
                             .justify_center()
@@ -67,7 +67,7 @@ fn frosted_panel() -> impl IntoElement {
         .w(px(360.))
         .h(px(200.))
         .rounded_xl()
-        .bg(rgba(0xffffff30))
+        .background(rgba(0xffffff30))
         .backdrop_blur(px(24.))
         .border_1()
         .border_color(rgba(0xffffff60))
@@ -90,7 +90,7 @@ fn deferred_popover() -> impl IntoElement {
             .w(px(300.))
             .h(px(150.))
             .rounded_lg()
-            .bg(rgba(0x1e293b66))
+            .background(rgba(0x1e293b66))
             .backdrop_blur(px(12.))
             .border_1()
             .border_color(rgba(0xffffffaa))
@@ -112,7 +112,7 @@ fn content_blurred() -> impl IntoElement {
         .w(px(280.))
         .h(px(120.))
         .blur(px(5.))
-        .bg(rgb(0x0f172a))
+        .background(rgb(0x0f172a))
         .rounded_lg()
         .flex()
         .items_center()
@@ -132,7 +132,7 @@ fn content_blurred_rich() -> impl IntoElement {
         .w(px(280.))
         .h(px(120.))
         .blur(px(6.))
-        .bg(rgb(0x1e293b))
+        .background(rgb(0x1e293b))
         .rounded_lg()
         .flex()
         .items_center()
@@ -141,7 +141,7 @@ fn content_blurred_rich() -> impl IntoElement {
         .children(
             [0xef4444, 0x22c55e, 0x3b82f6]
                 .into_iter()
-                .map(|hex| div().w(px(48.)).h(px(48.)).rounded_md().bg(rgb(hex))),
+                .map(|hex| div().w(px(48.)).h(px(48.)).rounded_md().background(rgb(hex))),
         )
 }
 
@@ -157,7 +157,7 @@ fn nested_content_blurred() -> impl IntoElement {
         .w(px(290.))
         .h(px(220.))
         .blur(px(3.))
-        .bg(rgb(0x1e293b))
+        .background(rgb(0x1e293b))
         .rounded_xl()
         .flex()
         .flex_col()
@@ -172,7 +172,7 @@ fn nested_content_blurred() -> impl IntoElement {
                 .w(px(190.))
                 .h(px(100.))
                 .blur(px(8.))
-                .bg(rgb(0xf59e0b))
+                .background(rgb(0xf59e0b))
                 .rounded_lg()
                 .flex()
                 .items_center()
@@ -194,7 +194,7 @@ fn seam_block(i: usize, hex: u32, blur_each: bool) -> impl IntoElement {
     let block = div().flex_1().h_full();
     let block = if blur_each { block.blur(px(5.)) } else { block };
     block
-        .bg(rgb(hex))
+        .background(rgb(hex))
         .flex()
         .items_center()
         .justify_center()
@@ -214,7 +214,7 @@ fn adjacent_per_block_blur() -> impl IntoElement {
         .top(px(350.))
         .w(px(290.))
         .h(px(110.))
-        .bg(rgb(0x050505))
+        .background(rgb(0x050505))
         .flex()
         .children(
             SEAM_COLORS
@@ -235,7 +235,7 @@ fn adjacent_group_blur() -> impl IntoElement {
         .top(px(510.))
         .w(px(290.))
         .h(px(110.))
-        .bg(rgb(0x050505))
+        .background(rgb(0x050505))
         .blur(px(5.))
         .flex()
         .children(
@@ -255,7 +255,7 @@ fn caption(text: &'static str, left: f32, top: f32) -> impl IntoElement {
         .px_2()
         .py_1()
         .rounded_md()
-        .bg(rgba(0x000000cc))
+        .background(rgba(0x000000cc))
         .text_color(rgb(0xffffff))
         .text_sm()
         .child(text)
@@ -266,7 +266,7 @@ impl Render for BlurExample {
         div()
             .relative()
             .size_full()
-            .bg(rgb(0x000000))
+            .background(rgb(0x000000))
             .child(busy_background())
             .child(frosted_panel())
             .child(content_blurred())

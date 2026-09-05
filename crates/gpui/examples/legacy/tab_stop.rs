@@ -59,7 +59,7 @@ impl Render for Example {
                 .items_center()
                 .border_1()
                 .border_color(gpui::black())
-                .bg(gpui::black())
+                .background(gpui::black())
                 .text_color(gpui::white())
                 .focus(tab_stop_style)
                 .shadow_sm()
@@ -75,7 +75,7 @@ impl Render for Example {
             .flex_col()
             .p_4()
             .gap_3()
-            .bg(gpui::white())
+            .background(gpui::white())
             .text_color(gpui::black())
             .child(self.message.clone())
             .children(
@@ -100,7 +100,7 @@ impl Render for Example {
                             )
                             .map(|this| match item_handle.tab_stop {
                                 true => this
-                                    .hover(|this| this.bg(gpui::black().with_alpha(0.1)))
+                                    .hover(|this| this.background(gpui::black().with_alpha(0.1)))
                                     .child(format!("tab_index: {}", item_handle.tab_index)),
                                 false => this.opacity(0.4).child("tab_stop: false"),
                             })

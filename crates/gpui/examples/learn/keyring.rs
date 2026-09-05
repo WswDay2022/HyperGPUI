@@ -87,7 +87,7 @@ impl Render for KeyringExample {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let colors = Colors::for_appearance(window);
 
-        div().size_full().p_6().bg(colors.background).child(
+        div().size_full().p_6().background(colors.background).child(
             div()
                 .flex()
                 .flex_col()
@@ -110,7 +110,7 @@ impl Render for KeyringExample {
                     div()
                         .p_4()
                         .rounded_lg()
-                        .bg(colors.container)
+                        .background(colors.container)
                         .border_1()
                         .border_color(colors.border)
                         .text_sm()
@@ -151,9 +151,9 @@ fn button(
         .rounded_md()
         .text_sm()
         .text_color(colors.selected_text)
-        .bg(colors.selected)
+        .background(colors.selected)
         .cursor_pointer()
-        .hover(move |style| style.bg(bg_hover))
+        .hover(move |style| style.background(bg_hover))
         .child(label)
 }
 

@@ -9,7 +9,7 @@ impl Shadow {
     fn base() -> Div {
         div()
             .size_16()
-            .bg(rgb(0xffffff))
+            .background(rgb(0xffffff))
             .rounded_full()
             .border_1()
             .border_color(hsla(0.0, 0.0, 0.0, 0.1))
@@ -18,7 +18,7 @@ impl Shadow {
     fn square() -> Div {
         div()
             .size_16()
-            .bg(rgb(0xffffff))
+            .background(rgb(0xffffff))
             .border_1()
             .border_color(hsla(0.0, 0.0, 0.0, 0.1))
     }
@@ -26,7 +26,7 @@ impl Shadow {
     fn rounded_small() -> Div {
         div()
             .size_16()
-            .bg(rgb(0xffffff))
+            .background(rgb(0xffffff))
             .rounded(px(4.))
             .border_1()
             .border_color(hsla(0.0, 0.0, 0.0, 0.1))
@@ -35,7 +35,7 @@ impl Shadow {
     fn rounded_medium() -> Div {
         div()
             .size_16()
-            .bg(rgb(0xffffff))
+            .background(rgb(0xffffff))
             .rounded(px(8.))
             .border_1()
             .border_color(hsla(0.0, 0.0, 0.0, 0.1))
@@ -44,7 +44,7 @@ impl Shadow {
     fn rounded_large() -> Div {
         div()
             .size_16()
-            .bg(rgb(0xffffff))
+            .background(rgb(0xffffff))
             .rounded(px(12.))
             .border_1()
             .border_color(hsla(0.0, 0.0, 0.0, 0.1))
@@ -88,7 +88,7 @@ impl Render for Shadow {
         div()
             .id("shadow-example")
             .overflow_y_scroll()
-            .bg(rgb(0xffffff))
+            .background(rgb(0xffffff))
             .size_full()
             .text_xs()
             .child(div().flex().flex_col().w_full().children(vec![

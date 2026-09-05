@@ -24,7 +24,7 @@ impl Render for SystemNotificationExample {
             .size_full()
             .gap_4()
             .p_8()
-            .bg(rgb(0x18181b))
+            .background(rgb(0x18181b))
             .text_color(rgb(0xf4f4f5))
             .child(div().text_2xl().child("GPUI system notifications"))
             .child(div().text_sm().text_color(rgb(0xa1a1aa)).child(
@@ -71,7 +71,7 @@ impl Render for SystemNotificationExample {
                     .mt_2()
                     .p_4()
                     .rounded_md()
-                    .bg(rgb(0x27272a))
+                    .background(rgb(0x27272a))
                     .child(self.status.clone()),
             )
             .when(cfg!(target_os = "macos"), |this| {
@@ -88,9 +88,9 @@ fn button(id: &'static str, label: &'static str) -> Stateful<Div> {
         .px_4()
         .py_2()
         .rounded_md()
-        .bg(rgb(0x3f3f46))
-        .hover(|style| style.bg(rgb(0x52525b)))
-        .active(|style| style.bg(rgb(0x71717a)))
+        .background(rgb(0x3f3f46))
+        .hover(|style| style.background(rgb(0x52525b)))
+        .active(|style| style.background(rgb(0x71717a)))
         .cursor_pointer()
         .child(label)
 }

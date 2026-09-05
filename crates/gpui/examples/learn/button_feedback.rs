@@ -105,7 +105,7 @@ impl Render for ButtonFeedback {
             .h(px(88.0))
             .rounded(px(16.0))
             .cursor(CursorStyle::PointingHand)
-            .bg(linear_gradient(
+            .background(linear_gradient(
                 180.0,
                 linear_color_stop(color, 0.0),
                 linear_color_stop(color_dark, 1.0),
@@ -167,7 +167,7 @@ impl Render for ButtonFeedback {
             .id("borderless-root")
             .relative()
             .size_full()
-            .bg(transparent_black())
+            .background(transparent_black())
             .child(
                 div()
                     .id("borderless-content")
@@ -178,7 +178,7 @@ impl Render for ButtonFeedback {
                             .id("borderless-window")
                             .size_full()
                             .rounded(px(10.0))
-                            .bg(rgb(0x0f0f14))
+                            .background(rgb(0x0f0f14))
                             .border_1()
                             .border_color(rgb(0x3b82f6))
                             .shadow(vec![

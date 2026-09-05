@@ -18,7 +18,7 @@ impl Render for Tree {
         let mut depth = *DEPTH;
         static COLORS: [gpui::Hsla; 4] = [gpui::red(), gpui::blue(), gpui::green(), gpui::yellow()];
         let mut colors = COLORS.iter().cycle().copied();
-        let mut next_div = || div().p_0p5().bg(colors.next().unwrap());
+        let mut next_div = || div().p_0p5().background(colors.next().unwrap());
         let mut innermost_node = next_div();
         while depth > 0 {
             innermost_node = next_div().child(innermost_node);

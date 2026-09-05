@@ -138,7 +138,7 @@ fn text_alignment_example(colors: &Colors) -> impl IntoElement {
                 .child(
                     div()
                         .p_2()
-                        .bg(surface)
+                        .background(surface)
                         .rounded_sm()
                         .text_color(text)
                         .child("Left aligned (default)"),
@@ -146,7 +146,7 @@ fn text_alignment_example(colors: &Colors) -> impl IntoElement {
                 .child(
                     div()
                         .p_2()
-                        .bg(surface)
+                        .background(surface)
                         .rounded_sm()
                         .text_center()
                         .text_color(text)
@@ -155,7 +155,7 @@ fn text_alignment_example(colors: &Colors) -> impl IntoElement {
                 .child(
                     div()
                         .p_2()
-                        .bg(surface)
+                        .background(surface)
                         .rounded_sm()
                         .text_right()
                         .text_color(text)
@@ -244,7 +244,7 @@ fn text_overflow_example(colors: &Colors) -> impl IntoElement {
                         .child(
                             div()
                                 .p_2()
-                                .bg(surface)
+                                .background(surface)
                                 .border_1()
                                 .border_color(border)
                                 .rounded_sm()
@@ -268,7 +268,7 @@ fn text_overflow_example(colors: &Colors) -> impl IntoElement {
                         .child(
                             div()
                                 .p_2()
-                                .bg(surface)
+                                .background(surface)
                                 .border_1()
                                 .border_color(border)
                                 .rounded_sm()
@@ -293,7 +293,7 @@ fn text_overflow_example(colors: &Colors) -> impl IntoElement {
                         .child(
                             div()
                                 .p_2()
-                                .bg(surface)
+                                .background(surface)
                                 .border_1()
                                 .border_color(border)
                                 .rounded_sm()
@@ -317,7 +317,7 @@ fn text_overflow_example(colors: &Colors) -> impl IntoElement {
                         .child(
                             div()
                                 .p_2()
-                                .bg(surface)
+                                .background(surface)
                                 .border_1()
                                 .border_color(border)
                                 .rounded_sm()
@@ -387,7 +387,7 @@ fn character_grid_example(colors: &Colors) -> impl IntoElement {
         .child(
             div()
                 .p_2()
-                .bg(surface)
+                .background(surface)
                 .border_1()
                 .border_color(border)
                 .rounded_md()
@@ -436,7 +436,7 @@ fn line_height_example(colors: &Colors) -> impl IntoElement {
                     div()
                         .flex_1()
                         .p_2()
-                        .bg(surface)
+                        .background(surface)
                         .rounded_sm()
                         .text_color(text)
                         .text_sm()
@@ -447,7 +447,7 @@ fn line_height_example(colors: &Colors) -> impl IntoElement {
                     div()
                         .flex_1()
                         .p_2()
-                        .bg(surface)
+                        .background(surface)
                         .rounded_sm()
                         .text_color(text)
                         .text_sm()
@@ -458,7 +458,7 @@ fn line_height_example(colors: &Colors) -> impl IntoElement {
                     div()
                         .flex_1()
                         .p_2()
-                        .bg(surface)
+                        .background(surface)
                         .rounded_sm()
                         .text_color(text)
                         .text_sm()
@@ -480,7 +480,7 @@ impl Render for TextExample {
             .id("main")
             .size_full()
             .p_4()
-            .bg(colors.background)
+            .background(colors.background)
             .overflow_scroll()
             .child(
                 div()
@@ -554,7 +554,7 @@ fn section(colors: &Colors, title: &'static str, content: impl IntoElement) -> i
         .flex_col()
         .gap_2()
         .p_3()
-        .bg(surface.opacity(0.5))
+        .background(surface.opacity(0.5))
         .rounded_lg()
         .child(
             div()

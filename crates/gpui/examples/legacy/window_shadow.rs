@@ -24,11 +24,11 @@ impl Render for WindowShadow {
 
         div()
             .id("window-backdrop")
-            .bg(transparent_black())
+            .background(transparent_black())
             .map(|div| match decorations {
                 Decorations::Server => div,
                 Decorations::Client { tiling, .. } => div
-                    .bg(gpui::transparent_black())
+                    .background(gpui::transparent_black())
                     .child(
                         canvas(
                             |_bounds, window, _cx| {
@@ -117,7 +117,7 @@ impl Render for WindowShadow {
                     .on_mouse_move(|_e, _, cx| {
                         cx.stop_propagation();
                     })
-                    .bg(gpui::rgb(0xCCCCFF))
+                    .background(gpui::rgb(0xCCCCFF))
                     .size_full()
                     .flex()
                     .flex_col()
@@ -126,7 +126,7 @@ impl Render for WindowShadow {
                         div().w_full().flex().flex_row().justify_around().child(
                             div()
                                 .flex()
-                                .bg(white())
+                                .background(white())
                                 .size(px(300.0))
                                 .justify_center()
                                 .items_center()
@@ -140,7 +140,7 @@ impl Render for WindowShadow {
                                         .id("hello")
                                         .w(px(200.0))
                                         .h(px(100.0))
-                                        .bg(green())
+                                        .background(green())
                                         .shadow(vec![
                                             gpui::BoxShadow::new(
                                                 px(0.),

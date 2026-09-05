@@ -52,7 +52,7 @@ impl Render for ClickDemo {
             .gap_3()
             .p_4()
             .rounded_lg()
-            .bg(colors.container)
+            .background(colors.container)
             .child(
                 div()
                     .text_sm()
@@ -72,12 +72,12 @@ impl Render for ClickDemo {
                     .px_4()
                     .py_2()
                     .rounded_md()
-                    .bg(colors.selected)
+                    .background(colors.selected)
                     .text_color(colors.selected_text)
                     .text_sm()
                     .cursor_pointer()
-                    .hover(|style| style.bg(colors.selected))
-                    .active(|style| style.bg(colors.selected))
+                    .hover(|style| style.background(colors.selected))
+                    .active(|style| style.background(colors.selected))
                     .child("Click Me!")
                     // on_click receives a ClickEvent with click_count() method
                     .on_click(cx.listener(|this, event: &ClickEvent, _window, cx| {
@@ -146,7 +146,7 @@ impl Render for HoverDemo {
             .gap_3()
             .p_4()
             .rounded_lg()
-            .bg(colors.container)
+            .background(colors.container)
             .child(
                 div()
                     .text_sm()
@@ -172,7 +172,7 @@ impl Render for HoverDemo {
                     } else {
                         colors.border
                     })
-                    .bg(if is_hovered {
+                    .background(if is_hovered {
                         colors.selected
                     } else {
                         colors.selected
@@ -255,7 +255,7 @@ impl Render for MouseEventsDemo {
             .gap_3()
             .p_4()
             .rounded_lg()
-            .bg(colors.container)
+            .background(colors.container)
             .child(
                 div()
                     .text_sm()
@@ -280,7 +280,7 @@ impl Render for MouseEventsDemo {
                     } else {
                         colors.border
                     })
-                    .bg(if is_pressed {
+                    .background(if is_pressed {
                         colors.selected
                     } else {
                         colors.selected
@@ -375,7 +375,7 @@ impl Render for DragData {
                     .items_center()
                     .w(size.width)
                     .h(size.height)
-                    .bg(self.color.opacity(0.8))
+                    .background(self.color.opacity(0.8))
                     .text_color(gpui::white())
                     .text_xs()
                     .rounded_md()
@@ -406,7 +406,7 @@ impl Render for DragDropDemo {
             .gap_3()
             .p_4()
             .rounded_lg()
-            .bg(colors.container)
+            .background(colors.container)
             .child(
                 div()
                     .text_sm()
@@ -439,7 +439,7 @@ impl Render for DragDropDemo {
                             .cursor_grab()
                             .hover(move |style| {
                                 let c: Hsla = color.into_color();
-                                style.bg(c.opacity(0.1))
+                                style.background(c.opacity(0.1))
                             })
                             .child(format!("Item {}", index + 1))
                             // on_drag takes: drag data, and a closure that creates the drag preview
@@ -461,7 +461,7 @@ impl Render for DragDropDemo {
                             .map(|d| d.color)
                             .unwrap_or_else(|| colors.border.into_color()),
                     )
-                    .when_some(self.dropped_item, |el, data| el.bg(data.color.opacity(0.2)))
+                    .when_some(self.dropped_item, |el, data| el.background(data.color.opacity(0.2)))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -511,7 +511,7 @@ impl Render for InteractiveElementsExample {
             .id("main")
             .size_full()
             .p_6()
-            .bg(colors.background)
+            .background(colors.background)
             .overflow_scroll()
             .child(
                 div()

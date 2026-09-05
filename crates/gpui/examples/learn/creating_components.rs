@@ -56,7 +56,7 @@ fn use_state_counter(colors: &Colors, window: &mut Window, cx: &mut App) -> impl
         .gap_2()
         .p_4()
         .rounded_lg()
-        .bg(colors.container)
+        .background(colors.container)
         .child(
             div()
                 .text_sm()
@@ -79,10 +79,10 @@ fn use_state_counter(colors: &Colors, window: &mut Window, cx: &mut App) -> impl
                         .px_3()
                         .py_1()
                         .rounded_md()
-                        .bg(error)
+                        .background(error)
                         .text_color(colors.selected_text)
                         .cursor_pointer()
-                        .hover(move |style| style.bg(error_hover))
+                        .hover(move |style| style.background(error_hover))
                         .child("−")
                         .on_click({
                             let state = state.clone();
@@ -100,10 +100,10 @@ fn use_state_counter(colors: &Colors, window: &mut Window, cx: &mut App) -> impl
                         .px_3()
                         .py_1()
                         .rounded_md()
-                        .bg(success)
+                        .background(success)
                         .text_color(colors.selected_text)
                         .cursor_pointer()
-                        .hover(move |style| style.bg(success_hover))
+                        .hover(move |style| style.background(success_hover))
                         .child("+")
                         .on_click(move |_, _, cx| {
                             state.update(cx, |state, cx| {
@@ -177,7 +177,7 @@ impl RenderOnce for RenderOnceCounter {
             .gap_2()
             .p_4()
             .rounded_lg()
-            .bg(colors.container)
+            .background(colors.container)
             .child(
                 div()
                     .text_sm()
@@ -200,10 +200,10 @@ impl RenderOnce for RenderOnceCounter {
                             .px_3()
                             .py_1()
                             .rounded_md()
-                            .bg(error)
+                            .background(error)
                             .text_color(colors.selected_text)
                             .cursor_pointer()
-                            .hover(move |style| style.bg(error_hover))
+                            .hover(move |style| style.background(error_hover))
                             .child("−")
                             .when_some(self.on_decrement, |element, callback| {
                                 element.on_click(move |_, window, cx| callback(window, cx))
@@ -215,10 +215,10 @@ impl RenderOnce for RenderOnceCounter {
                             .px_3()
                             .py_1()
                             .rounded_md()
-                            .bg(success)
+                            .background(success)
                             .text_color(colors.selected_text)
                             .cursor_pointer()
-                            .hover(move |style| style.bg(success_hover))
+                            .hover(move |style| style.background(success_hover))
                             .child("+")
                             .when_some(self.on_increment, |element, callback| {
                                 element.on_click(move |_, window, cx| callback(window, cx))
@@ -282,7 +282,7 @@ impl Render for RenderCounter {
             .gap_2()
             .p_4()
             .rounded_lg()
-            .bg(colors.container)
+            .background(colors.container)
             .child(
                 div()
                     .text_sm()
@@ -305,10 +305,10 @@ impl Render for RenderCounter {
                             .px_3()
                             .py_1()
                             .rounded_md()
-                            .bg(error)
+                            .background(error)
                             .text_color(colors.selected_text)
                             .cursor_pointer()
-                            .hover(move |style| style.bg(error_hover))
+                            .hover(move |style| style.background(error_hover))
                             .child("−")
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.decrement(window, cx);
@@ -320,10 +320,10 @@ impl Render for RenderCounter {
                             .px_3()
                             .py_1()
                             .rounded_md()
-                            .bg(success)
+                            .background(success)
                             .text_color(colors.selected_text)
                             .cursor_pointer()
-                            .hover(move |style| style.bg(success_hover))
+                            .hover(move |style| style.background(success_hover))
                             .child("+")
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.increment(window, cx);
@@ -364,7 +364,7 @@ impl Render for CreatingComponentsExample {
             .flex_col()
             .gap_6()
             .p_8()
-            .bg(colors.background)
+            .background(colors.background)
             .overflow_scroll()
             .child(
                 div()

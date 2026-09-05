@@ -19,7 +19,7 @@ impl Render for ExampleWindow {
             .flex()
             .flex_col()
             .gap_3()
-            .bg(rgb(0x2e2e2e))
+            .background(rgb(0x2e2e2e))
             .size_full()
             .justify_center()
             .items_center()

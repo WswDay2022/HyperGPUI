@@ -66,11 +66,11 @@ impl Render for Example {
                 .flex()
                 .justify_center()
                 .items_center()
-                .bg(gpui::rgb(0x2563eb))
+                .background(gpui::rgb(0x2563eb))
                 .text_color(gpui::white())
                 .rounded_md()
                 .cursor_pointer()
-                .hover(|style| style.bg(gpui::rgb(0x1d4ed8)))
+                .hover(|style| style.background(gpui::rgb(0x1d4ed8)))
                 .child(label)
         }
 
@@ -85,7 +85,7 @@ impl Render for Example {
             .flex_col()
             .p_8()
             .gap_6()
-            .bg(gpui::rgb(0xf3f4f6))
+            .background(gpui::rgb(0xf3f4f6))
             .child(
                 div()
                     .text_2xl()
@@ -97,7 +97,7 @@ impl Render for Example {
                 div()
                     .p_4()
                     .rounded_md()
-                    .bg(gpui::rgb(0xdbeafe))
+                    .background(gpui::rgb(0xdbeafe))
                     .text_color(gpui::rgb(0x1e3a8a))
                     .child(self.message.clone()),
             )

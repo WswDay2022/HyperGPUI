@@ -63,7 +63,7 @@ impl RenderOnce for Button {
             .pr(px(14.))
             .pt(px(10.))
             .pb(px(10.))
-            .bg(bg_color)
+            .background(bg_color)
             .text_color(rgb(0x110F15))
             .children(self.children)
             .on_hover(move |hover, _window, cx| {
@@ -85,7 +85,7 @@ impl Render for TransitionExample {
             .justify_center()
             .items_center()
             .absolute()
-            .bg(rgb(0x110F15))
+            .background(rgb(0x110F15))
             .gap(px(20.))
             .p(px(100.))
             .child(Button::new("btn").child("Click me!"))

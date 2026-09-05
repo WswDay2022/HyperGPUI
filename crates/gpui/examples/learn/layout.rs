@@ -24,7 +24,7 @@ fn block(label: &'static str, color: Hsla, text_color: Rgba) -> Div {
         .flex()
         .items_center()
         .justify_center()
-        .bg(color)
+        .background(color)
         .border_1()
         .border_color(gpui::white().with_alpha(0.3))
         .rounded_md()
@@ -111,7 +111,7 @@ fn flexbox_justify_example(colors: &Colors) -> impl IntoElement {
                         .flex()
                         .justify_between()
                         .p_1()
-                        .bg(surface)
+                        .background(surface)
                         .rounded_sm()
                         .child(block("Start", gpui::red(), text).px_2().py_1())
                         .child(block("End", gpui::blue(), text).px_2().py_1()),
@@ -121,7 +121,7 @@ fn flexbox_justify_example(colors: &Colors) -> impl IntoElement {
                         .flex()
                         .justify_center()
                         .p_1()
-                        .bg(surface)
+                        .background(surface)
                         .rounded_sm()
                         .child(block("Center", gpui::green(), text).px_2().py_1()),
                 )
@@ -130,7 +130,7 @@ fn flexbox_justify_example(colors: &Colors) -> impl IntoElement {
                         .flex()
                         .justify_end()
                         .p_1()
-                        .bg(surface)
+                        .background(surface)
                         .rounded_sm()
                         .child(block("End", gpui::yellow(), text).px_2().py_1()),
                 ),
@@ -266,7 +266,7 @@ fn app_shell_pattern(colors: &Colors) -> impl IntoElement {
                         .flex()
                         .items_center()
                         .px_2()
-                        .bg(surface_hover)
+                        .background(surface_hover)
                         .text_xs()
                         .text_color(text)
                         .child("Header"),
@@ -278,7 +278,7 @@ fn app_shell_pattern(colors: &Colors) -> impl IntoElement {
                         .child(
                             div()
                                 .w_16()
-                                .bg(surface)
+                                .background(surface)
                                 .flex()
                                 .items_center()
                                 .justify_center()
@@ -289,7 +289,7 @@ fn app_shell_pattern(colors: &Colors) -> impl IntoElement {
                         .child(
                             div()
                                 .flex_1()
-                                .bg(background)
+                                .background(background)
                                 .flex()
                                 .items_center()
                                 .justify_center()
@@ -323,13 +323,13 @@ fn centered_pattern(colors: &Colors) -> impl IntoElement {
                 .flex()
                 .items_center()
                 .justify_center()
-                .bg(surface)
+                .background(surface)
                 .rounded_md()
                 .child(
                     div()
                         .px_4()
                         .py_2()
-                        .bg(accent)
+                        .background(accent)
                         .rounded_md()
                         .text_xs()
                         .text_color(text)
@@ -356,7 +356,7 @@ fn stack_pattern(colors: &Colors) -> impl IntoElement {
             div()
                 .h_20()
                 .relative()
-                .bg(surface)
+                .background(surface)
                 .rounded_md()
                 .child(
                     div()
@@ -364,7 +364,7 @@ fn stack_pattern(colors: &Colors) -> impl IntoElement {
                         .top_2()
                         .left_2()
                         .size_10()
-                        .bg(gpui::red().with_alpha(0.7))
+                        .background(gpui::red().with_alpha(0.7))
                         .rounded_md(),
                 )
                 .child(
@@ -373,7 +373,7 @@ fn stack_pattern(colors: &Colors) -> impl IntoElement {
                         .top_4()
                         .left_4()
                         .size_10()
-                        .bg(gpui::green().with_alpha(0.7))
+                        .background(gpui::green().with_alpha(0.7))
                         .rounded_md(),
                 )
                 .child(
@@ -382,7 +382,7 @@ fn stack_pattern(colors: &Colors) -> impl IntoElement {
                         .top_6()
                         .left_6()
                         .size_10()
-                        .bg(gpui::blue().with_alpha(0.7))
+                        .background(gpui::blue().with_alpha(0.7))
                         .rounded_md(),
                 ),
         )
@@ -400,7 +400,7 @@ impl Render for LayoutExample {
             .id("main")
             .size_full()
             .p_4()
-            .bg(colors.background)
+            .background(colors.background)
             .overflow_scroll()
             .child(
                 div()
@@ -472,7 +472,7 @@ fn section(colors: &Colors, title: &'static str, content: impl IntoElement) -> i
         .flex_col()
         .gap_2()
         .p_3()
-        .bg(surface.opacity(0.5))
+        .background(surface.opacity(0.5))
         .rounded_lg()
         .child(
             div()

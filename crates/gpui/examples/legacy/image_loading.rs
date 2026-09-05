@@ -78,7 +78,7 @@ impl ImageLoadingExample {
                 Animation::new(Duration::from_secs(3))
                     .repeat()
                     .with_easing(pulsating_between(0.04, 0.24)),
-                move |this, delta| this.bg(black().with_alpha(delta)),
+                move |this, delta| this.background(black().with_alpha(delta)),
             ),
         )
     }
@@ -108,7 +108,7 @@ impl Render for ImageLoadingExample {
             div().flex().flex_row().w_full().justify_around().child(
                 div()
                     .flex()
-                    .bg(gpui::white())
+                    .background(gpui::white())
                     .size(Length::Definite(px(300.0).into()))
                     .justify_center()
                     .items_center()

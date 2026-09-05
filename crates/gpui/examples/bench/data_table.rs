@@ -238,7 +238,7 @@ impl RenderOnce for TableRow {
             .flex_row()
             .border_b_1()
             .border_color(rgb(0xE0E0E0))
-            .bg(if self.ix.is_multiple_of(2) {
+            .background(if self.ix.is_multiple_of(2) {
                 rgb(0xFFFFFF)
             } else {
                 rgb(0xFAFAFA)
@@ -313,8 +313,8 @@ impl DataTable {
             .right_1()
             .h(SCROLLBAR_THUMB_HEIGHT)
             .w(SCROLLBAR_THUMB_WIDTH)
-            .bg(rgb(0xC0C0C0))
-            .hover(|this| this.bg(rgb(0xA0A0A0)))
+            .background(rgb(0xC0C0C0))
+            .hover(|this| this.background(rgb(0xA0A0A0)))
             .rounded_lg()
             .child(
                 canvas(
@@ -374,7 +374,7 @@ impl DataTable {
 impl Render for DataTable {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
-            .bg(gpui::white())
+            .background(gpui::white())
             .text_sm()
             .size_full()
             .p_4()
@@ -404,7 +404,7 @@ impl Render for DataTable {
                             .border_b_1()
                             .border_color(rgb(0xE0E0E0))
                             .text_color(rgb(0x555555))
-                            .bg(rgb(0xF0F0F0))
+                            .background(rgb(0xF0F0F0))
                             .py_1()
                             .px_2()
                             .text_xs()
