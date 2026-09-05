@@ -2633,7 +2633,7 @@ mod tests {
     use super::{create_blend_state, update_buffer, GlobalParams, PipelineState, RENDER_TARGET_FORMAT};
     use crate::directx_renderer::shader_resources::ShaderModule;
     use anyhow::Result;
-    use gpui::{bounds, point, rgba, size, Background, ContentMask, Quad, ScaledPixels};
+    use gpui::{bounds, point, rgba, size, Background, ContentMask, Corners, Quad, ScaledPixels};
     use std::slice;
     use windows::core::Interface;
     use windows::Win32::{
@@ -2848,6 +2848,7 @@ mod tests {
                     point(ScaledPixels(0.0), ScaledPixels(0.0)),
                     size(ScaledPixels(64.0), ScaledPixels(64.0)),
                 ),
+                corner_radii: Corners::default(),
             },
             background: Background::from(rgba(0xff0000ff)),
             ..Default::default()

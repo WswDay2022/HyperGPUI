@@ -5,7 +5,7 @@
 //! elements with uniform height.
 
 use crate::{
-    AnyElement, App, AvailableSpace, Bounds, ContentMask, Element, ElementId, Entity,
+    AnyElement, App, AvailableSpace, Bounds, ContentMask, Corners, Element, ElementId, Entity,
     GlobalElementId, Hitbox, InspectorElementId, InteractiveElement, Interactivity, IntoElement,
     IsZero, LayoutId, ListSizingBehavior, Overflow, Pixels, Point, ScrollHandle, Size,
     StyleRefinement, Styled, Window, point, px, size,
@@ -489,7 +489,10 @@ impl Element for UniformList {
                         (self.render_items)(visible_range.clone(), window, cx)
                     };
 
-                    let content_mask = ContentMask { bounds };
+                    let content_mask = ContentMask {
+                        bounds,
+                        corner_radii: Corners::default(),
+                    };
                     window.with_content_mask(Some(content_mask), |window| {
                         for (mut item, ix) in items.into_iter().zip(visible_range.clone()) {
                             let item_origin = padded_bounds.origin

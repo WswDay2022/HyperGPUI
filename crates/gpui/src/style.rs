@@ -733,6 +733,14 @@ impl Style {
                     max.y -= self.border_widths.bottom.to_pixels(rem_size);
                 }
 
+                // Clamp radii exactly like `paint` clamps the background quad's
+                // radii (same bounds, same scale), so an overflow-hidden element
+                // with no ancestors gets a mask identical to its quad and the
+                // shader can skip the redundant rounded cutout.
+                let corner_radii = self
+                    .corner_radii
+                    .to_pixels(rem_size)
+                    .clamp_radii_for_quad_size(bounds.size);
                 let bounds = match (
                     self.overflow.x == Overflow::Visible,
                     self.overflow.y == Overflow::Visible,
@@ -753,7 +761,10 @@ impl Style {
                     (false, false) => Bounds::from_corners(min, max),
                 };
 
-                Some(ContentMask { bounds })
+                Some(ContentMask {
+                    bounds,
+                    corner_radii,
+                })
             }
         }
     }

@@ -1957,30 +1957,39 @@ impl ContentMask<Pixels> {
     pub fn scale(&self, factor: f32) -> ContentMask<ScaledPixels> {
         ContentMask {
             bounds: self.bounds.scale(factor),
-            corner_radii: self.corner_radii.map(|radius| *radius * factor),
+            corner_radii: self.corner_radii.scale(factor),
         }
     }
+}
 
+impl<P> ContentMask<P>
+where
+    P: Clone
+        + Debug
+        + Default
+        + PartialEq
+        + Copy
+        + Ord
+        + std::ops::Add<Output = P>
+        + std::ops::Sub<Output = P>
+        + std::ops::Div<f32, Output = P>,
+{
     /// Intersect the content mask with the given content mask.
     ///
-    /// The resulting mask is the intersection of both boxes. Per corner, the effective
-    /// radius is the other mask's radius when only one of the two corners is rounded
-    /// (square corners don't cut), and the tighter of the two radii when both are
-    /// rounded (the visible corner arc is the inner one). Radii are then clamped to
-    /// the intersected box so an arc can never cross the box.
+    /// The resulting mask clips to the intersection of both boxes. Each corner of the
+    /// intersection is rounded only when a rounded corner of one of the masks sits
+    /// exactly on it — a mask only cuts at its own corners, so an intersection corner
+    /// that cuts straight through the other mask's edge is square, no matter how the
+    /// two radii compare by index. When both masks round the shared corner, the
+    /// tighter (inner) arc governs. Radii are then clamped to the intersected box so
+    /// an arc can never cross the box.
     pub fn intersect(&self, other: &Self) -> Self {
         let bounds = self.bounds.intersect(&other.bounds);
         let corner_radii = Corners {
-            top_left: Self::fold_corner(self.corner_radii.top_left, other.corner_radii.top_left),
-            top_right: Self::fold_corner(self.corner_radii.top_right, other.corner_radii.top_right),
-            bottom_right: Self::fold_corner(
-                self.corner_radii.bottom_right,
-                other.corner_radii.bottom_right,
-            ),
-            bottom_left: Self::fold_corner(
-                self.corner_radii.bottom_left,
-                other.corner_radii.bottom_left,
-            ),
+            top_left: Self::fold_corners_at(self, other, bounds.origin),
+            top_right: Self::fold_corners_at(self, other, bounds.top_right()),
+            bottom_right: Self::fold_corners_at(self, other, bounds.bottom_right()),
+            bottom_left: Self::fold_corners_at(self, other, bounds.bottom_left()),
         }
         .clamp_radii_for_quad_size(bounds.size);
         ContentMask {
@@ -1989,15 +1998,31 @@ impl ContentMask<Pixels> {
         }
     }
 
-    fn fold_corner(self_radius: Pixels, other_radius: Pixels) -> Pixels {
-        let self_zero = self_radius == Pixels::ZERO;
-        let other_zero = other_radius == Pixels::ZERO;
-        match (self_zero, other_zero) {
-            // Square corners don't cut anything; keep the rounded one.
+    /// Radius that `mask` contributes at `point`: the radius of the corner of `mask`'s
+    /// box that lies exactly on `point`, or zero when no corner of the mask sits there
+    /// (the mask's edge then cuts straight through `point`, leaving it square).
+    fn corner_radius_at(mask: &Self, point: Point<P>) -> P {
+        if point == mask.bounds.origin {
+            mask.corner_radii.top_left
+        } else if point == mask.bounds.top_right() {
+            mask.corner_radii.top_right
+        } else if point == mask.bounds.bottom_right() {
+            mask.corner_radii.bottom_right
+        } else if point == mask.bounds.bottom_left() {
+            mask.corner_radii.bottom_left
+        } else {
+            P::default()
+        }
+    }
+
+    /// Fold the two radii contributed at one intersection corner: square stays square,
+    /// a single rounded corner is kept, and two rounded corners defer to the tighter
+    /// (inner) arc.
+    fn fold_radii(self_radius: P, other_radius: P) -> P {
+        match (self_radius == P::default(), other_radius == P::default()) {
             (true, false) => other_radius,
             (false, true) => self_radius,
-            (true, true) => Pixels::ZERO,
-            // Both rounded: the tighter arc governs.
+            (true, true) => P::default(),
             (false, false) => {
                 if self_radius < other_radius {
                     self_radius
@@ -2006,6 +2031,13 @@ impl ContentMask<Pixels> {
                 }
             }
         }
+    }
+
+    fn fold_corners_at(self_mask: &Self, other_mask: &Self, point: Point<P>) -> P {
+        Self::fold_radii(
+            Self::corner_radius_at(self_mask, point),
+            Self::corner_radius_at(other_mask, point),
+        )
     }
 }
 
@@ -2803,6 +2835,7 @@ impl Window {
     fn snapped_content_mask(&self) -> ContentMask<ScaledPixels> {
         ContentMask {
             bounds: self.cover_bounds(self.content_mask().bounds),
+            corner_radii: self.content_mask().corner_radii.scale(self.scale_factor()),
         }
     }
 
@@ -3761,6 +3794,7 @@ impl Window {
                     origin: Point::default(),
                     size: self.viewport_size,
                 },
+                corner_radii: Corners::default(),
             })
     }
 
@@ -4304,12 +4338,18 @@ impl Window {
         ];
 
         for strip in strips {
-            let content_mask_bounds = quad.content_mask.bounds.intersect(&strip);
-            if !content_mask_bounds.is_empty() {
+            // Clip the full (rounded) mask to the strip: a strip corner only inherits the
+            // mask's radius when the mask's own corner sits exactly there (outer corners
+            // flush with the quad), while corners cut straight through the mask's edge
+            // stay square — otherwise an interior strip corner would inherit the mask's
+            // radius and notch the border ring.
+            let content_mask = quad.content_mask.intersect(&ContentMask {
+                bounds: strip,
+                corner_radii: Corners::default(),
+            });
+            if !content_mask.bounds.is_empty() {
                 self.next_frame.scene.insert_primitive(Quad {
-                    content_mask: ContentMask {
-                        bounds: content_mask_bounds,
-                    },
+                    content_mask,
                     ..quad
                 });
             }

@@ -6,14 +6,16 @@
 //! GPU-side `Quad`/`Shadow` structs (matrices and vectors inside structured buffers pack
 //! differently than in cbuffers) so we can verify they match the Rust `repr(C)` layouts:
 //!
-//! - `Quad`: 184 bytes; `transformation.rotation_scale` at offset 160, `translation` at 176
-//! - `Shadow`: 112 bytes, `element_corner_radii` ending at 112
-//! - `Underline` / `PolychromeSprite`: appended `transformation` fields (offsets printed by
-//!   `underline_vertex` / `polychrome_sprite_vertex` below — appended fields shift nothing
-//!   already in the struct, so the trailing offsets simply pin the match)
+//! - `Quad`: 200 bytes; `transformation.rotation_scale` at offset 176, `translation` at 192
+//! - `Shadow`: 128 bytes; `content_mask_corner_radii` at 56 — after Rust's `ContentMask<P>`
+//!   change added rounded `corner_radii`, every struct inserts a `Corners` field right after
+//!   its `Bounds content_mask`, so all later fields shift +16 (Shadow `radii` was 40, now 56)
+//! - `AtlasTile` is pinned at 32 bytes by the monochrome-sprite offsets below (`color` 56,
+//!   `tile` 72, `transformation` 104 — the sprite probes also pin the mask at 24/40)
 //!
-//! Any `ld_structured` byteOffset for `transformation` other than 160/176 means the Rust
-//! and HLSL layouts disagree and every quad except element 0 reads garbage transforms.
+//! Any `ld_structured` byteOffset for `transformation` other than 176/192 (quad) or 104/112
+//! (monochrome sprite) means the Rust and HLSL layouts disagree and every quad except element
+//! 0 reads garbage transforms.
 
 #![cfg(all(test, not(feature = "wgpu")))]
 
@@ -110,6 +112,8 @@ fn hlsl_quad_layout_probe() -> Result<()> {
         ("shadow_vertex", "vs_4_1"),
         ("underline_vertex", "vs_4_1"),
         ("polychrome_sprite_vertex", "vs_4_1"),
+        ("monochrome_sprite_vertex", "vs_4_1"),
+        ("subpixel_sprite_vertex", "vs_4_1"),
     ] {
         let blob = compile(entry, target)?;
         let asm = disassemble(&blob)?;

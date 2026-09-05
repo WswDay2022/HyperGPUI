@@ -1195,6 +1195,7 @@ mod tests {
     fn mask() -> ContentMask<ScaledPixels> {
         ContentMask {
             bounds: full_bounds(),
+            corner_radii: Corners::default(),
         }
     }
 
@@ -1221,7 +1222,10 @@ mod tests {
         };
         Quad {
             bounds,
-            content_mask: ContentMask { bounds },
+            content_mask: ContentMask {
+                bounds,
+                corner_radii: Corners::default(),
+            },
             ..Default::default()
         }
     }

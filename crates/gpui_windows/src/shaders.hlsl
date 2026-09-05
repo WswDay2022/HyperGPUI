@@ -309,6 +309,37 @@ float quad_sdf(float2 pt, Bounds bounds, Corners corner_radii) {
     return quad_sdf_impl(corner_center_to_point, corner_radius);
 }
 
+bool corners_are_rounded(Corners radii) {
+    return radii.top_left != 0.0 || radii.top_right != 0.0 ||
+        radii.bottom_left != 0.0 || radii.bottom_right != 0.0;
+}
+
+// Rounded content-mask cutout. The vertex shader's `SV_ClipDistance` clips the mask's
+// straight edges; the mask's rounded-corner arcs are cut here as an alpha multiplier
+// (straight-alpha convention: only the alpha channel is scaled). Returns 1.0 when the mask
+// has no rounding, or when it coincides with the primitive's own antialiased cutout
+// (`owns_cutout`, with `own_origin`/`own_size`/`own_radii` expressed in mask space) and the
+// primitive's own SDF below already cuts the same edge.
+float content_mask_coverage(float2 mask_point, Bounds mask_bounds, Corners mask_radii,
+                            float2 own_origin, float2 own_size, Corners own_radii,
+                            bool owns_cutout) {
+    if (!corners_are_rounded(mask_radii)) {
+        return 1.0;
+    }
+    bool mask_matches_own = owns_cutout &&
+        all(mask_bounds.origin == own_origin) &&
+        all(mask_bounds.size == own_size) &&
+        mask_radii.top_left == own_radii.top_left &&
+        mask_radii.top_right == own_radii.top_right &&
+        mask_radii.bottom_left == own_radii.bottom_left &&
+        mask_radii.bottom_right == own_radii.bottom_right;
+    if (mask_matches_own) {
+        return 1.0;
+    }
+    float mask_distance = quad_sdf(mask_point, mask_bounds, mask_radii);
+    return saturate(0.5 - mask_distance);
+}
+
 GradientColor prepare_gradient_color(uint tag, uint color_space, Hsla solid, LinearColorStop colors[2]) {
     GradientColor output;
     if (tag == 0 || tag == 2 || tag == 3) {
@@ -498,6 +529,7 @@ struct Quad {
     uint border_style;
     Bounds bounds;
     Bounds content_mask;
+    Corners content_mask_corner_radii;
     Background background;
     Hsla border_color;
     Corners corner_radii;
@@ -573,6 +605,22 @@ QuadVertexOutput quad_vertex(uint vertex_id: SV_VertexID, uint quad_id: SV_Insta
 
 float4 quad_fragment(QuadFragmentInput input): SV_Target {
     Quad quad = quads[input.quad_id];
+
+    // Rounded content-mask cutout: straight mask edges were already SV_ClipDistance-clipped in
+    // `quad_vertex`, so only the mask's rounded-corner arcs are cut here. `mask_matches_own`
+    // below also skips the case where the mask coincides with the quad's own rounded cutout
+    // (identity-rotated, translated with the quad) — the own SDF would cut the same edge twice.
+    float mask_coverage = content_mask_coverage(
+        mul(input.local_position, quad.transformation.rotation_scale)
+            + quad.transformation.translation,
+        quad.content_mask, quad.content_mask_corner_radii,
+        quad.bounds.origin + quad.transformation.translation, quad.bounds.size,
+        quad.corner_radii,
+        quad.transformation.rotation_scale[0][0] == 1.0 &&
+            quad.transformation.rotation_scale[0][1] == 0.0 &&
+            quad.transformation.rotation_scale[1][0] == 0.0 &&
+            quad.transformation.rotation_scale[1][1] == 1.0);
+
     float4 background_color = gradient_color(quad.background, input.local_position, quad.bounds,
     input.background_solid, input.background_color0, input.background_color1);
 
@@ -587,6 +635,7 @@ float4 quad_fragment(QuadFragmentInput input): SV_Target {
         quad.border_widths.right == 0.0 &&
         quad.border_widths.bottom == 0.0 &&
         unrounded) {
+        background_color.a *= mask_coverage;
         return background_color;
     }
 
@@ -646,6 +695,7 @@ float4 quad_fragment(QuadFragmentInput input): SV_Target {
 
     // Fast path for points that must be part of the background
     if (is_within_inner_straight_border && !is_near_rounded_corner) {
+        background_color.a *= mask_coverage;
         return background_color;
     }
 
@@ -859,7 +909,7 @@ float4 quad_fragment(QuadFragmentInput input): SV_Target {
                     saturate(antialias_threshold - inner_sdf));
     }
 
-    return color * float4(1.0, 1.0, 1.0, saturate(antialias_threshold - outer_sdf));
+    return color * float4(1.0, 1.0, 1.0, saturate(antialias_threshold - outer_sdf) * mask_coverage);
 }
 
 /*
@@ -874,6 +924,7 @@ struct Shadow {
     Bounds bounds;
     Corners corner_radii;
     Bounds content_mask;
+    Corners content_mask_corner_radii;
     Hsla color;
     Bounds element_bounds;
     Corners element_corner_radii;
@@ -927,6 +978,24 @@ ShadowVertexOutput shadow_vertex(uint vertex_id: SV_VertexID, uint shadow_id: SV
 float4 shadow_fragment(ShadowFragmentInput input): SV_TARGET {
     Shadow shadow = shadows[input.shadow_id];
 
+    // Rounded content-mask cutout: straight mask edges were already SV_ClipDistance-clipped in
+    // `shadow_vertex`, so only the mask's rounded-corner arcs are cut here. Skipped when the
+    // mask coincides with the shadow's own cutout — the non-inset shadow's rounded `bounds`,
+    // or the inset shadow's rounded `element_bounds`, both cut below. (FXC can't ternary on
+    // structs, so pick the own-cutout params with an if.)
+    float2 own_origin = shadow.bounds.origin;
+    float2 own_size = shadow.bounds.size;
+    Corners own_radii = shadow.corner_radii;
+    if (shadow.inset != 0u) {
+        own_origin = shadow.element_bounds.origin;
+        own_size = shadow.element_bounds.size;
+        own_radii = shadow.element_corner_radii;
+    }
+    float mask_coverage = content_mask_coverage(
+        input.position.xy, shadow.content_mask, shadow.content_mask_corner_radii,
+        own_origin, own_size, own_radii,
+        true);
+
     float2 half_size = shadow.bounds.size / 2.;
     float2 center = shadow.bounds.origin + half_size;
     float2 point0 = input.position.xy - center;
@@ -964,6 +1033,7 @@ float4 shadow_fragment(ShadowFragmentInput input): SV_TARGET {
         alpha *= saturate(0.5 - element_distance);
     }
 
+    alpha *= mask_coverage;
     return input.color * float4(1., 1., 1., alpha);
 }
 
@@ -1081,6 +1151,7 @@ struct Underline {
     uint pad;
     Bounds bounds;
     Bounds content_mask;
+    Corners content_mask_corner_radii;
     Hsla color;
     float thickness;
     uint wavy;
@@ -1133,6 +1204,15 @@ float4 underline_fragment(UnderlineFragmentInput input): SV_Target {
     const float WAVE_HEIGHT_RATIO = 0.8;
 
     Underline underline = underlines[input.underline_id];
+    // Rounded content-mask cutout: `underline_vertex`'s `SV_ClipDistance` clips the mask's
+    // straight edges; only the mask's rounded-corner arcs are cut here. Underlines have no
+    // own rounded cutout of their own, so there is no mask-equals-own skip.
+    float mask_coverage = content_mask_coverage(
+        mul(input.local_position, underline.transformation.rotation_scale)
+            + underline.transformation.translation,
+        underline.content_mask, underline.content_mask_corner_radii,
+        underline.bounds.origin, underline.bounds.size, underline.content_mask_corner_radii,
+        false);
     if (underline.wavy) {
         float half_thickness = underline.thickness * 0.5;
         float2 origin = underline.bounds.origin;
@@ -1149,9 +1229,9 @@ float4 underline_fragment(UnderlineFragmentInput input): SV_Target {
         float distance_from_bottom_border = distance_in_pixels + half_thickness;
         float alpha = saturate(
             0.5 - max(-distance_from_bottom_border, distance_from_top_border));
-        return input.color * float4(1., 1., 1., alpha);
+        return input.color * float4(1., 1., 1., alpha * mask_coverage);
     } else {
-        return input.color;
+        return input.color * float4(1., 1., 1., mask_coverage);
     }
 }
 
@@ -1166,6 +1246,7 @@ struct MonochromeSprite {
     uint pad;
     Bounds bounds;
     Bounds content_mask;
+    Corners content_mask_corner_radii;
     Hsla color;
     AtlasTile tile;
     TransformationMatrix transformation;
@@ -1176,6 +1257,10 @@ struct MonochromeSpriteVertexOutput {
     float2 tile_position: POSITION;
     nointerpolation float4 color: COLOR;
     float4 clip_distance: SV_ClipDistance;
+    nointerpolation uint sprite_id: TEXCOORD0;
+    // Position in the sprite's untransformed (local) coordinate space — the fragment shader
+    // reconstructs the scene-space content-mask point from it via `sprite.transformation`.
+    float2 local_position: TEXCOORD1;
 };
 
 struct MonochromeSpriteFragmentInput {
@@ -1183,6 +1268,11 @@ struct MonochromeSpriteFragmentInput {
     float2 tile_position: POSITION;
     nointerpolation float4 color: COLOR;
     float4 clip_distance: SV_ClipDistance;
+    // Must be declared here too, in the same order as in `MonochromeSpriteVertexOutput`: FXC
+    // assigns hardware input registers in declaration order, so a slot mismatch shifts these
+    // to different registers than the VS emits them on and the draw fails to link.
+    nointerpolation uint sprite_id: TEXCOORD0;
+    float2 local_position: TEXCOORD1;
 };
 
 StructuredBuffer<MonochromeSprite> mono_sprites: register(t1);
@@ -1190,6 +1280,7 @@ StructuredBuffer<MonochromeSprite> mono_sprites: register(t1);
 MonochromeSpriteVertexOutput monochrome_sprite_vertex(uint vertex_id: SV_VertexID, uint sprite_id: SV_InstanceID) {
     float2 unit_vertex = float2(float(vertex_id & 1u), 0.5 * float(vertex_id & 2u));
     MonochromeSprite sprite = mono_sprites[sprite_id];
+    float2 local_position = unit_vertex * sprite.bounds.size + sprite.bounds.origin;
     float4 device_position =
         to_device_position_transformed(unit_vertex, sprite.bounds, sprite.transformation);
     float4 clip_distance = distance_from_clip_rect_transformed(unit_vertex, sprite.bounds, sprite.content_mask, sprite.transformation);
@@ -1201,13 +1292,24 @@ MonochromeSpriteVertexOutput monochrome_sprite_vertex(uint vertex_id: SV_VertexI
     output.tile_position = tile_position;
     output.color = color;
     output.clip_distance = clip_distance;
+    output.sprite_id = sprite_id;
+    output.local_position = local_position;
     return output;
 }
 
 float4 monochrome_sprite_fragment(MonochromeSpriteFragmentInput input): SV_Target {
     float sample = t_sprite.Sample(s_sprite, input.tile_position).r;
     float alpha_corrected = apply_contrast_and_gamma_correction(sample, input.color.rgb, grayscale_enhanced_contrast, gamma_ratios);
-    return float4(input.color.rgb, input.color.a * alpha_corrected);
+    // Glyph quads carry no own rounded cutout in this shader, so the ancestor mask's rounded
+    // corners are always cut here (straight-alpha convention: only the alpha channel scales).
+    MonochromeSprite sprite = mono_sprites[input.sprite_id];
+    float mask_coverage = content_mask_coverage(
+        mul(input.local_position, sprite.transformation.rotation_scale)
+            + sprite.transformation.translation,
+        sprite.content_mask, sprite.content_mask_corner_radii,
+        sprite.bounds.origin, sprite.bounds.size, sprite.content_mask_corner_radii,
+        false);
+    return float4(input.color.rgb, input.color.a * alpha_corrected * mask_coverage);
 }
 
 MonochromeSpriteVertexOutput subpixel_sprite_vertex(uint vertex_id: SV_VertexID, uint sprite_id: SV_InstanceID) {
@@ -1220,10 +1322,19 @@ SubpixelSpriteFragmentOutput subpixel_sprite_fragment(MonochromeSpriteFragmentIn
         sample = sample.bgr;
     }
     float3 alpha_corrected = apply_contrast_and_gamma_correction3(sample, input.color.rgb, subpixel_enhanced_contrast, gamma_ratios);
+    // Same mask cut as `monochrome_sprite_fragment`, applied to the alpha target only; the
+    // foreground (opaque cover color) is left untouched.
+    MonochromeSprite sprite = mono_sprites[input.sprite_id];
+    float mask_coverage = content_mask_coverage(
+        mul(input.local_position, sprite.transformation.rotation_scale)
+            + sprite.transformation.translation,
+        sprite.content_mask, sprite.content_mask_corner_radii,
+        sprite.bounds.origin, sprite.bounds.size, sprite.content_mask_corner_radii,
+        false);
 
     SubpixelSpriteFragmentOutput output;
     output.foreground = float4(input.color.rgb, 1.0f);
-    output.alpha = float4(input.color.a * alpha_corrected, 1.0f);
+    output.alpha = float4(input.color.a * alpha_corrected * mask_coverage, 1.0f);
     return output;
 }
 
@@ -1240,6 +1351,7 @@ struct PolychromeSprite {
     float opacity;
     Bounds bounds;
     Bounds content_mask;
+    Corners content_mask_corner_radii;
     Corners corner_radii;
     AtlasTile tile;
     TransformationMatrix transformation;
@@ -1291,12 +1403,27 @@ float4 polychrome_sprite_fragment(PolychromeSpriteFragmentInput input): SV_Targe
     float4 sample = t_sprite.Sample(s_sprite, input.tile_position);
     float distance = quad_sdf(input.local_position, sprite.bounds, sprite.corner_radii);
 
+    // Rounded content-mask cutout: straight mask edges were already `SV_ClipDistance`-clipped
+    // in `polychrome_sprite_vertex`; only the mask's rounded-corner arcs are cut here. The
+    // identity-rotation gate handles the case where the mask coincides with the sprite's own
+    // antialiased cutout (the own SDF below cuts the same edge) and skips the double cut.
+    float mask_coverage = content_mask_coverage(
+        mul(input.local_position, sprite.transformation.rotation_scale)
+            + sprite.transformation.translation,
+        sprite.content_mask, sprite.content_mask_corner_radii,
+        sprite.bounds.origin + sprite.transformation.translation, sprite.bounds.size,
+        sprite.corner_radii,
+        sprite.transformation.rotation_scale[0][0] == 1.0 &&
+            sprite.transformation.rotation_scale[0][1] == 0.0 &&
+            sprite.transformation.rotation_scale[1][0] == 0.0 &&
+            sprite.transformation.rotation_scale[1][1] == 1.0);
+
     float4 color = sample;
     if (sprite.grayscale != 0u) {
         float3 grayscale = dot(color.rgb, GRAYSCALE_FACTORS);
         color = float4(grayscale, sample.a);
     }
-    color.a *= sprite.opacity * saturate(0.5 - distance);
+    color.a *= sprite.opacity * saturate(0.5 - distance) * mask_coverage;
     return color;
 }
 
