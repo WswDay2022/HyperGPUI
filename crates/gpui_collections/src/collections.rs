@@ -1,7 +1,7 @@
 pub type HashMap<K, V> = FxHashMap<K, V>;
 pub type HashSet<T> = FxHashSet<T>;
-pub type IndexMap<K, V> = indexmap::IndexMap<K, V, rustc_hash::FxBuildHasher>;
-pub type IndexSet<T> = indexmap::IndexSet<T, rustc_hash::FxBuildHasher>;
+pub type IndexMap<K, V> = indexmap::IndexMap<K, V, FxBuildHasher>;
+pub type IndexSet<T> = indexmap::IndexSet<T, FxBuildHasher>;
 pub type TypeIdHashMap<V> = std::collections::HashMap<std::any::TypeId, V, TypeIdHashBuilder>;
 pub type TypeIdHashSet = std::collections::HashSet<std::any::TypeId, TypeIdHashBuilder>;
 

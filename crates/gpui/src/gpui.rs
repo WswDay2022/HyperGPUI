@@ -106,6 +106,8 @@ pub use executor::*;
 pub use geometry::*;
 pub use gestures::*;
 pub use global::*;
+pub use collections;
+pub use smallvec;
 pub use gpui_macros::{
     AppContext, IntoElement, Render, VisualContext, bench, property_test, register_action, test,
 };

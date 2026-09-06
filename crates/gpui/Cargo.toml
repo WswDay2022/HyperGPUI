@@ -12,7 +12,6 @@ readme = "README.md"
 keywords = ["desktop", "gui", "immediate"]
 categories = ["gui"]
 
-
 [lints]
 workspace = true
 
