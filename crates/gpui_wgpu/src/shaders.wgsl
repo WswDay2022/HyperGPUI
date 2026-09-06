@@ -388,6 +388,29 @@ fn quad_sdf_impl(corner_center_to_point: vec2<f32>, corner_radius: f32) -> f32 {
 
 // Abstract away the final color transformation based on the
 // target alpha compositing mode.
+// Rounded content-mask coverage: the vertex shader already clipped the mask's straight edges
+// (via `clip_distances`), so only the mask's rounded-corner arcs are cut here. The mask-equals-
+// own case (`owns_cutout` with a mask identical to the element's own rounded cutout) is skipped
+// because the element's own SDF would otherwise cut the same edge twice.
+fn content_mask_coverage(mask_point: vec2<f32>, mask_bounds: Bounds, mask_radii: Corners,
+                         own_origin: vec2<f32>, own_size: vec2<f32>, own_radii: Corners,
+                         owns_cutout: bool) -> f32 {
+    if (mask_radii.top_left == 0.0 && mask_radii.top_right == 0.0 &&
+            mask_radii.bottom_left == 0.0 && mask_radii.bottom_right == 0.0) {
+        return 1.0;
+    }
+    if (owns_cutout &&
+            mask_bounds.origin == own_origin &&
+            mask_bounds.size == own_size &&
+            mask_radii.top_left == own_radii.top_left &&
+            mask_radii.top_right == own_radii.top_right &&
+            mask_radii.bottom_left == own_radii.bottom_left &&
+            mask_radii.bottom_right == own_radii.bottom_right) {
+        return 1.0;
+    }
+    return saturate(0.5 - quad_sdf(mask_point, mask_bounds, mask_radii));
+}
+
 fn blend_color(color: vec4<f32>, alpha_factor: f32) -> vec4<f32> {
     let alpha = color.a * alpha_factor;
     let multiplier = select(1.0, alpha, globals.premultiplied_alpha != 0u);
@@ -521,12 +544,13 @@ struct Quad {
     border_style: u32,
     bounds: Bounds,
     content_mask: Bounds,
+    content_mask_corner_radii: Corners,
     background: Background,
     border_color: Hsla,
     corner_radii: Corners,
     border_widths: Edges,
-    // Must match the Rust `scene::Quad` layout (184 bytes, repr(C)):
-    // `transformation` sits at byte offset 160 (mat2x2<f32> aligns to 8).
+    // Must match the Rust `scene::Quad` layout (200 bytes, repr(C)):
+    // `transformation` sits at byte offset 176 (mat2x2<f32> aligns to 8).
     transformation: TransformationMatrix,
 }
 @group(1) @binding(0) var<storage, read> b_quads: array<Quad>;
@@ -581,6 +605,22 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
 
     let quad = b_quads[input.quad_id];
 
+    // Rounded content-mask cutout: `vs_quad` clipped the mask's straight edges (via
+    // `clip_distances`), so only the mask's rounded-corner arcs are cut here. The
+    // identity-rotation gate handles the mask coinciding with the quad's own rounded cutout
+    // (identity-rotated, translated with the quad) — the quad's own SDF would cut the same
+    // edge twice.
+    let mask_coverage = content_mask_coverage(
+        transpose(quad.transformation.rotation_scale) * input.local_position
+            + quad.transformation.translation,
+        quad.content_mask, quad.content_mask_corner_radii,
+        quad.bounds.origin + quad.transformation.translation, quad.bounds.size,
+        quad.corner_radii,
+        quad.transformation.rotation_scale[0][0] == 1.0 &&
+            quad.transformation.rotation_scale[0][1] == 0.0 &&
+            quad.transformation.rotation_scale[1][0] == 0.0 &&
+            quad.transformation.rotation_scale[1][1] == 1.0);
+
     let background_color = gradient_color(quad.background, input.local_position, quad.bounds,
         input.background_solid, input.background_color0, input.background_color1);
 
@@ -595,7 +635,7 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
             quad.border_widths.right == 0.0 &&
             quad.border_widths.bottom == 0.0 &&
             unrounded) {
-        return blend_color(background_color, 1.0);
+        return blend_color(background_color, mask_coverage);
     }
 
     let size = quad.bounds.size;
@@ -661,7 +701,7 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
     // However, that might negatively impact performance in the case of
     // reasonable sizes for rounded corners.
     if (is_within_inner_straight_border && !is_near_rounded_corner) {
-        return blend_color(background_color, 1.0);
+        return blend_color(background_color, mask_coverage);
     }
 
     // Signed distance of the point to the outside edge of the quad's border. It
@@ -900,7 +940,7 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
                     saturate(antialias_threshold - inner_sdf));
     }
 
-    return blend_color(color, saturate(antialias_threshold - outer_sdf));
+    return blend_color(color, saturate(antialias_threshold - outer_sdf) * mask_coverage);
 }
 
 // Returns the dash velocity of a corner given the dash velocity of the two
@@ -965,6 +1005,7 @@ struct Shadow {
     bounds: Bounds,
     corner_radii: Corners,
     content_mask: Bounds,
+    content_mask_corner_radii: Corners,
     color: Hsla,
     // Only consulted when `inset == 1u`: the element's own bounds, used as a rounded-rect
     // clip so the shadow never escapes the element.
@@ -1054,7 +1095,22 @@ fn fs_shadow(input: ShadowVarying) -> @location(0) vec4<f32> {
         alpha *= saturate(0.5 - element_distance);
     }
 
-    return blend_color(input.color, alpha);
+    // Rounded content-mask cutout: `vs_shadow` clipped the mask's straight edges, so only its
+    // rounded-corner arcs are cut here. Skipped when the mask coincides with the shadow's own
+    // rounded cutout — the shadow SDF above already cut `bounds` (or `element_bounds` for
+    // inset shadows).
+    var own_origin = shadow.bounds.origin;
+    var own_size = shadow.bounds.size;
+    var own_radii = shadow.corner_radii;
+    if (shadow.inset != 0u) {
+        own_origin = shadow.element_bounds.origin;
+        own_size = shadow.element_bounds.size;
+        own_radii = shadow.element_corner_radii;
+    }
+    let mask_coverage = content_mask_coverage(input.position.xy, shadow.content_mask,
+        shadow.content_mask_corner_radii, own_origin, own_size, own_radii, true);
+
+    return blend_color(input.color, alpha * mask_coverage);
 }
 
 // --- path rasterization --- //
@@ -1163,6 +1219,7 @@ struct Underline {
     pad: u32,
     bounds: Bounds,
     content_mask: Bounds,
+    content_mask_corner_radii: Corners,
     color: Hsla,
     thickness: f32,
     wavy: u32,
@@ -1206,9 +1263,20 @@ fn fs_underline(input: UnderlineVarying) -> @location(0) vec4<f32> {
     }
 
     let underline = b_underlines[input.underline_id];
+
+    // Rounded content-mask cutout: `vs_underline` clipped the mask's straight edges, so only
+    // its rounded-corner arcs are cut here. Underlines carry no own rounded cutout in the
+    // shader, so there is no mask-equals-own skip.
+    let mask_coverage = content_mask_coverage(
+        transpose(underline.transformation.rotation_scale) * input.local_position
+            + underline.transformation.translation,
+        underline.content_mask, underline.content_mask_corner_radii,
+        underline.bounds.origin, underline.bounds.size, underline.content_mask_corner_radii,
+        false);
+
     if (underline.wavy == 0u)
     {
-        return blend_color(input.color, input.color.a);
+        return blend_color(input.color, input.color.a * mask_coverage);
     }
 
     let half_thickness = underline.thickness * 0.5;
@@ -1224,7 +1292,7 @@ fn fs_underline(input: UnderlineVarying) -> @location(0) vec4<f32> {
     let distance_from_top_border = distance_in_pixels - half_thickness;
     let distance_from_bottom_border = distance_in_pixels + half_thickness;
     let alpha = saturate(0.5 - max(-distance_from_bottom_border, distance_from_top_border));
-    return blend_color(input.color, alpha * input.color.a);
+    return blend_color(input.color, alpha * input.color.a * mask_coverage);
 }
 
 // --- monochrome sprites --- //
@@ -1234,6 +1302,7 @@ struct MonochromeSprite {
     pad: u32,
     bounds: Bounds,
     content_mask: Bounds,
+    content_mask_corner_radii: Corners,
     color: Hsla,
     tile: AtlasTile,
     transformation: TransformationMatrix,
@@ -1245,6 +1314,10 @@ struct MonoSpriteVarying {
     @location(0) tile_position: vec2<f32>,
     @location(1) @interpolate(flat) color: vec4<f32>,
     @location(3) clip_distances: vec4<f32>,
+    // Position in the sprite's untransformed (local) coordinate space, used by the fragment
+    // shader for the content-mask coverage so it isn't distorted by the transform.
+    @location(2) local_position: vec2<f32>,
+    @location(4) @interpolate(flat) sprite_id: u32,
 }
 
 @vertex
@@ -1257,6 +1330,8 @@ fn vs_mono_sprite(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index
 
     out.tile_position = to_tile_position(unit_vertex, sprite.tile);
     out.color = hsla_to_rgba(sprite.color);
+    out.sprite_id = instance_id;
+    out.local_position = unit_vertex * vec2<f32>(sprite.bounds.size) + sprite.bounds.origin;
     out.clip_distances = distance_from_clip_rect_transformed(unit_vertex, sprite.bounds, sprite.content_mask, sprite.transformation);
     return out;
 }
@@ -1271,7 +1346,18 @@ fn fs_mono_sprite(input: MonoSpriteVarying) -> @location(0) vec4<f32> {
         return vec4<f32>(0.0);
     }
 
-    return blend_color(input.color, alpha_corrected);
+    let sprite = b_mono_sprites[input.sprite_id];
+    // Rounded content-mask cutout: `vs_mono_sprite` clipped the mask's straight edges, so only
+    // its rounded-corner arcs are cut here. Monochrome sprites carry no own rounded cutout in
+    // the shader, so there is no mask-equals-own skip.
+    let mask_coverage = content_mask_coverage(
+        transpose(sprite.transformation.rotation_scale) * input.local_position
+            + sprite.transformation.translation,
+        sprite.content_mask, sprite.content_mask_corner_radii,
+        sprite.bounds.origin, sprite.bounds.size, sprite.content_mask_corner_radii,
+        false);
+
+    return blend_color(input.color, alpha_corrected * mask_coverage);
 }
 
 // --- polychrome sprites --- //
@@ -1283,6 +1369,7 @@ struct PolychromeSprite {
     opacity: f32,
     bounds: Bounds,
     content_mask: Bounds,
+    content_mask_corner_radii: Corners,
     corner_radii: Corners,
     tile: AtlasTile,
     transformation: TransformationMatrix,
@@ -1324,12 +1411,26 @@ fn fs_poly_sprite(input: PolySpriteVarying) -> @location(0) vec4<f32> {
     let sprite = b_poly_sprites[input.sprite_id];
     let distance = quad_sdf(input.local_position, sprite.bounds, sprite.corner_radii);
 
+    // Rounded content-mask cutout: the vertex shader clipped the mask's straight edges, so only
+    // its rounded-corner arcs are cut here. The identity-rotation gate handles the mask
+    // coinciding with the sprite's own antialiased rounded cutout (cut by the SDF above).
+    let mask_coverage = content_mask_coverage(
+        transpose(sprite.transformation.rotation_scale) * input.local_position
+            + sprite.transformation.translation,
+        sprite.content_mask, sprite.content_mask_corner_radii,
+        sprite.bounds.origin + sprite.transformation.translation, sprite.bounds.size,
+        sprite.corner_radii,
+        sprite.transformation.rotation_scale[0][0] == 1.0 &&
+            sprite.transformation.rotation_scale[0][1] == 0.0 &&
+            sprite.transformation.rotation_scale[1][0] == 0.0 &&
+            sprite.transformation.rotation_scale[1][1] == 1.0);
+
     var color = sample;
     if (sprite.grayscale != 0u) {
         let grayscale = dot(color.rgb, GRAYSCALE_FACTORS);
         color = vec4<f32>(vec3<f32>(grayscale), sample.a);
     }
-    return blend_color(color, sprite.opacity * saturate(0.5 - distance));
+    return blend_color(color, sprite.opacity * saturate(0.5 - distance) * mask_coverage);
 }
 
 // --- surfaces --- //
