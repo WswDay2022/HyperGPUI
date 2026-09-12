@@ -5,7 +5,7 @@ pub type IndexSet<T> = indexmap::IndexSet<T, FxBuildHasher>;
 pub type TypeIdHashMap<V> = std::collections::HashMap<std::any::TypeId, V, TypeIdHashBuilder>;
 pub type TypeIdHashSet = std::collections::HashSet<std::any::TypeId, TypeIdHashBuilder>;
 
-pub use indexmap::Equivalent;
+pub use indexmap::*;
 pub use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet, FxHasher};
 pub use std::collections::*;
 

@@ -406,6 +406,12 @@ pub trait Styled: Sized {
         self
     }
 
+    /// [Docs](https://tailwindcss.com/docs/align-self)
+    fn self_align(mut self, align: AlignSelf) -> Self {
+        self.style().align_self = Some(align);
+        self
+    }
+
     /// Sets how this specific element is aligned along the container's cross axis.
     /// [Docs](https://tailwindcss.com/docs/align-self#start)
     fn self_start(mut self) -> Self {
@@ -452,6 +458,12 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/align-self#stretch)
     fn self_stretch(mut self) -> Self {
         self.style().align_self = Some(AlignSelf::Stretch);
+        self
+    }
+
+    /// [Docs](https://tailwindcss.com/docs/justify-content)
+    fn justify(mut self, justify: JustifyContent) -> Self {
+        self.style().justify_content = Some(justify);
         self
     }
 
