@@ -7,18 +7,27 @@ use std::fmt::{self, Display, Formatter};
 pub use palette::{Hsla, rgb::Rgba};
 
 /// Convert an RGB hex color code number to a color type
-pub fn rgb(hex: u32) -> Rgba {
-    let [_, r, g, b] = hex.to_be_bytes().map(|b| (b as f32) / 255.0);
+pub const fn rgb(hex: u32) -> Rgba {
+    let [_, r, g, b] = hex.to_be_bytes();
     Rgba {
-        color: palette::rgb::Rgb::new(r, g, b),
+        color: palette::rgb::Rgb::new(
+            (r as f32) / 255.0,
+            (g as f32) / 255.0,
+            (b as f32) / 255.0
+        ),
         alpha: 1.0,
     }
 }
 
 /// Convert an RGBA hex color code number to [`Rgba`]
-pub fn rgba(hex: u32) -> Rgba {
-    let [r, g, b, a] = hex.to_be_bytes().map(|b| (b as f32) / 255.0);
-    Rgba::new(r, g, b, a)
+pub const fn rgba(hex: u32) -> Rgba {
+    let [r, g, b, a] = hex.to_be_bytes();
+    Rgba::new(
+        (r as f32) / 255.0,
+        (g as f32) / 255.0,
+        (b as f32) / 255.0,
+        (a as f32) / 255.0
+    )
 }
 
 /// Convert an sRGB color to GPUI's HSL-with-alpha representation.

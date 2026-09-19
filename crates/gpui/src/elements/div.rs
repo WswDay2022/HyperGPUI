@@ -1822,7 +1822,7 @@ impl Div {
 /// a child element of the `Div`. These IDs are used to query the layout engine for the computed
 /// bounds of the children after the layout phase is complete.
 pub struct DivFrameState {
-    child_layout_ids: SmallVec<[LayoutId; 2]>,
+    pub(crate) child_layout_ids: SmallVec<[LayoutId; 2]>,
 }
 
 /// Interactivity state displayed an manipulated in the inspector.
@@ -4094,8 +4094,8 @@ where
 /// Contrary to [ScrollHandle::scroll_to_active_item], an anchored element does not have to be an immediate child of the parent.
 #[derive(Clone)]
 pub struct ScrollAnchor {
-    handle: ScrollHandle,
-    last_origin: Rc<RefCell<Point<Pixels>>>,
+    pub(crate) handle: ScrollHandle,
+    pub(crate) last_origin: Rc<RefCell<Point<Pixels>>>,
 }
 
 impl ScrollAnchor {
@@ -4119,15 +4119,15 @@ impl ScrollAnchor {
 }
 
 #[derive(Default, Debug)]
-struct ScrollHandleState {
-    offset: Rc<RefCell<Point<Pixels>>>,
-    ongoing_scroll: Rc<RefCell<OngoingScroll>>,
-    bounds: Bounds<Pixels>,
-    max_offset: Point<Pixels>,
-    child_bounds: Vec<Bounds<Pixels>>,
-    scroll_to_bottom: bool,
-    overflow: Point<Overflow>,
-    active_item: Option<ScrollActiveItem>,
+pub(crate) struct ScrollHandleState {
+    pub(crate) offset: Rc<RefCell<Point<Pixels>>>,
+    pub(crate) ongoing_scroll: Rc<RefCell<OngoingScroll>>,
+    pub(crate) bounds: Bounds<Pixels>,
+    pub(crate) max_offset: Point<Pixels>,
+    pub(crate) child_bounds: Vec<Bounds<Pixels>>,
+    pub(crate) scroll_to_bottom: bool,
+    pub(crate) overflow: Point<Overflow>,
+    pub(crate) active_item: Option<ScrollActiveItem>,
 }
 
 #[derive(Default, Debug, Clone, Copy)]
@@ -4147,7 +4147,7 @@ enum ScrollStrategy {
 /// Used for accessing scroll state, like the current scroll offset,
 /// and for mutating the scroll state, like scrolling to a specific child.
 #[derive(Clone, Debug)]
-pub struct ScrollHandle(Rc<RefCell<ScrollHandleState>>);
+pub struct ScrollHandle(pub(crate) Rc<RefCell<ScrollHandleState>>);
 
 impl Default for ScrollHandle {
     fn default() -> Self {
@@ -4241,7 +4241,7 @@ impl ScrollHandle {
     /// Scrolls the minimal amount to either ensure that the child is
     /// fully visible or the top element of the view depends on the
     /// scroll strategy
-    fn scroll_to_active_item(&self) {
+    pub(crate) fn scroll_to_active_item(&self) {
         let mut state = self.0.borrow_mut();
 
         let Some(active_item) = state.active_item else {
