@@ -67,6 +67,23 @@ pub trait FluentBuilder {
     {
         self.map(|this| if option.is_some() { this } else { then(this) })
     }
+
+    fn when_some_else<T>(
+        self,
+        option: Option<T>,
+        then: impl FnOnce(Self, T) -> Self,
+        else_fn: impl FnOnce(Self) -> Self) -> Self
+    where
+        Self: Sized,
+    {
+        self.map(|this| {
+            if let Some(value) = option {
+                then(this, value)
+            } else {
+                else_fn(this)
+            }
+        })
+    }
 }
 
 /// Extensions for Future types that provide additional combinators and utilities.

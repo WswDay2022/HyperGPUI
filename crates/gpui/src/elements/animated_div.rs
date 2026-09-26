@@ -1,5 +1,8 @@
+use std::rc::Rc;
+use std::time::{Duration, Instant};
 use stacksafe::{stacksafe, StackSafe};
-use crate::{accesskit, AnyElement, App, Bounds, Element, ElementId, Hitbox, ImageCacheProvider, InteractiveElement, Interactivity, LayoutId, ParentElement, Pixels, Size, StyleRefinement, Styled, Window, GlobalElementId, InspectorElementId, point, Point, Display, IntoElement, DivFrameState};
+use gpui::{linear, Animation, Overflow};
+use crate::{accesskit, AnyElement, App, Bounds, Element, ElementId, Hitbox, ImageCacheProvider, InteractiveElement, Interactivity, LayoutId, ParentElement, Pixels, Size, StyleRefinement, Styled, Window, GlobalElementId, InspectorElementId, point, Point, Display, IntoElement, DivFrameState, Transition};
 use crate::smallvec::SmallVec;
 
 #[track_caller]
@@ -7,6 +10,8 @@ pub fn animated_div() -> AnimatedDiv {
     AnimatedDiv {
         interactivity: Interactivity::new(),
         children: SmallVec::default(),
+        duration: Duration::from_millis(120),
+        easing: Rc::new(linear),
         children_prepaint_listener: None,
         prepaint_listener: None,
         image_cache: None,
@@ -14,9 +19,12 @@ pub fn animated_div() -> AnimatedDiv {
     }
 }
 
+
 pub struct AnimatedDiv {
     interactivity: Interactivity,
     children: SmallVec<[StackSafe<AnyElement>; 2]>,
+    easing: Rc<dyn Fn(f32) -> f32>,
+    duration: Duration,
     children_prepaint_listener: Option<Box<dyn Fn(Vec<Bounds<Pixels>>, &mut Window, &mut App) + 'static>>,
     prepaint_listener: Option<Box<dyn Fn(Bounds<Pixels>, &mut Window, &mut App) + 'static>>,
     image_cache: Option<Box<dyn ImageCacheProvider>>,
@@ -52,6 +60,16 @@ impl AnimatedDiv {
         self.prepaint_order_fn = Some(Box::new(order_fn));
         self
     }
+
+    pub fn with_easing(mut self, easing: impl Fn(f32) -> f32 + 'static) -> Self {
+        self.easing = Rc::new(easing);
+        self
+    }
+
+    pub fn duration(mut self, duration: Duration) -> Self {
+        self.duration = duration;
+        self
+    }
 }
 
 impl Styled for AnimatedDiv {
@@ -74,7 +92,7 @@ impl ParentElement for AnimatedDiv {
 
 impl Element for AnimatedDiv {
     type RequestLayoutState = DivFrameState;
-    type PrepaintState = Option<Hitbox>;
+    type PrepaintState = (Option<Hitbox>, Bounds<Pixels>);
 
     fn id(&self) -> Option<ElementId> {
         self.interactivity.element_id.clone()
@@ -129,7 +147,14 @@ impl Element for AnimatedDiv {
         request_layout: &mut Self::RequestLayoutState,
         window: &mut Window,
         cx: &mut App,
-    ) -> Option<Hitbox> {
+    ) -> (Option<Hitbox>, Bounds<Pixels>) {
+        let transition = window.use_transition(cx, self.duration.clone(), |_, _| bounds.clone())
+            .with_raw_easing(self.easing.clone());
+        if *transition.read_goal(cx) != bounds {
+            transition.update(cx, |transition, _| *transition = bounds);
+        }
+        let bounds = *transition.evaluate(window, cx);
+
         let image_cache = self
             .image_cache
             .as_mut()
@@ -176,7 +201,7 @@ impl Element for AnimatedDiv {
             scroll_handle.scroll_to_active_item();
         }
 
-        self.interactivity.prepaint(
+        (self.interactivity.prepaint(
             global_id,
             inspector_id,
             bounds,
@@ -212,7 +237,7 @@ impl Element for AnimatedDiv {
 
                 hitbox
             },
-        )
+        ), bounds)
     }
 
     #[stacksafe]
@@ -220,9 +245,9 @@ impl Element for AnimatedDiv {
         &mut self,
         global_id: Option<&GlobalElementId>,
         inspector_id: Option<&InspectorElementId>,
-        bounds: Bounds<Pixels>,
-        _request_layout: &mut Self::RequestLayoutState,
-        hitbox: &mut Option<Hitbox>,
+        _: Bounds<Pixels>,
+        _: &mut Self::RequestLayoutState,
+        (hitbox, bounds): &mut (Option<Hitbox>, Bounds<Pixels>),
         window: &mut Window,
         cx: &mut App,
     ) {
@@ -233,7 +258,7 @@ impl Element for AnimatedDiv {
 
         window.with_image_cache(image_cache, |window| {
             self.interactivity.paint(
-                global_id, inspector_id, bounds,
+                global_id, inspector_id, *bounds,
                 hitbox.as_ref(), window, cx,
                 |style, window, cx| {
                     if style.display == Display::None { return; }

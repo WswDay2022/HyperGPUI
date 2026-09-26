@@ -80,7 +80,15 @@ impl<T: Lerp + Clone + PartialEq + 'static> Transition<T> {
         self.easing = Rc::new(easing);
         self
     }
-
+    
+    /// Set the easing function to use for this transition.
+    /// The easing function will take a time delta between 0 and 1 and return a new delta
+    /// between 0 and 1
+    pub fn with_raw_easing(mut self, easing: Rc<dyn Fn(f32) -> f32>) -> Self {
+        self.easing = easing;
+        self
+    }
+    
     /// Sets whether the transition should be continuous.
     ///
     /// On goal updates, transitions continue from the current value by default.
