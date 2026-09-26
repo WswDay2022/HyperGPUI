@@ -1,11 +1,6 @@
 //! A reusable chrome for borderless, resizable windows.
 
-use crate::{
-    AnyElement, App, Bounds, CursorStyle, InteractiveElement, IntoElement, MouseButton,
-    ParentElement, Pixels, RenderOnce, ResizeEdge, SharedString, Styled, Window,
-    WindowBackgroundAppearance, WindowBounds, WindowDecorations, WindowOptions, div, px,
-    transparent_black,
-};
+use crate::{AnyElement, ElementId, App, Bounds, CursorStyle, InteractiveElement, IntoElement, MouseButton, ParentElement, Pixels, RenderOnce, ResizeEdge, Styled, Window, WindowBackgroundAppearance, WindowBounds, WindowDecorations, WindowOptions, div, px, transparent_black};
 
 /// Default inset reserved around the window content (room for a drop shadow).
 const DEFAULT_INSET: f32 = 12.0;
@@ -56,11 +51,16 @@ const RESIZE_EDGES: [(ResizeEdge, CursorStyle); 8] = [
 /// ```
 #[derive(IntoElement)]
 pub struct BorderlessWindow {
-    id: SharedString,
+    id: ElementId,
     inset: Pixels,
     edge_size: Pixels,
     corner_size: Pixels,
     children: Vec<AnyElement>,
+}
+
+#[track_caller]
+pub fn borderless_window() -> BorderlessWindow {
+    BorderlessWindow::default()
 }
 
 impl Default for BorderlessWindow {
@@ -82,7 +82,7 @@ impl BorderlessWindow {
     }
 
     /// Set the element id prefix used for the root and resize hit-boxes.
-    pub fn id(mut self, id: impl Into<SharedString>) -> Self {
+    pub fn id(mut self, id: impl Into<ElementId>) -> Self {
         self.id = id.into();
         self
     }
@@ -133,7 +133,7 @@ impl BorderlessWindow {
 }
 
 impl RenderOnce for BorderlessWindow {
-    fn render(self, window: &mut Window, _cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, _: &mut App) -> impl IntoElement {
         // Reserve room for the shadow at the platform level (a no-op on
         // Windows, where the content padding below does the same job).
         window.set_client_inset(self.inset);
@@ -159,15 +159,15 @@ impl RenderOnce for BorderlessWindow {
 }
 
 /// Build one invisible resize hit-box for the given edge or corner.
-fn resize_handle(
-    id: SharedString,
+pub fn resize_handle(
+    id: ElementId,
     edge: ResizeEdge,
     cursor: CursorStyle,
     edge_size: Pixels,
     corner_size: Pixels,
 ) -> impl IntoElement {
     let handle = div()
-        .id(SharedString::from(format!("{id}-resize-{edge:?}")))
+        .id((id, format!("{edge:?}")))
         .absolute()
         .cursor(cursor)
         .on_mouse_down(MouseButton::Left, move |_event, window, _cx| {

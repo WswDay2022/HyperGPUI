@@ -19,7 +19,6 @@ pub fn animated_div() -> AnimatedDiv {
     }
 }
 
-
 pub struct AnimatedDiv {
     interactivity: Interactivity,
     children: SmallVec<[StackSafe<AnyElement>; 2]>,
