@@ -49,7 +49,7 @@ impl<T: 'static> Element for Canvas<T> {
     fn request_layout(
         &mut self,
         _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
+        _: Option<&InspectorElementId>,
         window: &mut Window,
         cx: &mut App,
     ) -> (crate::LayoutId, Self::RequestLayoutState) {
@@ -62,7 +62,7 @@ impl<T: 'static> Element for Canvas<T> {
     fn prepaint(
         &mut self,
         _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
+        _: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
         _request_layout: &mut Style,
         window: &mut Window,
@@ -74,7 +74,7 @@ impl<T: 'static> Element for Canvas<T> {
     fn paint(
         &mut self,
         _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
+        _: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
         style: &mut Style,
         prepaint: &mut Self::PrepaintState,

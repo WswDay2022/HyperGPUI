@@ -42,7 +42,7 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-
+use std::ops::{Deref, DerefMut};
 use super::ImageCacheProvider;
 
 const DRAG_THRESHOLD: f64 = 2.;
@@ -1959,7 +1959,8 @@ impl Element for Div {
             bounds.size
         } else if let Some(scroll_handle) = self.interactivity.tracked_scroll_handle.as_ref() {
             let mut state = scroll_handle.0.borrow_mut();
-            state.child_bounds = Vec::with_capacity(request_layout.child_layout_ids.len());
+            // Reuse the previous frame's buffer: this runs per scrollable container per frame.
+            state.child_bounds.clear();
             for child_layout_id in &request_layout.child_layout_ids {
                 let child_bounds = window.layout_bounds(*child_layout_id);
                 child_min = child_min.min(&child_bounds.origin);
@@ -2204,14 +2205,14 @@ impl Interactivity {
     pub fn request_layout(
         &mut self,
         global_id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
+        inspector_id: Option<&InspectorElementId>,
         window: &mut Window,
         cx: &mut App,
         f: impl FnOnce(Style, &mut Window, &mut App) -> LayoutId,
     ) -> LayoutId {
         #[cfg(any(feature = "inspector", debug_assertions))]
         window.with_inspector_state(
-            _inspector_id,
+            inspector_id,
             cx,
             |inspector_state: &mut Option<DivInspectorState>, _window| {
                 if let Some(inspector_state) = inspector_state {
@@ -2297,7 +2298,7 @@ impl Interactivity {
     pub fn prepaint<R>(
         &mut self,
         global_id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
+        inspector_id: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
         content_size: Size<Pixels>,
         window: &mut Window,
@@ -2318,7 +2319,7 @@ impl Interactivity {
 
         #[cfg(any(feature = "inspector", debug_assertions))]
         window.with_inspector_state(
-            _inspector_id,
+            inspector_id,
             cx,
             |inspector_state: &mut Option<DivInspectorState>, _window| {
                 if let Some(inspector_state) = inspector_state {
@@ -2506,7 +2507,7 @@ impl Interactivity {
     pub fn paint(
         &mut self,
         global_id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
+        inspector_id: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
         hitbox: Option<&Hitbox>,
         window: &mut Window,
@@ -2618,7 +2619,7 @@ impl Interactivity {
                                             #[cfg(any(feature = "inspector", debug_assertions))]
                                             window.insert_inspector_hitbox(
                                                 _hitbox.id,
-                                                _inspector_id,
+                                                inspector_id,
                                                 cx,
                                             );
 
@@ -4485,7 +4486,7 @@ mod tests {
         fn request_layout(
             &mut self,
             _id: Option<&GlobalElementId>,
-            _inspector_id: Option<&InspectorElementId>,
+            _: Option<&InspectorElementId>,
             window: &mut Window,
             cx: &mut App,
         ) -> (LayoutId, Self::RequestLayoutState) {
@@ -4495,7 +4496,7 @@ mod tests {
         fn prepaint(
             &mut self,
             _id: Option<&GlobalElementId>,
-            _inspector_id: Option<&InspectorElementId>,
+            _: Option<&InspectorElementId>,
             _bounds: Bounds<Pixels>,
             _request_layout: &mut Self::RequestLayoutState,
             window: &mut Window,
@@ -4507,7 +4508,7 @@ mod tests {
         fn paint(
             &mut self,
             _id: Option<&GlobalElementId>,
-            _inspector_id: Option<&InspectorElementId>,
+            _: Option<&InspectorElementId>,
             _bounds: Bounds<Pixels>,
             _request_layout: &mut Self::RequestLayoutState,
             _prepaint: &mut Self::PrepaintState,

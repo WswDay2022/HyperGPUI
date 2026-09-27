@@ -1,74 +1,76 @@
-use std::rc::Rc;
-use std::time::{Duration, Instant};
-use stacksafe::{stacksafe, StackSafe};
-use gpui::{linear, Animation, Overflow};
-use crate::{accesskit, AnyElement, App, Bounds, Element, ElementId, Hitbox, ImageCacheProvider, InteractiveElement, Interactivity, LayoutId, ParentElement, Pixels, Size, StyleRefinement, Styled, Window, GlobalElementId, InspectorElementId, point, Point, Display, IntoElement, DivFrameState, Transition};
 use crate::smallvec::SmallVec;
+use crate::{accesskit, point, AnyElement, App, Bounds, Display, DivFrameState, Element, ElementId, GlobalElementId, Hitbox, ImageCacheProvider, InspectorElementId, InteractiveElement, Interactivity, IntoElement, LayoutId, ParentElement, Pixels, Point, Stateful, StatefulInteractiveElement, StyleRefinement, Styled, Window};
+use gpui::linear;
+use stacksafe::{StackSafe, stacksafe};
+use std::rc::Rc;
+use std::time::Duration;
+
+pub struct AnimatedDivProps {
+    pub animating_width: bool,
+    pub animating_height: bool,
+    pub animating_x: bool,
+    pub animating_y: bool,
+    pub easing: Rc<dyn Fn(f32) -> f32 + 'static>,
+    pub duration: Duration
+}
+
+impl Default for AnimatedDivProps {
+    fn default() -> Self {
+        Self {
+            animating_width: true,
+            animating_height: true,
+            animating_x: true,
+            duration: Duration::from_millis(80),
+            easing: Rc::new(linear),
+            animating_y: true,
+        }
+    }
+}
+
+impl<F: Fn(f32) -> f32 + 'static> From<F> for AnimatedDivProps {
+    fn from(easing: F) -> Self {
+        Self {
+            easing: Rc::new(easing),
+            ..Self::default()
+        }
+    }
+}
+
+impl From<Duration> for AnimatedDivProps {
+    fn from(duration: Duration) -> Self {
+        Self { duration, ..Self::default() }
+    }
+}
 
 #[track_caller]
-pub fn animated_div() -> AnimatedDiv {
-    AnimatedDiv {
-        interactivity: Interactivity::new(),
-        children: SmallVec::default(),
-        duration: Duration::from_millis(120),
-        easing: Rc::new(linear),
-        children_prepaint_listener: None,
-        prepaint_listener: None,
-        image_cache: None,
-        prepaint_order_fn: None,
+pub fn animated_div(id: impl Into<ElementId>, props: impl Into<AnimatedDivProps>) -> Stateful<AnimatedDiv> {
+    let id = id.into();
+    Stateful {
+        element: AnimatedDiv {
+            interactivity: Interactivity {
+                element_id: Some(id.clone()),
+                ..Interactivity::new()
+            },
+            element_id: id,
+            children: SmallVec::default(),
+            props: props.into(),
+            children_prepaint_listener: None,
+            prepaint_listener: None,
+            image_cache: None,
+            prepaint_order_fn: None,
+        }
     }
 }
 
 pub struct AnimatedDiv {
     interactivity: Interactivity,
     children: SmallVec<[StackSafe<AnyElement>; 2]>,
-    easing: Rc<dyn Fn(f32) -> f32>,
-    duration: Duration,
+    props: AnimatedDivProps,
+    element_id: ElementId,
     children_prepaint_listener: Option<Box<dyn Fn(Vec<Bounds<Pixels>>, &mut Window, &mut App) + 'static>>,
     prepaint_listener: Option<Box<dyn Fn(Bounds<Pixels>, &mut Window, &mut App) + 'static>>,
     image_cache: Option<Box<dyn ImageCacheProvider>>,
     prepaint_order_fn: Option<Box<dyn Fn(&mut Window, &mut App) -> SmallVec<[usize; 8]>>>,
-}
-
-impl AnimatedDiv {
-    pub fn on_children_prepainted(
-        mut self,
-        listener: impl Fn(Vec<Bounds<Pixels>>, &mut Window, &mut App) + 'static,
-    ) -> Self {
-        self.children_prepaint_listener = Some(Box::new(listener));
-        self
-    }
-
-    pub fn on_prepainted(
-        mut self,
-        listener: impl Fn(Bounds<Pixels>, &mut Window, &mut App) + 'static,
-    ) -> Self {
-        self.prepaint_listener = Some(Box::new(listener));
-        self
-    }
-
-    pub fn image_cache(mut self, cache: impl ImageCacheProvider) -> Self {
-        self.image_cache = Some(Box::new(cache));
-        self
-    }
-
-    pub fn with_dynamic_prepaint_order(
-        mut self,
-        order_fn: impl Fn(&mut Window, &mut App) -> SmallVec<[usize; 8]> + 'static,
-    ) -> Self {
-        self.prepaint_order_fn = Some(Box::new(order_fn));
-        self
-    }
-
-    pub fn with_easing(mut self, easing: impl Fn(f32) -> f32 + 'static) -> Self {
-        self.easing = Rc::new(easing);
-        self
-    }
-
-    pub fn duration(mut self, duration: Duration) -> Self {
-        self.duration = duration;
-        self
-    }
 }
 
 impl Styled for AnimatedDiv {
@@ -80,6 +82,13 @@ impl Styled for AnimatedDiv {
 impl InteractiveElement for AnimatedDiv {
     fn interactivity(&mut self) -> &mut Interactivity {
         &mut self.interactivity
+    }
+
+    fn id(mut self, id: impl Into<ElementId>) -> Stateful<Self> {
+        let id = id.into();
+        self.element_id = id.clone();
+        self.interactivity.element_id = Some(id);
+        Stateful { element: self }
     }
 }
 
@@ -94,7 +103,7 @@ impl Element for AnimatedDiv {
     type PrepaintState = (Option<Hitbox>, Bounds<Pixels>);
 
     fn id(&self) -> Option<ElementId> {
-        self.interactivity.element_id.clone()
+        Some(self.element_id.clone())
     }
 
     fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
@@ -134,7 +143,7 @@ impl Element for AnimatedDiv {
             )
         });
 
-        (layout_id, DivFrameState { child_layout_ids })
+        (layout_id.clone(), DivFrameState { child_layout_ids })
     }
 
     #[stacksafe]
@@ -142,17 +151,22 @@ impl Element for AnimatedDiv {
         &mut self,
         global_id: Option<&GlobalElementId>,
         inspector_id: Option<&InspectorElementId>,
-        bounds: Bounds<Pixels>,
+        raw_bounds: Bounds<Pixels>,
         request_layout: &mut Self::RequestLayoutState,
         window: &mut Window,
         cx: &mut App,
     ) -> (Option<Hitbox>, Bounds<Pixels>) {
-        let transition = window.use_transition(cx, self.duration.clone(), |_, _| bounds.clone())
-            .with_raw_easing(self.easing.clone());
-        if *transition.read_goal(cx) != bounds {
-            transition.update(cx, |transition, _| *transition = bounds);
+        let transition = window.use_keyed_transition(
+            self.element_id.clone(), cx, self.props.duration.clone(), |_, _| raw_bounds)
+            .with_raw_easing(self.props.easing.clone());
+        if *transition.read_goal(cx) != raw_bounds {
+            transition.update(cx, |transition, _| *transition = raw_bounds);
         }
-        let bounds = *transition.evaluate(window, cx);
+        let mut bounds = *transition.evaluate(window, cx);
+        if !self.props.animating_width { bounds.size.width = raw_bounds.size.width };
+        if !self.props.animating_height { bounds.size.height = raw_bounds.size.height };
+        if !self.props.animating_x { bounds.origin.x = raw_bounds.origin.x };
+        if !self.props.animating_y { bounds.origin.y = raw_bounds.origin.y };
 
         let image_cache = self
             .image_cache
@@ -210,7 +224,7 @@ impl Element for AnimatedDiv {
             |style, scroll_offset, hitbox, window, cx| {
                 if style.display == Display::None { return hitbox; }
                 window.with_image_cache(image_cache, |window| {
-                    window.with_element_offset(scroll_offset, |window| {
+                    window.with_element_offset(scroll_offset + bounds.origin - raw_bounds.origin, |window| {
                         if let Some(order_fn) = &self.prepaint_order_fn {
                             let order = order_fn(window, cx);
                             for idx in order {

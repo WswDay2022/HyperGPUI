@@ -2209,6 +2209,9 @@ impl Window {
 
     /// The current text style. Which is composed of all the style refinements provided to `with_text_style`.
     pub fn text_style(&self) -> TextStyle {
+        if self.text_style_stack.is_empty() {
+            return TextStyle::default();
+        }
         let mut style = TextStyle::default();
         for refinement in &self.text_style_stack {
             style.refine(refinement);

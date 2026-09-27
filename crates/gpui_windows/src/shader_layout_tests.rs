@@ -6,7 +6,9 @@
 //! GPU-side `Quad`/`Shadow` structs (matrices and vectors inside structured buffers pack
 //! differently than in cbuffers) so we can verify they match the Rust `repr(C)` layouts:
 //!
-//! - `Quad`: 200 bytes; `transformation.rotation_scale` at offset 176, `translation` at 192
+//! - `Quad`: 208 bytes; `transformation.rotation_scale` at offset 184, `translation` at 200 —
+//!   `Background` grew to 76 bytes when the radial gradient's `radial_size` keyword was added, so
+//!   every field after it shifted +4
 //! - `Shadow`: 128 bytes; `content_mask_corner_radii` at 56 — after Rust's `ContentMask<P>`
 //!   change added rounded `corner_radii`, every struct inserts a `Corners` field right after
 //!   its `Bounds content_mask`, so all later fields shift +16 (Shadow `radii` was 40, now 56)
@@ -126,4 +128,33 @@ fn hlsl_quad_layout_probe() -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// The Rust half of the layout contract the three shader mirrors depend on. The probes above print
+/// what FXC packed; this asserts what Rust actually wrote, so a field added to a scene struct cannot
+/// silently shift an offset.
+///
+/// The 8-alignment assertion is the subtle one: WGSL aligns the `mat2x2` inside
+/// `TransformationMatrix` to 8, while `repr(C)` and FXC's structured-buffer packing align it to 4.
+/// `Quad::transformation` therefore has to stay on an 8-byte boundary, and `Background` (right
+/// before the `Hsla`/`Corners`/`Edges` block) has to stay a multiple of 8 bytes for that to hold.
+#[test]
+fn rust_scene_layout_matches_shaders() {
+    use std::mem::{offset_of, size_of};
+
+    assert_eq!(
+        size_of::<gpui::Background>() % 8,
+        0,
+        "Background must stay a multiple of 8 bytes so `Quad::transformation` keeps its alignment"
+    );
+    assert_eq!(size_of::<gpui::Background>(), 80);
+    assert_eq!(size_of::<gpui::Quad>(), 208);
+    assert_eq!(offset_of!(gpui::Quad, background), 56);
+    assert_eq!(offset_of!(gpui::Quad, transformation), 184);
+    assert_eq!(
+        offset_of!(gpui::Quad, transformation) % 8,
+        0,
+        "WGSL aligns `mat2x2` to 8; repr(C) and FXC use 4"
+    );
+    assert_eq!(offset_of!(gpui::TransformationMatrix, translation), 16);
 }

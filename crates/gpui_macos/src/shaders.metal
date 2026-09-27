@@ -875,12 +875,20 @@ struct PathRasterizationVertexOutput {
   float2 st_position;
   uint vertex_id [[flat]];
   float clip_rect_distance [[clip_distance]][4];
+  // The gradient ramp is prepared per vertex, as `quad_vertex` does: running the same conversion
+  // in the fragment shader cost a decode plus an Oklab conversion for every path pixel.
+  float4 background_solid [[flat]];
+  float4 background_color0 [[flat]];
+  float4 background_color1 [[flat]];
 };
 
 struct PathRasterizationFragmentInput {
   float4 position [[position]];
   float2 st_position;
   uint vertex_id [[flat]];
+  float4 background_solid [[flat]];
+  float4 background_color0 [[flat]];
+  float4 background_color1 [[flat]];
 };
 
 vertex PathRasterizationVertexOutput path_rasterization_vertex(
@@ -895,6 +903,13 @@ vertex PathRasterizationVertexOutput path_rasterization_vertex(
     0.,
     1.
   );
+  GradientColor gradient = prepare_fill_color(
+    v.color.tag,
+    v.color.color_space,
+    v.color.solid,
+    v.color.colors[0].color,
+    v.color.colors[1].color
+  );
   return PathRasterizationVertexOutput{
       position,
       float2(v.st_position.x, v.st_position.y),
@@ -904,7 +919,10 @@ vertex PathRasterizationVertexOutput path_rasterization_vertex(
         v.bounds.origin.x + v.bounds.size.width - v.xy_position.x,
         v.xy_position.y - v.bounds.origin.y,
         v.bounds.origin.y + v.bounds.size.height - v.xy_position.y
-      }
+      },
+      gradient.solid,
+      gradient.color0,
+      gradient.color1
   };
 }
 
@@ -931,21 +949,13 @@ fragment float4 path_rasterization_fragment(
     alpha = saturate(0.5 - distance);
   }
 
-  GradientColor gradient_color = prepare_fill_color(
-    background.tag,
-    background.color_space,
-    background.solid,
-    background.colors[0].color,
-    background.colors[1].color
-  );
-
   float4 color = fill_color(
     background,
     input.position.xy,
     path_bounds,
-    gradient_color.solid,
-    gradient_color.color0,
-    gradient_color.color1
+    input.background_solid,
+    input.background_color0,
+    input.background_color1
   );
   return float4(color.rgb * color.a * alpha, alpha * color.a);
 }
@@ -1086,12 +1096,21 @@ float4 hsla_to_rgba(Hsla hsla) {
   return rgba;
 }
 
+// The sRGB transfer functions are the IEC 61966-2-1 curve, spelled the same way as in
+// `shaders.wgsl` and `shaders.hlsl` so gradients render identically on every backend. A plain
+// `pow(color, 2.2)` would be cheaper but drifts ~2% from the standard in the mid-tones, which is
+// visible when the same gradient is compared across backends.
+// `step(edge, x)` is 0 below the knee and 1 above it, so `mix` picks the linear segment for the
+// near-black samples exactly as the reference curve specifies (no reliance on `select`'s
+// vector-overload argument order).
 float3 srgb_to_linear(float3 color) {
-  return pow(color, float3(2.2));
+  return mix(color / 12.92, pow((color + 0.055) / 1.055, float3(2.4)),
+             step(float3(0.04045), color));
 }
 
 float3 linear_to_srgb(float3 color) {
-  return pow(color, float3(1.0 / 2.2));
+  return mix(color * 12.92, 1.055 * pow(color, float3(1.0 / 2.4)) - 0.055,
+             step(float3(0.0031308), color));
 }
 
 // Converts a sRGB color to the Oklab color space.
@@ -1326,7 +1345,7 @@ GradientColor prepare_fill_color(uint tag, uint color_space, Hsla solid,
   GradientColor out;
   if (tag == 0 || tag == 2 || tag == 3) {
     out.solid = hsla_to_rgba(solid);
-  } else if (tag == 1) {
+  } else if (tag == 1 || tag == 4 || tag == 5) {
     out.color0 = hsla_to_rgba(color0);
     out.color1 = hsla_to_rgba(color1);
 
@@ -1346,6 +1365,43 @@ float2x2 rotate2d(float angle) {
     float s = sin(angle);
     float c = cos(angle);
     return float2x2(c, -s, s, c);
+}
+
+// Resolves a gradient's ramp parameter into a color: applies the color stops, mixes in the
+// requested color space, and dithers to hide 8-bit banding. Shared by the linear and radial
+// gradients so both ramps behave identically.
+float4 gradient_ramp_color(Background background, float t, float2 position,
+                           float4 color0, float4 color1) {
+  // Adjust t based on the stop percentages.
+  t = clamp((t - background.colors[0].percentage)
+            / (background.colors[1].percentage - background.colors[0].percentage), 0.0, 1.0);
+
+  float4 color;
+  switch (background.color_space) {
+    case 1: {
+      float4 oklab_color = mix(color0, color1, t);
+      color = oklab_to_srgb(oklab_color);
+      break;
+    }
+    default:
+      color = mix(color0, color1, t);
+      break;
+  }
+
+  // Dither to reduce banding in gradients (especially dark/alpha).
+  // Triangular-distributed noise breaks up 8-bit quantization steps.
+  // ±2/255 for RGB (enough for dark-on-dark compositing),
+  // ±3/255 for alpha (needs more because alpha × dark color = tiny steps).
+  {
+    float2 seed = position * 0.6180339887; // golden ratio spread
+    float r1 = fract(sin(dot(seed, float2(12.9898, 78.233))) * 43758.5453);
+    float r2 = fract(sin(dot(seed, float2(39.3460, 11.135))) * 24634.6345);
+    float tri = r1 + r2 - 1.0; // triangular PDF, range [-1, +1]
+    color.rgb += tri * 2.0 / 255.0;
+    color.a   += tri * 3.0 / 255.0;
+  }
+
+  return color;
 }
 
 float4 fill_color(Background background,
@@ -1383,36 +1439,7 @@ float4 fill_color(Background background,
           t = (t + half_size.y) / bounds.size.height;
       }
 
-      // Adjust t based on the stop percentages
-      t = (t - background.colors[0].percentage)
-        / (background.colors[1].percentage
-        - background.colors[0].percentage);
-      t = clamp(t, 0.0, 1.0);
-
-      switch (background.color_space) {
-        case 0:
-          color = mix(color0, color1, t);
-          break;
-        case 1: {
-          float4 oklab_color = mix(color0, color1, t);
-          color = oklab_to_srgb(oklab_color);
-          break;
-        }
-      }
-
-      // Dither to reduce banding in gradients (especially dark/alpha).
-      // Triangular-distributed noise breaks up 8-bit quantization steps.
-      // ±2/255 for RGB (enough for dark-on-dark compositing),
-      // ±3/255 for alpha (needs more because alpha × dark color = tiny steps).
-      {
-        float2 seed = position * 0.6180339887; // golden ratio spread
-        float r1 = fract(sin(dot(seed, float2(12.9898, 78.233))) * 43758.5453);
-        float r2 = fract(sin(dot(seed, float2(39.3460, 11.135))) * 24634.6345);
-        float tri = r1 + r2 - 1.0; // triangular PDF, range [-1, +1]
-        color.rgb += tri * 2.0 / 255.0;
-        color.a   += tri * 3.0 / 255.0;
-      }
-
+      color = gradient_ramp_color(background, t, position, color0, color1);
       break;
     }
     case 2: {
@@ -1443,6 +1470,41 @@ float4 fill_color(Background background,
         color = solid_color;
         color.a *= saturate(should_be_colored);
         break;
+    }
+    case 4:
+    case 5: {
+      // Radial gradient: CSS `radial-gradient(<shape> <size> at <center>, ...)`. The center is
+      // stored as fractions of the element's size and may lie outside it.
+      float2 bounds_origin = float2(bounds.origin.x, bounds.origin.y);
+      float2 bounds_size = float2(bounds.size.width, bounds.size.height);
+      float2 center =
+          bounds_origin
+          + float2(background.gradient_angle_or_pattern_height, background.radial_center_y)
+              * bounds_size;
+      float2 offset = position - center;
+      // The ending-shape size: side sizes use the distance from the center to the nearest/farthest
+      // side on each axis, corner sizes scale those by sqrt(2) so the ending shape meets the
+      // chosen corner exactly at t = 1.
+      bool is_closest = background.radial_size == 1 || background.radial_size == 3;
+      bool is_corner = background.radial_size == 0 || background.radial_size == 3;
+      float2 closest_side = min(center - bounds_origin, bounds_origin + bounds_size - center);
+      float2 farthest_side = max(center - bounds_origin, bounds_origin + bounds_size - center);
+      float2 side = is_closest ? closest_side : farthest_side;
+      // Ellipses take the per-axis distances; circles take a single radius — the nearest or
+      // farthest side, or the corner distance.
+      float2 radii = is_corner ? side * 1.41421356 : side;
+      if (background.tag == 5) {
+        float side_radius = is_closest ? min(side.x, side.y) : max(side.x, side.y);
+        float radius = is_corner ? length(side) : side_radius;
+        radii = float2(radius);
+      }
+      // A zero-sized box would divide by zero; fall back to the last stop.
+      float t = 1.0;
+      if (radii.x > 0.0 && radii.y > 0.0) {
+        t = length(offset / radii);
+      }
+      color = gradient_ramp_color(background, t, position, color0, color1);
+      break;
     }
   }
 

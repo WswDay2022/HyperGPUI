@@ -1,11 +1,7 @@
-use crate::{
-    AbsoluteLength, App, Bounds, DefiniteLength, Edges, GridTemplate, Length, Pixels, Point, Size,
-    Style, Window, size,
-    util::{
-        ceil_to_device_pixel, round_half_toward_zero, round_stroke_to_device_pixel,
-        round_to_device_pixel,
-    },
-};
+use crate::{size, util::{
+    ceil_to_device_pixel, round_half_toward_zero, round_stroke_to_device_pixel,
+    round_to_device_pixel,
+}, AbsoluteLength, App, Bounds, DefiniteLength, Edges, ElementId, GridTemplate, Length, Pixels, Point, Size, Style, Window};
 use collections::{FxHashMap, FxHashSet};
 use stacksafe::{StackSafe, stacksafe};
 use std::{fmt::Debug, ops::Range};
@@ -393,6 +389,13 @@ impl LayoutId {
     fn to_taffy_slice(node_ids: &[Self]) -> &[taffy::NodeId] {
         // SAFETY: LayoutId is repr(transparent) to taffy::tree::NodeId.
         unsafe { std::mem::transmute::<&[LayoutId], &[taffy::NodeId]>(node_ids) }
+    }
+}
+
+impl Into<ElementId> for LayoutId {
+    fn into(self) -> ElementId {
+        // SAFETY: LayoutId is repr(transparent) to taffy::tree::NodeId.
+        ElementId::Integer(u64::from(unsafe { std::mem::transmute::<LayoutId, taffy::NodeId>(self) }))
     }
 }
 

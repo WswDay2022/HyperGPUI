@@ -280,7 +280,12 @@ impl Element for UniformList {
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
         let max_items = self.item_count;
-        let item_size = self.measure_item(None, window, cx);
+        // Only `Infer` uses the measured size; measuring renders and lays out a full throw-away row
+        // subtree, so the default `Auto` behavior must not pay for it every frame.
+        let item_size = match self.sizing_behavior {
+            ListSizingBehavior::Infer => self.measure_item(None, window, cx),
+            ListSizingBehavior::Auto => Size::default(),
+        };
         let layout_id = self.interactivity.request_layout(
             global_id,
             inspector_id,

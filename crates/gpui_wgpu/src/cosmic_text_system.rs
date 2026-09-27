@@ -1,5 +1,5 @@
 use anyhow::{Context as _, Ok, Result};
-use collections::HashMap;
+use collections::{FxHashMap, HashMap};
 use cosmic_text::{
     Attrs, AttrsList, Ellipsize, Family, Font as CosmicTextFont,
     FontFeatures as CosmicFontFeatures, FontSystem, ShapeBuffer, ShapeLine,
@@ -46,6 +46,10 @@ struct CosmicTextSystemState {
     swash_scale_context: ScaleContext,
     /// Contains all already loaded fonts, including all faces. Indexed by `FontId`.
     loaded_fonts: Vec<LoadedFont>,
+    /// The first `FontId` loaded for each cosmic-text font id. Kept in sync with `loaded_fonts`
+    /// (which is append-only) so resolving a fallback font per glyph is a lookup rather than a
+    /// scan over every loaded face.
+    font_ids_by_cosmic_id: FxHashMap<cosmic_text::fontdb::ID, FontId>,
     /// Caches the `FontId`s associated with a specific family to avoid iterating the font database
     /// for every font face in a family.
     font_ids_by_family_cache: HashMap<FontKey, SmallVec<[FontId; 4]>>,
@@ -70,6 +74,7 @@ impl CosmicTextSystem {
             scratch: ShapeBuffer::default(),
             swash_scale_context: ScaleContext::new(),
             loaded_fonts: Vec::new(),
+            font_ids_by_cosmic_id: FxHashMap::default(),
             font_ids_by_family_cache: HashMap::default(),
             system_font_fallback: system_font_fallback.to_string(),
         }))
@@ -86,6 +91,7 @@ impl CosmicTextSystem {
             scratch: ShapeBuffer::default(),
             swash_scale_context: ScaleContext::new(),
             loaded_fonts: Vec::new(),
+            font_ids_by_cosmic_id: FxHashMap::default(),
             font_ids_by_family_cache: HashMap::default(),
             system_font_fallback: system_font_fallback.to_string(),
         }))
@@ -300,6 +306,7 @@ impl CosmicTextSystemState {
 
             let font_id = FontId(self.loaded_fonts.len());
             loaded_font_ids.push(font_id);
+            self.font_ids_by_cosmic_id.entry(font.id()).or_insert(font_id);
             self.loaded_fonts.push(LoadedFont {
                 font,
                 features: cosmic_features.clone(),
@@ -423,12 +430,8 @@ impl CosmicTextSystemState {
     /// current use of this field is for the *input* of `layout_line`, and so it's fine to use
     /// `font_id_for_cosmic_id` when computing the *output* of `layout_line`.
     fn font_id_for_cosmic_id(&mut self, id: cosmic_text::fontdb::ID) -> Result<FontId> {
-        if let Some(ix) = self
-            .loaded_fonts
-            .iter()
-            .position(|loaded_font| loaded_font.font.id() == id)
-        {
-            Ok(FontId(ix))
+        if let Some(font_id) = self.font_ids_by_cosmic_id.get(&id) {
+            Ok(*font_id)
         } else {
             let font = self
                 .font_system
@@ -441,6 +444,7 @@ impl CosmicTextSystemState {
                 .context("fallback font face not found in cosmic-text database")?;
 
             let font_id = FontId(self.loaded_fonts.len());
+            self.font_ids_by_cosmic_id.entry(id).or_insert(font_id);
             self.loaded_fonts.push(LoadedFont {
                 font,
                 features: CosmicFontFeatures::new(),

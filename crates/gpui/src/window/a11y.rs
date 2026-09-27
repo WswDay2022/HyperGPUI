@@ -272,6 +272,7 @@ impl A11y {
         self.focus_ids.clear();
         self.node_bounds.clear();
         self.action_listeners.clear();
+        self.view_type_names.clear();
         self.nodes.begin_frame(self.window_title.as_ref());
     }
 

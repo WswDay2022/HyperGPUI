@@ -52,6 +52,9 @@ struct Background {
     // 0u is Solid
     // 1u is LinearGradient
     // 2u is PatternSlash
+    // 3u is Checkerboard
+    // 4u is RadialGradient
+    // 5u is RadialGradientCircle
     uint tag;
     // 0u is sRGB linear color
     // 1u is Oklab color
@@ -59,6 +62,13 @@ struct Background {
     Hsla solid;
     float gradient_angle_or_pattern_height;
     LinearColorStop colors[2];
+    // Radial gradients store the center's vertical fraction of the element's size here; padding
+    // for alignment otherwise.
+    float radial_center_y;
+    // The ending-shape size keyword of a radial gradient (0 = farthest-corner, 1 = closest-side,
+    // 2 = farthest-side, 3 = closest-corner); unused by other backgrounds.
+    uint radial_size;
+    // Keeps the struct 8-byte sized, matching the Rust layout the other backends mirror.
     uint pad;
 };
 
@@ -120,14 +130,22 @@ float4 distance_from_clip_rect_transformed(float2 unit_vertex, Bounds bounds, Bo
     return distance_from_clip_rect_impl(transformed, clip_bounds);
 }
 
-// Convert linear RGB to sRGB
+// Encode a linear RGB color as non-linear (gamma-encoded) sRGB — the IEC 61966-2-1 transfer
+// function, spelled the same way as in `shaders.wgsl` and `shaders.metal` so gradients render
+// identically on every backend. A plain `pow(color, 2.2)` would be cheaper but drifts ~2% from
+// the standard in the mid-tones, which is visible when the same gradient is compared across
+// backends.
 float3 linear_to_srgb(float3 color) {
-    return pow(color, float3(2.2, 2.2, 2.2));
+    return color < 0.0031308
+        ? color * 12.92
+        : 1.055 * pow(color, 1.0 / 2.4) - 0.055;
 }
 
-// Convert sRGB to linear RGB
+// Convert a non-linear (gamma-encoded) sRGB color to linear RGB, IEC 61966-2-1.
 float3 srgb_to_linear(float3 color) {
-    return pow(color, float3(1.0 / 2.2, 1.0 / 2.2, 1.0 / 2.2));
+    return color < 0.04045
+        ? color / 12.92
+        : pow((color + 0.055) / 1.055, 2.4);
 }
 
 /// Hsla to linear RGBA conversion.
@@ -344,7 +362,7 @@ GradientColor prepare_gradient_color(uint tag, uint color_space, Hsla solid, Lin
     GradientColor output;
     if (tag == 0 || tag == 2 || tag == 3) {
         output.solid = hsla_to_rgba(solid);
-    } else if (tag == 1) {
+    } else if (tag == 1 || tag == 4 || tag == 5) {
         output.color0 = hsla_to_rgba(colors[0].color);
         output.color1 = hsla_to_rgba(colors[1].color);
 
@@ -364,6 +382,45 @@ float2x2 rotate2d(float angle) {
     float s = sin(angle);
     float c = cos(angle);
     return float2x2(c, -s, s, c);
+}
+
+// Resolves a gradient's ramp parameter into a color: applies the color stops, mixes in the
+// requested color space, and dithers to hide 8-bit banding. Shared by the linear and radial
+// gradients so both ramps behave identically.
+float4 gradient_ramp_color(Background background, float t, float2 position,
+                           float4 color0, float4 color1) {
+    // Adjust t based on the stop percentages.
+    t = clamp(
+        (t - background.colors[0].percentage)
+            / (background.colors[1].percentage - background.colors[0].percentage),
+        0.0, 1.0);
+
+    float4 color;
+    switch (background.color_space) {
+        case 1: {
+            float4 oklab_color = lerp(color0, color1, t);
+            color = oklab_to_srgb(oklab_color);
+            break;
+        }
+        default:
+            color = lerp(color0, color1, t);
+            break;
+    }
+
+    // Dither to reduce banding in gradients (especially dark/alpha).
+    // Triangular-distributed noise breaks up 8-bit quantization steps.
+    // ±2/255 for RGB (enough for dark-on-dark compositing),
+    // ±3/255 for alpha (needs more because alpha × dark color = tiny steps).
+    {
+        float2 seed = position * 0.6180339887; // golden ratio spread
+        float r1 = frac(sin(dot(seed, float2(12.9898, 78.233))) * 43758.5453);
+        float r2 = frac(sin(dot(seed, float2(39.3460, 11.135))) * 24634.6345);
+        float tri = r1 + r2 - 1.0; // triangular PDF, range [-1, +1]
+        color.rgb += tri * 2.0 / 255.0;
+        color.a   += tri * 3.0 / 255.0;
+    }
+
+    return color;
 }
 
 float4 gradient_color(Background background,
@@ -401,36 +458,7 @@ float4 gradient_color(Background background,
                 t = (t + half_size.y) / bounds.size.y;
             }
 
-            // Adjust t based on the stop percentages
-            t = (t - background.colors[0].percentage)
-                / (background.colors[1].percentage
-                - background.colors[0].percentage);
-            t = clamp(t, 0.0, 1.0);
-
-            switch (background.color_space) {
-                case 0:
-                    color = lerp(color0, color1, t);
-                    break;
-                case 1: {
-                    float4 oklab_color = lerp(color0, color1, t);
-                    color = oklab_to_srgb(oklab_color);
-                    break;
-                }
-            }
-
-            // Dither to reduce banding in gradients (especially dark/alpha).
-            // Triangular-distributed noise breaks up 8-bit quantization steps.
-            // ±2/255 for RGB (enough for dark-on-dark compositing),
-            // ±3/255 for alpha (needs more because alpha × dark color = tiny steps).
-            {
-                float2 seed = position * 0.6180339887; // golden ratio spread
-                float r1 = frac(sin(dot(seed, float2(12.9898, 78.233))) * 43758.5453);
-                float r2 = frac(sin(dot(seed, float2(39.3460, 11.135))) * 24634.6345);
-                float tri = r1 + r2 - 1.0; // triangular PDF, range [-1, +1]
-                color.rgb += tri * 2.0 / 255.0;
-                color.a   += tri * 3.0 / 255.0;
-            }
-
+            color = gradient_ramp_color(background, t, position, color0, color1);
             break;
         }
         case 2: {
@@ -460,6 +488,38 @@ float4 gradient_color(Background background,
 
             color = solid_color;
             color.a *= saturate(should_be_colored);
+            break;
+        }
+        case 4:
+        case 5: {
+            // Radial gradient: CSS `radial-gradient(<shape> <size> at <center>, ...)`. The center
+            // is stored as fractions of the element's size and may lie outside it.
+            float2 center = bounds.origin
+                + float2(background.gradient_angle_or_pattern_height, background.radial_center_y)
+                    * bounds.size;
+            float2 offset = position - center;
+            // The ending-shape size: side sizes use the distance from the center to the
+            // nearest/farthest side on each axis, corner sizes scale those by sqrt(2) so the
+            // ending shape meets the chosen corner exactly at t = 1.
+            bool is_closest = background.radial_size == 1 || background.radial_size == 3;
+            bool is_corner = background.radial_size == 0 || background.radial_size == 3;
+            float2 closest_side = min(center - bounds.origin, bounds.origin + bounds.size - center);
+            float2 farthest_side = max(center - bounds.origin, bounds.origin + bounds.size - center);
+            float2 side = is_closest ? closest_side : farthest_side;
+            // Ellipses take the per-axis distances; circles take a single radius — the nearest or
+            // farthest side, or the corner distance.
+            float2 radii = is_corner ? side * 1.41421356 : side;
+            if (background.tag == 5) {
+                float side_radius = is_closest ? min(side.x, side.y) : max(side.x, side.y);
+                float radius = is_corner ? length(side) : side_radius;
+                radii = float2(radius, radius);
+            }
+            // A zero-sized box would divide by zero; fall back to the last stop.
+            float t = 1.0;
+            if (radii.x > 0.0 && radii.y > 0.0) {
+                t = length(offset / radii);
+            }
+            color = gradient_ramp_color(background, t, position, color0, color1);
             break;
         }
     }
@@ -1057,12 +1117,24 @@ struct PathVertexOutput {
     float2 st_position: TEXCOORD0;
     nointerpolation uint vertex_id: TEXCOORD1;
     float4 clip_distance: SV_ClipDistance;
+    // The gradient ramp is prepared per vertex, as `quad_vertex` does: running the same conversion
+    // in the fragment shader cost a decode plus an Oklab conversion for every path pixel.
+    nointerpolation float4 background_solid: COLOR0;
+    nointerpolation float4 background_color0: COLOR1;
+    nointerpolation float4 background_color1: COLOR2;
 };
 
 struct PathFragmentInput {
     float4 position: SV_Position;
     float2 st_position: TEXCOORD0;
     nointerpolation uint vertex_id: TEXCOORD1;
+    // Must be declared here too, in the same position as in `PathVertexOutput`: FXC assigns
+    // hardware registers in declaration order, so without this slot the COLOR varyings below land
+    // on different registers than the VS emits them on and the draw fails to link.
+    float4 clip_distance: SV_ClipDistance;
+    nointerpolation float4 background_solid: COLOR0;
+    nointerpolation float4 background_color0: COLOR1;
+    nointerpolation float4 background_color1: COLOR2;
 };
 
 PathVertexOutput path_rasterization_vertex(uint vertex_id: SV_VertexID) {
@@ -1073,6 +1145,13 @@ PathVertexOutput path_rasterization_vertex(uint vertex_id: SV_VertexID) {
     output.st_position = sprite.st_position;
     output.vertex_id = vertex_id;
     output.clip_distance = distance_from_clip_rect_impl(sprite.xy_position, sprite.bounds);
+
+    GradientColor gradient = prepare_gradient_color(
+        sprite.color.tag, sprite.color.color_space, sprite.color.solid, sprite.color.colors
+    );
+    output.background_solid = gradient.solid;
+    output.background_color0 = gradient.color0;
+    output.background_color1 = gradient.color1;
 
     return output;
 }
@@ -1095,11 +1174,8 @@ float4 path_rasterization_fragment(PathFragmentInput input): SV_Target {
         alpha = saturate(0.5 - distance);
     }
 
-    GradientColor gradient = prepare_gradient_color(
-        background.tag, background.color_space, background.solid, background.colors);
-
     float4 color = gradient_color(background, input.position.xy, bounds,
-        gradient.solid, gradient.color0, gradient.color1);
+        input.background_solid, input.background_color0, input.background_color1);
     return float4(color.rgb * color.a * alpha, alpha * color.a);
 }
 

@@ -246,6 +246,10 @@ path = "examples/learn/button_feedback.rs"
 name = "css-transform"
 path = "examples/learn/css_transform.rs"
 
+[[example]]
+name = "radial-gradient"
+path = "examples/learn/radial_gradient.rs"
+
 # ============================================================================
 # Bench Examples - Performance benchmarks
 # ============================================================================

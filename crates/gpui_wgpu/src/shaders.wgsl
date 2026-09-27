@@ -135,6 +135,8 @@ struct Background {
     // 1u is LinearGradient
     // 2u is PatternSlash
     // 3u is Checkerboard
+    // 4u is RadialGradient
+    // 5u is RadialGradientCircle
     tag: u32,
     // 0u is sRGB linear color
     // 1u is Oklab color
@@ -142,6 +144,14 @@ struct Background {
     solid: Hsla,
     gradient_angle_or_pattern_height: f32,
     colors: array<LinearColorStop, 2>,
+    // Radial gradients store the center's vertical fraction of the element's size here; padding
+    // for alignment otherwise.
+    radial_center_y: f32,
+    // The ending-shape size keyword of a radial gradient (0 = farthest-corner, 1 = closest-side,
+    // 2 = farthest-side, 3 = closest-corner); unused by other backgrounds.
+    radial_size: u32,
+    // Keeps the struct 8-byte sized: `transformation` in `Quad`/`PathVertex` is a `mat2x2`, which
+    // WGSL aligns to 8, so it must land on the same offset as in the Rust layout.
     pad: u32,
 }
 
@@ -400,8 +410,8 @@ fn content_mask_coverage(mask_point: vec2<f32>, mask_bounds: Bounds, mask_radii:
         return 1.0;
     }
     if (owns_cutout &&
-            mask_bounds.origin == own_origin &&
-            mask_bounds.size == own_size &&
+            all(mask_bounds.origin == own_origin) &&
+            all(mask_bounds.size == own_size) &&
             mask_radii.top_left == own_radii.top_left &&
             mask_radii.top_right == own_radii.top_right &&
             mask_radii.bottom_left == own_radii.bottom_left &&
@@ -430,25 +440,56 @@ fn prepare_gradient_color(tag: u32, color_space: u32,
 
     if (tag == 0u || tag == 2u || tag == 3u) {
         result.solid = hsla_to_rgba(solid);
-    } else if (tag == 1u) {
-        // The hsla_to_rgba is returns a linear sRGB color
+    } else if (tag == 1u || tag == 4u || tag == 5u) {
+        // `hsla_to_rgba` returns the color in the render target's encoding (non-linear sRGB),
+        // which is also the space CSS `in srgb` interpolates in, so the `ColorSpace::Srgb` case
+        // needs no conversion at all — the fragment shader mixes these values directly.
         result.color0 = hsla_to_rgba(colors[0].color);
         result.color1 = hsla_to_rgba(colors[1].color);
 
-        // Prepare color space in vertex for avoid conversion
-        // in fragment shader for performance reasons
-        if (color_space == 0u) {
-            // sRGB
-            result.color0 = linear_to_srgba(result.color0);
-            result.color1 = linear_to_srgba(result.color1);
-        } else if (color_space == 1u) {
+        // Convert to the Oklab color space in the vertex shader to keep the per-pixel work in
+        // the fragment shader to the mix and the conversion back.
+        if (color_space == 1u) {
             // Oklab
-            result.color0 = linear_srgb_to_oklab(result.color0);
-            result.color1 = linear_srgb_to_oklab(result.color1);
+            result.color0 = linear_srgb_to_oklab(srgba_to_linear(result.color0));
+            result.color1 = linear_srgb_to_oklab(srgba_to_linear(result.color1));
         }
     }
 
     return result;
+}
+
+/// Resolves a gradient's ramp parameter into a color: applies the color stops, mixes in the
+/// requested color space, and dithers to hide 8-bit banding. Shared by the linear and radial
+/// gradients so both ramps behave identically.
+fn gradient_ramp_color(background: Background, t: f32, position: vec2<f32>,
+    color0: vec4<f32>, color1: vec4<f32>) -> vec4<f32> {
+    // Adjust t based on the stop percentages.
+    let stop_t = clamp((t - background.colors[0].percentage)
+        / (background.colors[1].percentage - background.colors[0].percentage), 0.0, 1.0);
+
+    var color: vec4<f32>;
+    switch (background.color_space) {
+        // sRGB: the stops are already in the interpolating space (the target's encoding).
+        default: {
+            color = mix(color0, color1, stop_t);
+        }
+        case 1u: {
+            let oklab_color = mix(color0, color1, stop_t);
+            color = linear_to_srgba(oklab_to_linear_srgb(oklab_color));
+        }
+    }
+
+    // Dither to reduce banding in gradients (especially dark/alpha). Triangular-distributed noise
+    // breaks up 8-bit quantization steps: ±2/255 for RGB (enough for dark-on-dark compositing),
+    // ±3/255 for alpha (needs more because alpha × dark color = tiny steps).
+    let seed = position * 0.6180339887; // golden ratio spread
+    let r1 = fract(sin(dot(seed, vec2<f32>(12.9898, 78.233))) * 43758.5453);
+    let r2 = fract(sin(dot(seed, vec2<f32>(39.3460, 11.135))) * 24634.6345);
+    let tri = r1 + r2 - 1.0; // triangular PDF, range [-1, +1]
+    // WGSL has no assignments to swizzles, so add the noise as a whole vector.
+    color += tri * vec4<f32>(2.0, 2.0, 2.0, 3.0) / 255.0;
+    return color;
 }
 
 fn gradient_color(background: Background, position: vec2<f32>, bounds: Bounds,
@@ -465,8 +506,6 @@ fn gradient_color(background: Background, position: vec2<f32>, bounds: Bounds,
             let angle = background.gradient_angle_or_pattern_height;
             let radians = (angle % 360.0 - 90.0) * M_PI_F / 180.0;
             var direction = vec2<f32>(cos(radians), sin(radians));
-            let stop0_percentage = background.colors[0].percentage;
-            let stop1_percentage = background.colors[1].percentage;
 
             // Expand the short side to be the same as the long side
             if (bounds.size.x > bounds.size.y) {
@@ -487,19 +526,7 @@ fn gradient_color(background: Background, position: vec2<f32>, bounds: Bounds,
                 t = (t + half_size.y) / bounds.size.y;
             }
 
-            // Adjust t based on the stop percentages
-            t = (t - stop0_percentage) / (stop1_percentage - stop0_percentage);
-            t = clamp(t, 0.0, 1.0);
-
-            switch (background.color_space) {
-                default: {
-                    background_color = srgba_to_linear(mix(color0, color1, t));
-                }
-                case 1u: {
-                    let oklab_color = mix(color0, color1, t);
-                    background_color = oklab_to_linear_srgb(oklab_color);
-                }
-            }
+            background_color = gradient_ramp_color(background, t, position, color0, color1);
         }
         case 2u: {
             // pattern slash
@@ -531,6 +558,36 @@ fn gradient_color(background: Background, position: vec2<f32>, bounds: Bounds,
 
             background_color = solid_color;
             background_color.a *= saturate(should_be_colored);
+        }
+        case 4u, 5u: {
+            // Radial gradient: CSS `radial-gradient(<shape> <size> at <center>, ...)`. The center
+            // is stored as fractions of the element's size and may lie outside it.
+            let center = bounds.origin
+                + vec2<f32>(background.gradient_angle_or_pattern_height,
+                    background.radial_center_y)
+                    * bounds.size;
+            let offset = position - center;
+            // The ending-shape size: side sizes use the distance from the center to the
+            // nearest/farthest side on each axis, corner sizes scale those by sqrt(2) so the
+            // ending shape meets the chosen corner exactly at t = 1.
+            let is_closest = background.radial_size == 1u || background.radial_size == 3u;
+            let is_corner = background.radial_size == 0u || background.radial_size == 3u;
+            let closest_side = min(center - bounds.origin, bounds.origin + bounds.size - center);
+            let farthest_side = max(center - bounds.origin, bounds.origin + bounds.size - center);
+            let side = select(farthest_side, closest_side, is_closest);
+            // Ellipses take the per-axis distances; circles take a single radius — the nearest or
+            // farthest side, or the corner distance.
+            var radii = select(side, side * 1.41421356, is_corner);
+            if (background.tag == 5u) {
+                let side_radius = select(max(side.x, side.y), min(side.x, side.y), is_closest);
+                radii = vec2<f32>(select(side_radius, length(side), is_corner));
+            }
+            // A zero-sized box would divide by zero; fall back to the last stop.
+            var t = 1.0;
+            if (radii.x > 0.0 && radii.y > 0.0) {
+                t = length(offset / radii);
+            }
+            background_color = gradient_ramp_color(background, t, position, color0, color1);
         }
     }
 
@@ -1130,6 +1187,11 @@ struct PathRasterizationVarying {
     @location(1) @interpolate(flat) vertex_id: u32,
     //TODO: use `clip_distance` once Naga supports it
     @location(3) clip_distances: vec4<f32>,
+    // The gradient ramp is prepared per vertex, as `vs_quad` does: running the same conversion in
+    // the fragment shader cost a decode plus an Oklab conversion for every path pixel.
+    @location(4) @interpolate(flat) background_solid: vec4<f32>,
+    @location(5) @interpolate(flat) background_color0: vec4<f32>,
+    @location(6) @interpolate(flat) background_color1: vec4<f32>,
 }
 
 @vertex
@@ -1141,6 +1203,16 @@ fn vs_path_rasterization(@builtin(vertex_index) vertex_id: u32) -> PathRasteriza
     out.st_position = v.st_position;
     out.vertex_id = vertex_id;
     out.clip_distances = distance_from_clip_rect_impl(v.xy_position, v.bounds);
+
+    let gradient = prepare_gradient_color(
+        v.color.tag,
+        v.color.color_space,
+        v.color.solid,
+        v.color.colors
+    );
+    out.background_solid = gradient.solid;
+    out.background_color0 = gradient.color0;
+    out.background_color1 = gradient.color1;
     return out;
 }
 
@@ -1166,14 +1238,8 @@ fn fs_path_rasterization(input: PathRasterizationVarying) -> @location(0) vec4<f
         let distance = f / length(gradient);
         alpha = saturate(0.5 - distance);
     }
-    let prepared_gradient = prepare_gradient_color(
-        background.tag,
-        background.color_space,
-        background.solid,
-        background.colors,
-    );
     let color = gradient_color(background, input.position.xy, bounds,
-        prepared_gradient.solid, prepared_gradient.color0, prepared_gradient.color1);
+        input.background_solid, input.background_color0, input.background_color1);
     return vec4<f32>(color.rgb * color.a * alpha, color.a * alpha);
 }
 

@@ -815,7 +815,9 @@ impl Style {
                         | BackgroundTag::PatternSlash
                         | BackgroundTag::Checkerboard => color.solid.into(),
 
-                        BackgroundTag::LinearGradient => color
+                        BackgroundTag::LinearGradient
+                        | BackgroundTag::RadialGradient
+                        | BackgroundTag::RadialGradientCircle => color
                             .colors
                             .first()
                             .map(|stop| stop.color.into())

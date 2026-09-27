@@ -604,9 +604,16 @@ impl DirectXRenderer {
             })?;
         }
 
-        // Present the offscreen scene by blitting it into the swapchain.
+        // Present the offscreen scene by copying it into the swapchain. The swapchain was created
+        // with the same format, size and sample count as the scene texture, so a resource copy is
+        // exact — and far cheaper than the full-screen draw it replaces.
         if use_offscreen {
-            self.dx_blit(&scene_srv, &swapchain_rtv)?;
+            let resources = self.resources.as_ref().context("resources missing")?;
+            let target = resources
+                .render_target
+                .as_ref()
+                .context("render target texture missing")?;
+            self.dx_blit(&resources.blur.scene_color, target)?;
         }
         self.active_render_target = None;
         self.present()
@@ -1146,29 +1153,18 @@ impl DirectXRenderer {
         Ok(())
     }
 
-    /// Copy the offscreen scene texture into the swapchain render target.
-    fn dx_blit(
-        &self,
-        source_srv: &Option<ID3D11ShaderResourceView>,
-        target_rtv: &Option<ID3D11RenderTargetView>,
-    ) -> Result<()> {
-        let full_vp = self
-            .resources
+    /// Copy the offscreen scene texture into the swapchain render target. Both textures have the
+    /// same format, size and sample count, so this is exact.
+    fn dx_blit(&self, source: &ID3D11Texture2D, target: &ID3D11Texture2D) -> Result<()> {
+        let ctx = &self
+            .devices
             .as_ref()
-            .context("resources missing")?
-            .viewport;
-        self.dx_blur_pass(
-            &self.pipelines.blur_downsample_vertex,
-            &self.pipelines.blur_downsample_fragment,
-            &self.pipelines.blur_blend_replace,
-            target_rtv,
-            source_srv,
-            BlurParams::default(),
-            &full_vp,
-            D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
-            3,
-            true,
-        )
+            .context("devices missing")?
+            .device_context;
+        unsafe {
+            ctx.CopyResource(target, source);
+        }
+        Ok(())
     }
 
     pub(crate) fn gpu_specs(&self) -> Result<GpuSpecs> {
@@ -2633,7 +2629,10 @@ mod tests {
     use super::{create_blend_state, update_buffer, GlobalParams, PipelineState, RENDER_TARGET_FORMAT};
     use crate::directx_renderer::shader_resources::ShaderModule;
     use anyhow::Result;
-    use gpui::{bounds, point, rgba, size, Background, ContentMask, Corners, Quad, ScaledPixels};
+    use gpui::{
+        bounds, hsla, linear_color_stop, linear_gradient, point, radial_gradient, rgba, size,
+        Background, ContentMask, Corners, Quad, RadialShape, RadialSize, ScaledPixels,
+    };
     use std::slice;
     use windows::core::Interface;
     use windows::Win32::{
@@ -2889,6 +2888,557 @@ mod tests {
             corner,
             [128, 32, 64, 255],
             "corner pixel should be the clear color (B,G,R,A), got {corner:?}"
+        );
+        Ok(())
+    }
+
+    /// Renders a horizontal `gray25 -> white` linear gradient with the default Oklab interpolation
+    /// and asserts two points on the ramp. The stops are decoded from sRGB, mixed in Oklab, and
+    /// re-encoded on the way out: sampled at their pixel centers, the quarter point should land
+    /// near 109 and the center near 156. A missing decode, a duplicated transfer function, or a
+    /// linear-light mix instead of Oklab moves those to ~94 and ~134 — 15 and 22 code values off,
+    /// far outside the windows asserted here.
+    ///
+    /// Both stops are `Hsla`s that convert to exact 0.25 / 1.0 in the shader's `hsla_to_rgba`, and
+    /// the ±5 window covers the gradient dither (±2/255 on RGB) plus the alpha dither blending a
+    /// fraction of the clear color into the result.
+    #[test]
+    fn hlsl_gradient_offscreen_readback() -> Result<()> {
+        let Some((device, context)) = create_warp_device() else {
+            eprintln!("[gradient_offscreen] WARP device unavailable, skipping");
+            return Ok(());
+        };
+        let (texture, rtv, staging) = make_render_target(&device)?;
+
+        let globals = GlobalParams {
+            gamma_ratios: [1.0, 1.0, 1.0, 1.0],
+            viewport_size: [TEST_SIZE as f32, TEST_SIZE as f32],
+            grayscale_enhanced_contrast: 0.0,
+            subpixel_enhanced_contrast: 0.0,
+            is_bgr: 0,
+            _pad: [0; 3],
+        };
+        // Must be a real constant buffer, same reason as in `hlsl_quad_offscreen_readback`.
+        let globals_buffer = unsafe {
+            let desc = D3D11_BUFFER_DESC {
+                ByteWidth: std::mem::size_of::<GlobalParams>() as u32,
+                Usage: D3D11_USAGE_DYNAMIC,
+                BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
+                CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
+                ..Default::default()
+            };
+            let mut buffer = None;
+            device.CreateBuffer(&desc, None, Some(&mut buffer))?;
+            buffer.unwrap()
+        };
+        update_buffer(&context, &globals_buffer, &[globals])?;
+
+        let blend = create_blend_state(&device)?;
+        let mut pipeline =
+            PipelineState::<Quad>::new(&device, "test_gradient", ShaderModule::Quad, 4, blend)?;
+
+        // Horizontal ramp over [8,8]-[56,56], identity transform. Pixels sample at their centers,
+        // so for column `x` the ramp parameter is `t = ((x + 0.5) - 32 + 24) / 48`.
+        let quad = Quad {
+            bounds: bounds(
+                point(ScaledPixels(8.0), ScaledPixels(8.0)),
+                size(ScaledPixels(48.0), ScaledPixels(48.0)),
+            ),
+            content_mask: ContentMask {
+                bounds: bounds(
+                    point(ScaledPixels(0.0), ScaledPixels(0.0)),
+                    size(ScaledPixels(64.0), ScaledPixels(64.0)),
+                ),
+                corner_radii: Corners::default(),
+            },
+            background: linear_gradient(
+                90.0,
+                linear_color_stop(hsla(0.0, 0.0, 0.25, 1.0), 0.0),
+                linear_color_stop(hsla(0.0, 0.0, 1.0, 1.0), 1.0),
+            ),
+            ..Default::default()
+        };
+        pipeline.update_buffer(&device, &context, &[quad])?;
+
+        let viewport = D3D11_VIEWPORT {
+            TopLeftX: 0.0,
+            TopLeftY: 0.0,
+            Width: TEST_SIZE as f32,
+            Height: TEST_SIZE as f32,
+            MinDepth: 0.0,
+            MaxDepth: 1.0,
+        };
+        let bg = [0.25, 0.125, 0.5, 1.0];
+        unsafe {
+            context.ClearRenderTargetView(&rtv, &bg);
+            context.OMSetRenderTargets(Some(slice::from_ref(&Some(rtv))), None);
+        }
+        pipeline.draw_range(&device, &context, &[viewport], &[Some(globals_buffer)], 4, 0, 1)?;
+        dump_device_errors(&device);
+
+        let quarter = read_pixel(&context, &texture, &staging, 20, 32)
+            .expect("readback of quarter pixel failed");
+        for channel in &quarter[..3] {
+            assert!(
+                (104..=114).contains(channel),
+                "quarter point (t = 0.26) should be ~109 grey, got {quarter:?} (B,G,R,A)"
+            );
+        }
+        assert!(
+            (250..=255).contains(&quarter[3]),
+            "gradient pixels should stay opaque, got {quarter:?} (B,G,R,A)"
+        );
+
+        let center =
+            read_pixel(&context, &texture, &staging, 32, 32).expect("readback of center pixel failed");
+        for channel in &center[..3] {
+            assert!(
+                (151..=161).contains(channel),
+                "center (t = 0.51) should be ~156 grey, got {center:?} (B,G,R,A)"
+            );
+        }
+        Ok(())
+    }
+
+    /// Renders a radial gradient with the default elliptical ending shape and asserts points along
+    /// the diagonal. The ramp is parametrised so the ellipse meets the quad's farthest corner at
+    /// t = 1: `t = length(offset / (farthest_side * sqrt(2)))`. With a 48x48 quad centered at
+    /// (26, 26), the sampled pixel centers land at t = 0.02, 0.52 and 0.94.
+    #[test]
+    fn hlsl_radial_gradient_offscreen_readback() -> Result<()> {
+        let Some((device, context)) = create_warp_device() else {
+            eprintln!("[radial_offscreen] WARP device unavailable, skipping");
+            return Ok(());
+        };
+        let (texture, rtv, staging) = make_render_target(&device)?;
+
+        let globals = GlobalParams {
+            gamma_ratios: [1.0, 1.0, 1.0, 1.0],
+            viewport_size: [TEST_SIZE as f32, TEST_SIZE as f32],
+            grayscale_enhanced_contrast: 0.0,
+            subpixel_enhanced_contrast: 0.0,
+            is_bgr: 0,
+            _pad: [0; 3],
+        };
+        let globals_buffer = unsafe {
+            let desc = D3D11_BUFFER_DESC {
+                ByteWidth: std::mem::size_of::<GlobalParams>() as u32,
+                Usage: D3D11_USAGE_DYNAMIC,
+                BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
+                CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
+                ..Default::default()
+            };
+            let mut buffer = None;
+            device.CreateBuffer(&desc, None, Some(&mut buffer))?;
+            buffer.unwrap()
+        };
+        update_buffer(&context, &globals_buffer, &[globals])?;
+
+        let blend = create_blend_state(&device)?;
+        let mut pipeline =
+            PipelineState::<Quad>::new(&device, "test_radial", ShaderModule::Quad, 4, blend)?;
+
+        let quad = Quad {
+            bounds: bounds(
+                point(ScaledPixels(2.0), ScaledPixels(2.0)),
+                size(ScaledPixels(48.0), ScaledPixels(48.0)),
+            ),
+            content_mask: ContentMask {
+                bounds: bounds(
+                    point(ScaledPixels(0.0), ScaledPixels(0.0)),
+                    size(ScaledPixels(64.0), ScaledPixels(64.0)),
+                ),
+                corner_radii: Corners::default(),
+            },
+            background: radial_gradient(
+                point(0.5, 0.5),
+                linear_color_stop(hsla(0.0, 0.0, 0.25, 1.0), 0.0),
+                linear_color_stop(hsla(0.0, 0.0, 1.0, 1.0), 1.0),
+            ),
+            ..Default::default()
+        };
+        pipeline.update_buffer(&device, &context, &[quad])?;
+
+        let viewport = D3D11_VIEWPORT {
+            TopLeftX: 0.0,
+            TopLeftY: 0.0,
+            Width: TEST_SIZE as f32,
+            Height: TEST_SIZE as f32,
+            MinDepth: 0.0,
+            MaxDepth: 1.0,
+        };
+        let bg = [0.25, 0.125, 0.5, 1.0];
+        unsafe {
+            context.ClearRenderTargetView(&rtv, &bg);
+            context.OMSetRenderTargets(Some(slice::from_ref(&Some(rtv))), None);
+        }
+        pipeline.draw_range(&device, &context, &[viewport], &[Some(globals_buffer)], 4, 0, 1)?;
+        dump_device_errors(&device);
+
+        // Center of the gradient: the first color stop, barely past t = 0.
+        let center_pixel =
+            read_pixel(&context, &texture, &staging, 26, 26).expect("readback of center failed");
+        for channel in &center_pixel[..3] {
+            assert!(
+                (62..=72).contains(channel),
+                "radial center should be ~67 grey, got {center_pixel:?} (B,G,R,A)"
+            );
+        }
+
+        // Halfway along the diagonal.
+        let mid_pixel =
+            read_pixel(&context, &texture, &staging, 38, 38).expect("readback of mid failed");
+        for channel in &mid_pixel[..3] {
+            assert!(
+                (153..=163).contains(channel),
+                "radial mid-diagonal should be ~158 grey, got {mid_pixel:?} (B,G,R,A)"
+            );
+        }
+
+        // Close to the farthest corner, which the ending shape meets at t = 1.
+        let corner_pixel =
+            read_pixel(&context, &texture, &staging, 48, 48).expect("readback of corner failed");
+        for channel in &corner_pixel[..3] {
+            assert!(
+                (237..=247).contains(channel),
+                "radial near-corner should be ~242 grey, got {corner_pixel:?} (B,G,R,A)"
+            );
+        }
+        Ok(())
+    }
+
+    /// Renders the same ramp with a circular ending shape on a non-square quad, where a circle and
+    /// an ellipse diverge. The circle's radius is the distance to the farthest corner (30.46 px on
+    /// this 56x24 quad), so the sampled points land at t = 0.64 and 0.54 — an elliptical ending
+    /// shape would put them at t = 0.49 and 0.42, ~29 and ~24 code values darker.
+    #[test]
+    fn hlsl_radial_circle_offscreen_readback() -> Result<()> {
+        let Some((device, context)) = create_warp_device() else {
+            eprintln!("[radial_circle_offscreen] WARP device unavailable, skipping");
+            return Ok(());
+        };
+        let (texture, rtv, staging) = make_render_target(&device)?;
+
+        let globals = GlobalParams {
+            gamma_ratios: [1.0, 1.0, 1.0, 1.0],
+            viewport_size: [TEST_SIZE as f32, TEST_SIZE as f32],
+            grayscale_enhanced_contrast: 0.0,
+            subpixel_enhanced_contrast: 0.0,
+            is_bgr: 0,
+            _pad: [0; 3],
+        };
+        let globals_buffer = unsafe {
+            let desc = D3D11_BUFFER_DESC {
+                ByteWidth: std::mem::size_of::<GlobalParams>() as u32,
+                Usage: D3D11_USAGE_DYNAMIC,
+                BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
+                CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
+                ..Default::default()
+            };
+            let mut buffer = None;
+            device.CreateBuffer(&desc, None, Some(&mut buffer))?;
+            buffer.unwrap()
+        };
+        update_buffer(&context, &globals_buffer, &[globals])?;
+
+        let blend = create_blend_state(&device)?;
+        let mut pipeline =
+            PipelineState::<Quad>::new(&device, "test_radial_circle", ShaderModule::Quad, 4, blend)?;
+
+        let quad = Quad {
+            bounds: bounds(
+                point(ScaledPixels(4.0), ScaledPixels(20.0)),
+                size(ScaledPixels(56.0), ScaledPixels(24.0)),
+            ),
+            content_mask: ContentMask {
+                bounds: bounds(
+                    point(ScaledPixels(0.0), ScaledPixels(0.0)),
+                    size(ScaledPixels(64.0), ScaledPixels(64.0)),
+                ),
+                corner_radii: Corners::default(),
+            },
+            background: radial_gradient(
+                point(0.5, 0.5),
+                linear_color_stop(hsla(0.0, 0.0, 0.25, 1.0), 0.0),
+                linear_color_stop(hsla(0.0, 0.0, 1.0, 1.0), 1.0),
+            )
+            .radial_shape(RadialShape::Circle),
+            ..Default::default()
+        };
+        pipeline.update_buffer(&device, &context, &[quad])?;
+
+        let viewport = D3D11_VIEWPORT {
+            TopLeftX: 0.0,
+            TopLeftY: 0.0,
+            Width: TEST_SIZE as f32,
+            Height: TEST_SIZE as f32,
+            MinDepth: 0.0,
+            MaxDepth: 1.0,
+        };
+        let bg = [0.25, 0.125, 0.5, 1.0];
+        unsafe {
+            context.ClearRenderTargetView(&rtv, &bg);
+            context.OMSetRenderTargets(Some(slice::from_ref(&Some(rtv))), None);
+        }
+        pipeline.draw_range(&device, &context, &[viewport], &[Some(globals_buffer)], 4, 0, 1)?;
+        dump_device_errors(&device);
+
+        let left_pixel =
+            read_pixel(&context, &texture, &staging, 12, 32).expect("readback of left failed");
+        for channel in &left_pixel[..3] {
+            assert!(
+                (176..=186).contains(channel),
+                "circle left point should be ~181 grey, got {left_pixel:?} (B,G,R,A)"
+            );
+        }
+
+        let right_pixel =
+            read_pixel(&context, &texture, &staging, 48, 32).expect("readback of right failed");
+        for channel in &right_pixel[..3] {
+            assert!(
+                (157..=167).contains(channel),
+                "circle right point should be ~162 grey, got {right_pixel:?} (B,G,R,A)"
+            );
+        }
+        Ok(())
+    }
+
+    /// Renders the same ramp once per CSS ending-shape size keyword and asserts the same pixel in
+    /// each. The quad spans [4,20]-[60,44] with its center at `point(0.25, 0.5)`, so the nearest
+    /// side is 14px from the center and the farthest 42px: at pixel center (30.5, 32.5) the four
+    /// keywords land at t = 0.89, 0.30, 0.63 and 0.21 — 233, 116, 180 and 100 in code values, each
+    /// at least 20 apart, so a wrong keyword cannot pass by accident.
+    #[test]
+    fn hlsl_radial_size_offscreen_readback() -> Result<()> {
+        let Some((device, context)) = create_warp_device() else {
+            eprintln!("[radial_size_offscreen] WARP device unavailable, skipping");
+            return Ok(());
+        };
+        let (texture, rtv, staging) = make_render_target(&device)?;
+
+        let globals = GlobalParams {
+            gamma_ratios: [1.0, 1.0, 1.0, 1.0],
+            viewport_size: [TEST_SIZE as f32, TEST_SIZE as f32],
+            grayscale_enhanced_contrast: 0.0,
+            subpixel_enhanced_contrast: 0.0,
+            is_bgr: 0,
+            _pad: [0; 3],
+        };
+        let globals_buffer = unsafe {
+            let desc = D3D11_BUFFER_DESC {
+                ByteWidth: std::mem::size_of::<GlobalParams>() as u32,
+                Usage: D3D11_USAGE_DYNAMIC,
+                BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
+                CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
+                ..Default::default()
+            };
+            let mut buffer = None;
+            device.CreateBuffer(&desc, None, Some(&mut buffer))?;
+            buffer.unwrap()
+        };
+        update_buffer(&context, &globals_buffer, &[globals])?;
+
+        let blend = create_blend_state(&device)?;
+        let mut pipeline =
+            PipelineState::<Quad>::new(&device, "test_radial_size", ShaderModule::Quad, 4, blend)?;
+
+        let viewport = D3D11_VIEWPORT {
+            TopLeftX: 0.0,
+            TopLeftY: 0.0,
+            Width: TEST_SIZE as f32,
+            Height: TEST_SIZE as f32,
+            MinDepth: 0.0,
+            MaxDepth: 1.0,
+        };
+        let bg = [0.25, 0.125, 0.5, 1.0];
+        unsafe {
+            context.OMSetRenderTargets(Some(slice::from_ref(&Some(rtv.clone()))), None);
+        }
+
+        for (keyword, expected) in [
+            (RadialSize::ClosestSide, 233),
+            (RadialSize::FarthestSide, 116),
+            (RadialSize::ClosestCorner, 180),
+            (RadialSize::FarthestCorner, 100),
+        ] {
+            let quad = Quad {
+                bounds: bounds(
+                    point(ScaledPixels(4.0), ScaledPixels(20.0)),
+                    size(ScaledPixels(56.0), ScaledPixels(24.0)),
+                ),
+                content_mask: ContentMask {
+                    bounds: bounds(
+                        point(ScaledPixels(0.0), ScaledPixels(0.0)),
+                        size(ScaledPixels(64.0), ScaledPixels(64.0)),
+                    ),
+                    corner_radii: Corners::default(),
+                },
+                background: radial_gradient(
+                    point(0.25, 0.5),
+                    linear_color_stop(hsla(0.0, 0.0, 0.25, 1.0), 0.0),
+                    linear_color_stop(hsla(0.0, 0.0, 1.0, 1.0), 1.0),
+                )
+                .radial_size(keyword),
+                ..Default::default()
+            };
+            pipeline.update_buffer(&device, &context, &[quad])?;
+            unsafe {
+                context.ClearRenderTargetView(&rtv, &bg);
+            }
+            pipeline.draw_range(
+                &device,
+                &context,
+                &[viewport],
+                &[Some(globals_buffer.clone())],
+                4,
+                0,
+                1,
+            )?;
+            dump_device_errors(&device);
+
+            let pixel =
+                read_pixel(&context, &texture, &staging, 30, 32).expect("readback failed");
+            for channel in &pixel[..3] {
+                assert!(
+                    (expected - 5..=expected + 5).contains(channel),
+                    "{keyword:?} should be ~{expected} grey, got {pixel:?} (B,G,R,A)"
+                );
+            }
+        }
+
+        // A circular ending shape takes a single radius, so at the same center the farthest side
+        // is 42px along *both* axes: 8.5px above the center the circle is at t = 0.20 while the
+        // ellipse (whose y radius is only 12px) is at t = 0.71 — 99 vs 195 in code values.
+        let quad = Quad {
+            bounds: bounds(
+                point(ScaledPixels(4.0), ScaledPixels(20.0)),
+                size(ScaledPixels(56.0), ScaledPixels(24.0)),
+            ),
+            content_mask: ContentMask {
+                bounds: bounds(
+                    point(ScaledPixels(0.0), ScaledPixels(0.0)),
+                    size(ScaledPixels(64.0), ScaledPixels(64.0)),
+                ),
+                corner_radii: Corners::default(),
+            },
+            background: radial_gradient(
+                point(0.25, 0.5),
+                linear_color_stop(hsla(0.0, 0.0, 0.25, 1.0), 0.0),
+                linear_color_stop(hsla(0.0, 0.0, 1.0, 1.0), 1.0),
+            )
+            .radial_size(RadialSize::FarthestSide)
+            .radial_shape(RadialShape::Circle),
+            ..Default::default()
+        };
+        pipeline.update_buffer(&device, &context, &[quad])?;
+        unsafe {
+            context.ClearRenderTargetView(&rtv, &bg);
+        }
+        pipeline.draw_range(&device, &context, &[viewport], &[Some(globals_buffer)], 4, 0, 1)?;
+        dump_device_errors(&device);
+
+        let pixel = read_pixel(&context, &texture, &staging, 18, 40).expect("readback failed");
+        for channel in &pixel[..3] {
+            assert!(
+                (94..=104).contains(channel),
+                "circle farthest-side should be ~99 grey, got {pixel:?} (B,G,R,A)"
+            );
+        }
+        Ok(())
+    }
+
+    /// Draws two differently colored quads in one instanced call and asserts a pixel inside each.
+    /// The field offsets can agree while the *stride* between instances still disagrees — a struct
+    /// that grows on one side only. That kind of mismatch leaves instance 0 correct and every later
+    /// instance reading garbage, so it needs its own check.
+    #[test]
+    fn hlsl_two_instance_stride_readback() -> Result<()> {
+        let Some((device, context)) = create_warp_device() else {
+            eprintln!("[two_instance_offscreen] WARP device unavailable, skipping");
+            return Ok(());
+        };
+        let (texture, rtv, staging) = make_render_target(&device)?;
+
+        let globals = GlobalParams {
+            gamma_ratios: [1.0, 1.0, 1.0, 1.0],
+            viewport_size: [TEST_SIZE as f32, TEST_SIZE as f32],
+            grayscale_enhanced_contrast: 0.0,
+            subpixel_enhanced_contrast: 0.0,
+            is_bgr: 0,
+            _pad: [0; 3],
+        };
+        let globals_buffer = unsafe {
+            let desc = D3D11_BUFFER_DESC {
+                ByteWidth: std::mem::size_of::<GlobalParams>() as u32,
+                Usage: D3D11_USAGE_DYNAMIC,
+                BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
+                CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
+                ..Default::default()
+            };
+            let mut buffer = None;
+            device.CreateBuffer(&desc, None, Some(&mut buffer))?;
+            buffer.unwrap()
+        };
+        update_buffer(&context, &globals_buffer, &[globals])?;
+
+        let blend = create_blend_state(&device)?;
+        let mut pipeline =
+            PipelineState::<Quad>::new(&device, "test_two_instances", ShaderModule::Quad, 4, blend)?;
+
+        let content_mask = ContentMask {
+            bounds: bounds(
+                point(ScaledPixels(0.0), ScaledPixels(0.0)),
+                size(ScaledPixels(64.0), ScaledPixels(64.0)),
+            ),
+            corner_radii: Corners::default(),
+        };
+        let red = Quad {
+            bounds: bounds(
+                point(ScaledPixels(4.0), ScaledPixels(4.0)),
+                size(ScaledPixels(24.0), ScaledPixels(24.0)),
+            ),
+            content_mask,
+            background: Background::from(rgba(0xff0000ff)),
+            ..Default::default()
+        };
+        let green = Quad {
+            bounds: bounds(
+                point(ScaledPixels(36.0), ScaledPixels(36.0)),
+                size(ScaledPixels(24.0), ScaledPixels(24.0)),
+            ),
+            content_mask,
+            background: Background::from(rgba(0x00ff00ff)),
+            ..Default::default()
+        };
+        pipeline.update_buffer(&device, &context, &[red, green])?;
+
+        let viewport = D3D11_VIEWPORT {
+            TopLeftX: 0.0,
+            TopLeftY: 0.0,
+            Width: TEST_SIZE as f32,
+            Height: TEST_SIZE as f32,
+            MinDepth: 0.0,
+            MaxDepth: 1.0,
+        };
+        let bg = [0.25, 0.125, 0.5, 1.0];
+        unsafe {
+            context.ClearRenderTargetView(&rtv, &bg);
+            context.OMSetRenderTargets(Some(slice::from_ref(&Some(rtv))), None);
+        }
+        pipeline.draw_range(&device, &context, &[viewport], &[Some(globals_buffer)], 4, 0, 2)?;
+        dump_device_errors(&device);
+
+        let first = read_pixel(&context, &texture, &staging, 16, 16).expect("readback failed");
+        assert_eq!(
+            first,
+            [0, 0, 255, 255],
+            "instance 0 should be solid red (B,G,R,A), got {first:?}"
+        );
+        let second = read_pixel(&context, &texture, &staging, 48, 48).expect("readback failed");
+        assert_eq!(
+            second,
+            [0, 255, 0, 255],
+            "instance 1 should be solid green (B,G,R,A) — a stride mismatch reads garbage here, got {second:?}"
         );
         Ok(())
     }

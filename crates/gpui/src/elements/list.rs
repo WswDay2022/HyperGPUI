@@ -381,17 +381,16 @@ impl ListState {
             height,
         };
         let mut state = self.0.borrow_mut();
-        let new_items = state
-            .items
-            .iter()
-            .map(|item| ListItem::Unmeasured {
+        // Built straight from the iterator: collecting into a `Vec` first would hold a second copy
+        // of the whole item index at peak.
+        let new_tree = SumTree::from_iter(
+            state.items.iter().map(|item| ListItem::Unmeasured {
                 size_hint: Some(item.size_hint().unwrap_or(size_hint)),
                 focus_handle: item.focus_handle(),
-            })
-            .collect::<Vec<_>>();
-        let mut tree = SumTree::default();
-        tree.extend(new_items, ());
-        state.items = tree;
+            }),
+            (),
+        );
+        state.items = new_tree;
     }
 
     /// Remeasure all items while preserving proportional scroll position.
@@ -1446,7 +1445,7 @@ impl Element for List {
     fn request_layout(
         &mut self,
         _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
+        _: Option<&InspectorElementId>,
         window: &mut Window,
         cx: &mut App,
     ) -> (crate::LayoutId, Self::RequestLayoutState) {
@@ -1520,7 +1519,7 @@ impl Element for List {
     fn prepaint(
         &mut self,
         _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
+        _: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
         _: &mut Self::RequestLayoutState,
         window: &mut Window,
@@ -1573,7 +1572,7 @@ impl Element for List {
     fn paint(
         &mut self,
         _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
+        _: Option<&InspectorElementId>,
         bounds: Bounds<crate::Pixels>,
         _: &mut Self::RequestLayoutState,
         prepaint: &mut Self::PrepaintState,

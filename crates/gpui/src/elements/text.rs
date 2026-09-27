@@ -267,7 +267,7 @@ impl Element for &'static str {
     fn request_layout(
         &mut self,
         _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
+        _: Option<&InspectorElementId>,
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
@@ -279,7 +279,7 @@ impl Element for &'static str {
     fn prepaint(
         &mut self,
         _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
+        _: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
         text_layout: &mut Self::RequestLayoutState,
         _window: &mut Window,
@@ -291,7 +291,7 @@ impl Element for &'static str {
     fn paint(
         &mut self,
         _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
+        _: Option<&InspectorElementId>,
         _bounds: Bounds<Pixels>,
         text_layout: &mut TextLayout,
         _: &mut (),
@@ -341,7 +341,7 @@ impl Element for SharedString {
     fn request_layout(
         &mut self,
         _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
+        _: Option<&InspectorElementId>,
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
@@ -353,7 +353,7 @@ impl Element for SharedString {
     fn prepaint(
         &mut self,
         _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
+        _: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
         text_layout: &mut Self::RequestLayoutState,
         _window: &mut Window,
@@ -365,7 +365,7 @@ impl Element for SharedString {
     fn paint(
         &mut self,
         _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
+        _: Option<&InspectorElementId>,
         _bounds: Bounds<Pixels>,
         text_layout: &mut Self::RequestLayoutState,
         _: &mut Self::PrepaintState,
@@ -555,7 +555,7 @@ impl Element for StyledText {
     fn request_layout(
         &mut self,
         _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
+        _: Option<&InspectorElementId>,
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
@@ -579,7 +579,7 @@ impl Element for StyledText {
     fn prepaint(
         &mut self,
         _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
+        _: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
         _: &mut Self::RequestLayoutState,
         _window: &mut Window,
@@ -591,7 +591,7 @@ impl Element for StyledText {
     fn paint(
         &mut self,
         _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
+        _: Option<&InspectorElementId>,
         _bounds: Bounds<Pixels>,
         _: &mut Self::RequestLayoutState,
         _: &mut Self::PrepaintState,
@@ -673,16 +673,31 @@ enum CaseMapKind {
 }
 
 fn push_case_mapped_character(output: &mut String, character: char, kind: CaseMapKind) {
-    let mapped = match kind {
-        CaseMapKind::Upper => character.to_uppercase().collect::<String>(),
-        CaseMapKind::Lower => character.to_lowercase().collect::<String>(),
-    };
-
-    if mapped.len() == character.len_utf8() && mapped.chars().count() == 1 {
-        output.push_str(&mapped);
-    } else {
-        output.push(character);
+    // `to_uppercase`/`to_lowercase` yield multi-character expansions (ß -> SS, ﬀ -> FF). Only a
+    // mapping that stays a single character of the same UTF-8 length is pushed; everything else
+    // keeps the original. Consuming the iterator directly avoids allocating a `String` per
+    // character, which mattered because this runs per character of every laid-out text.
+    match kind {
+        CaseMapKind::Upper => push_single_case_mapped(output, character, character.to_uppercase()),
+        CaseMapKind::Lower => push_single_case_mapped(output, character, character.to_lowercase()),
     }
+}
+
+/// Push the case mapping when it is exactly one character of the same UTF-8 length as
+/// `character`, otherwise push `character` unchanged.
+fn push_single_case_mapped(
+    output: &mut String,
+    character: char,
+    mut mapped: impl Iterator<Item = char>,
+) {
+    if let Some(mapped_character) = mapped.next()
+        && mapped.next().is_none()
+        && mapped_character.len_utf8() == character.len_utf8()
+    {
+        output.push(mapped_character);
+        return;
+    }
+    output.push(character);
 }
 
 #[cfg(test)]
@@ -1500,6 +1515,26 @@ impl IntoElement for InteractiveText {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The case-mapping path used to allocate a `String` per character; these cases pin the rule
+    /// that made that allocation unnecessary: push the mapping only when it is a single character
+    /// of the same UTF-8 length, otherwise keep the original.
+    #[test]
+    fn case_mapping_keeps_the_original_unless_it_is_one_same_length_character() {
+        let mapped = |character: char, kind: CaseMapKind| {
+            let mut output = String::new();
+            push_case_mapped_character(&mut output, character, kind);
+            output
+        };
+
+        assert_eq!(mapped('a', CaseMapKind::Upper), "A");
+        assert_eq!(mapped('A', CaseMapKind::Lower), "a");
+        assert_eq!(mapped('1', CaseMapKind::Upper), "1");
+        // Expands to two characters ("SS"), so the original stays.
+        assert_eq!(mapped('ß', CaseMapKind::Upper), "ß");
+        // Maps to a single character of a different UTF-8 length (ẞ, 3 bytes -> ß, 2 bytes).
+        assert_eq!(mapped('ẞ', CaseMapKind::Lower), "ẞ");
+    }
 
     #[test]
     fn test_into_element_for() {

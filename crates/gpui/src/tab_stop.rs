@@ -101,7 +101,8 @@ impl TabStopMap {
     }
 
     pub fn clear(&mut self) {
-        *self = Self::default();
+        // Clearing in place (rather than resetting to `Self::default()`) keeps the buffers'
+        // capacity, since this runs once per frame and the tab stops are re-registered every frame.
         self.current_path.0.clear();
         self.insertion_history.clear();
         self.by_id.clear();

@@ -22,8 +22,10 @@ impl Default for EditableTextHistory {
     fn default() -> Self {
         Self {
             grouping_interval: DEFAULT_GROUP_INTERVAL,
-            undo_stack: Vec::with_capacity(MAX_HISTORY_LEN),
-            redo_stack: Vec::with_capacity(MAX_HISTORY_LEN),
+            // Grown on demand: reserving `MAX_HISTORY_LEN` entries up front costs every editable
+            // text field ~150 KB for a stack that typically holds a handful of edits.
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
         }
     }
 }
