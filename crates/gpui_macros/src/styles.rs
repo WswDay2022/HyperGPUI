@@ -1415,3 +1415,201 @@ fn border_suffixes() -> Vec<BorderStyleSuffix> {
         },
     ]
 }
+
+/// Generates the transform shortcut methods for the `Styled` trait: one parameterized method per
+/// [`CssTransform`](gpui::CssTransform) builder function, so a transform reads
+/// `div().scale(2.0, 2.0)` instead of
+/// `div().transform(CssTransform::identity().scale(2.0, 2.0))`.
+///
+/// Each method appends its function to the element's transform, exactly like adding a function to
+/// the CSS `transform` property, so calls compose in order
+/// (`div().translate_x(px(10.)).rotate(radians(0.4))` is `transform: translateX(10px) rotate(...)`).
+/// No preset values are generated: every method takes the same parameters as its `CssTransform`
+/// counterpart.
+pub fn transform_style_methods(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as StyleableMacroInput);
+    let visibility = input.method_visibility;
+
+    let output = quote! {
+        /// Appends `translate(x, y)` to the element's transform.
+        /// [Docs](https://developer.mozilla.org/en-US/docs/Web/CSS/transform-function/translate)
+        #visibility fn translate(mut self, x: impl Into<gpui::Pixels>, y: impl Into<gpui::Pixels>) -> Self {
+            let style = self.style();
+            let transform = style.transform.take().unwrap_or_else(gpui::CssTransform::identity);
+            style.transform = Some(transform.translate(x, y));
+            self
+        }
+
+        /// Appends `translateX(x)` to the element's transform.
+        /// [Docs](https://developer.mozilla.org/en-US/docs/Web/CSS/transform-function/translateX)
+        #visibility fn translate_x(mut self, x: impl Into<gpui::Pixels>) -> Self {
+            let style = self.style();
+            let transform = style.transform.take().unwrap_or_else(gpui::CssTransform::identity);
+            style.transform = Some(transform.translate_x(x));
+            self
+        }
+
+        /// Appends `translateY(y)` to the element's transform.
+        /// [Docs](https://developer.mozilla.org/en-US/docs/Web/CSS/transform-function/translateY)
+        #visibility fn translate_y(mut self, y: impl Into<gpui::Pixels>) -> Self {
+            let style = self.style();
+            let transform = style.transform.take().unwrap_or_else(gpui::CssTransform::identity);
+            style.transform = Some(transform.translate_y(y));
+            self
+        }
+
+        /// Appends `translate3d(x, y, z)` to the element's transform. Declared for CSS parity; the
+        /// 3D functions are not implemented yet and currently contribute the identity.
+        #visibility fn translate3d(mut self, x: impl Into<gpui::Pixels>, y: impl Into<gpui::Pixels>, z: impl Into<gpui::Pixels>) -> Self {
+            let style = self.style();
+            let transform = style.transform.take().unwrap_or_else(gpui::CssTransform::identity);
+            style.transform = Some(transform.translate3d(x, y, z));
+            self
+        }
+
+        /// Appends `translateZ(z)` to the element's transform. Declared for CSS parity; not
+        /// implemented yet and currently contributes the identity.
+        #visibility fn translate_z(mut self, z: impl Into<gpui::Pixels>) -> Self {
+            let style = self.style();
+            let transform = style.transform.take().unwrap_or_else(gpui::CssTransform::identity);
+            style.transform = Some(transform.translate_z(z));
+            self
+        }
+
+        /// Appends `scale(x, y)` to the element's transform.
+        /// [Docs](https://developer.mozilla.org/en-US/docs/Web/CSS/transform-function/scale)
+        #visibility fn scale(mut self, x: f32, y: f32) -> Self {
+            let style = self.style();
+            let transform = style.transform.take().unwrap_or_else(gpui::CssTransform::identity);
+            style.transform = Some(transform.scale(x, y));
+            self
+        }
+
+        /// Appends `scale(factor, factor)` to the element's transform.
+        #visibility fn scale_both(mut self, factor: f32) -> Self {
+            let style = self.style();
+            let transform = style.transform.take().unwrap_or_else(gpui::CssTransform::identity);
+            style.transform = Some(transform.scale_both(factor));
+            self
+        }
+
+        /// Appends `scaleX(x)` to the element's transform.
+        /// [Docs](https://developer.mozilla.org/en-US/docs/Web/CSS/transform-function/scaleX)
+        #visibility fn scale_x(mut self, x: f32) -> Self {
+            let style = self.style();
+            let transform = style.transform.take().unwrap_or_else(gpui::CssTransform::identity);
+            style.transform = Some(transform.scale_x(x));
+            self
+        }
+
+        /// Appends `scaleY(y)` to the element's transform.
+        /// [Docs](https://developer.mozilla.org/en-US/docs/Web/CSS/transform-function/scaleY)
+        #visibility fn scale_y(mut self, y: f32) -> Self {
+            let style = self.style();
+            let transform = style.transform.take().unwrap_or_else(gpui::CssTransform::identity);
+            style.transform = Some(transform.scale_y(y));
+            self
+        }
+
+        /// Appends `scale3d(x, y, z)` to the element's transform. Declared for CSS parity; not
+        /// implemented yet and currently contributes the identity.
+        #visibility fn scale3d(mut self, x: f32, y: f32, z: f32) -> Self {
+            let style = self.style();
+            let transform = style.transform.take().unwrap_or_else(gpui::CssTransform::identity);
+            style.transform = Some(transform.scale3d(x, y, z));
+            self
+        }
+
+        /// Appends `scaleZ(z)` to the element's transform. Declared for CSS parity; not implemented
+        /// yet and currently contributes the identity.
+        #visibility fn scale_z(mut self, z: f32) -> Self {
+            let style = self.style();
+            let transform = style.transform.take().unwrap_or_else(gpui::CssTransform::identity);
+            style.transform = Some(transform.scale_z(z));
+            self
+        }
+
+        /// Appends `rotate(angle)` to the element's transform.
+        /// [Docs](https://developer.mozilla.org/en-US/docs/Web/CSS/transform-function/rotate)
+        #visibility fn rotate(mut self, angle: impl Into<gpui::Radians>) -> Self {
+            let style = self.style();
+            let transform = style.transform.take().unwrap_or_else(gpui::CssTransform::identity);
+            style.transform = Some(transform.rotate(angle));
+            self
+        }
+
+        /// Appends `rotateX(angle)` to the element's transform. Declared for CSS parity; not
+        /// implemented yet and currently contributes the identity.
+        #visibility fn rotate_x(mut self, angle: impl Into<gpui::Radians>) -> Self {
+            let style = self.style();
+            let transform = style.transform.take().unwrap_or_else(gpui::CssTransform::identity);
+            style.transform = Some(transform.rotate_x(angle));
+            self
+        }
+
+        /// Appends `rotateY(angle)` to the element's transform. Declared for CSS parity; not
+        /// implemented yet and currently contributes the identity.
+        #visibility fn rotate_y(mut self, angle: impl Into<gpui::Radians>) -> Self {
+            let style = self.style();
+            let transform = style.transform.take().unwrap_or_else(gpui::CssTransform::identity);
+            style.transform = Some(transform.rotate_y(angle));
+            self
+        }
+
+        /// Appends `rotateZ(angle)`, a clockwise rotation in the 2D plane (same as `rotate`).
+        #visibility fn rotate_z(mut self, angle: impl Into<gpui::Radians>) -> Self {
+            let style = self.style();
+            let transform = style.transform.take().unwrap_or_else(gpui::CssTransform::identity);
+            style.transform = Some(transform.rotate_z(angle));
+            self
+        }
+
+        /// Appends `skewX(angle)` to the element's transform.
+        /// [Docs](https://developer.mozilla.org/en-US/docs/Web/CSS/transform-function/skewX)
+        #visibility fn skew_x(mut self, angle: impl Into<gpui::Radians>) -> Self {
+            let style = self.style();
+            let transform = style.transform.take().unwrap_or_else(gpui::CssTransform::identity);
+            style.transform = Some(transform.skew_x(angle));
+            self
+        }
+
+        /// Appends `skewY(angle)` to the element's transform.
+        /// [Docs](https://developer.mozilla.org/en-US/docs/Web/CSS/transform-function/skewY)
+        #visibility fn skew_y(mut self, angle: impl Into<gpui::Radians>) -> Self {
+            let style = self.style();
+            let transform = style.transform.take().unwrap_or_else(gpui::CssTransform::identity);
+            style.transform = Some(transform.skew_y(angle));
+            self
+        }
+
+        /// Appends `perspective(d)` to the element's transform. Declared for CSS parity; not
+        /// implemented yet and currently contributes the identity.
+        #visibility fn perspective(mut self, d: impl Into<gpui::Pixels>) -> Self {
+            let style = self.style();
+            let transform = style.transform.take().unwrap_or_else(gpui::CssTransform::identity);
+            style.transform = Some(transform.perspective(d));
+            self
+        }
+
+        /// Appends `matrix(a, b, c, d, e, f)` — the CSS 2D affine matrix (`e`/`f` in pixels) — to
+        /// the element's transform.
+        /// [Docs](https://developer.mozilla.org/en-US/docs/Web/CSS/transform-function/matrix)
+        #visibility fn matrix(mut self, a: f32, b: f32, c: f32, d: f32, e: impl Into<gpui::Pixels>, f: impl Into<gpui::Pixels>) -> Self {
+            let style = self.style();
+            let transform = style.transform.take().unwrap_or_else(gpui::CssTransform::identity);
+            style.transform = Some(transform.matrix(a, b, c, d, e, f));
+            self
+        }
+
+        /// Appends `matrix3d(m00 … m33)` to the element's transform. Declared for CSS parity; not
+        /// implemented yet and currently contributes the identity.
+        #visibility fn matrix3d(mut self, values: [f32; 16]) -> Self {
+            let style = self.style();
+            let transform = style.transform.take().unwrap_or_else(gpui::CssTransform::identity);
+            style.transform = Some(transform.matrix3d(values));
+            self
+        }
+    };
+
+    output.into()
+}

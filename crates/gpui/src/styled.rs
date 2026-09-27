@@ -33,6 +33,7 @@ pub trait Styled: Sized {
     gpui_macros::cursor_style_methods!();
     gpui_macros::border_style_methods!();
     gpui_macros::box_shadow_style_methods!();
+    gpui_macros::transform_style_methods!();
 
     /// Blur this element's own content and children, like CSS `filter: blur(<radius>)`.
     ///
@@ -1007,5 +1008,43 @@ pub trait Styled: Sized {
     fn debug_below(mut self) -> Self {
         self.style().debug_below = Some(true);
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{CssTransform, div, px, radians};
+
+    /// The generated shortcuts must be exactly `transform(identity + fn)`, and chaining them must
+    /// compose in call order the way CSS composes functions inside one `transform` property.
+    #[test]
+    fn transform_shortcuts_match_the_builder() {
+        assert_eq!(
+            div().scale(2.0, 2.0).style().transform,
+            Some(CssTransform::identity().scale(2.0, 2.0))
+        );
+        assert_eq!(
+            div().translate_x(px(10.))
+                .rotate(radians(0.5))
+                .style()
+                .transform,
+            Some(
+                CssTransform::identity()
+                    .translate_x(px(10.))
+                    .rotate(radians(0.5))
+            )
+        );
+        assert_eq!(
+            div().scale_both(1.5)
+                .matrix(1.0, 0.0, 0.3, 1.0, px(0.0), px(0.0))
+                .style()
+                .transform,
+            Some(
+                CssTransform::identity()
+                    .scale_both(1.5)
+                    .matrix(1.0, 0.0, 0.3, 1.0, px(0.0), px(0.0))
+            )
+        );
     }
 }

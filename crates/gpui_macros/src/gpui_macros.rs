@@ -311,3 +311,11 @@ pub(crate) fn get_simple_attribute_field(ast: &DeriveInput, name: &'static str) 
         syn::Data::Union(_) => None,
     }
 }
+
+/// Generates the `CssTransform` shortcut methods (`scale`, `rotate`, `translate`, …) so a
+/// transform can be written directly on an element instead of through
+/// `transform(CssTransform::identity()…)`.
+#[proc_macro]
+pub fn transform_style_methods(input: TokenStream) -> TokenStream {
+    styles::transform_style_methods(input)
+}
