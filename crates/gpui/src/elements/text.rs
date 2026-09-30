@@ -389,12 +389,19 @@ impl IntoElement for SharedString {
 /// Callers are responsible for setting the correct style for each run.
 /// For text with a uniform style, you can usually avoid calling this constructor
 /// and just pass text directly.
+#[derive(Clone)]
 pub struct StyledText {
     text: SharedString,
     runs: Option<Vec<TextRun>>,
     delayed_highlights: Option<Vec<(Range<usize>, HighlightStyle)>>,
     delayed_font_family_overrides: Option<Vec<(Range<usize>, SharedString)>>,
     layout: TextLayout,
+}
+
+impl<T: Into<SharedString>> From<T> for StyledText {
+    fn from(text: T) -> Self {
+        Self::new(text)
+    }
 }
 
 impl StyledText {

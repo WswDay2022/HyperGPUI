@@ -169,6 +169,9 @@ mod layout;
 mod state;
 mod storage;
 
+#[cfg(test)]
+mod tests;
+
 pub use caret::*;
 pub use element::*;
 pub use state::*;

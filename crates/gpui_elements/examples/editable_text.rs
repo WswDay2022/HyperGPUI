@@ -1,64 +1,190 @@
+//! Editable text example.
+//!
+//! Shows the two editable text elements and the state behind them:
+//!
+//! - `text_input(..)` for a single line and `text_area(..)` for wrapped, scrollable
+//!   multi-line text, both styled with the ordinary `Styled` API.
+//! - Binding an element to a state the view owns, with `.state(state.downgrade())`, so the
+//!   application can read the value, write to it, and focus it from outside.
+//! - `EventEmitter<TextChanged>` as the way to re-render when the text changes (the state
+//!   keeps the only copy — nothing snapshots the text on the render path).
+//!
+//! Type into either field: navigation, selection, IME, cut/copy/paste and undo/redo all
+//! work through the key bindings installed in `main` (`default_bindings`).
+//!
+//! ```sh
+//! cargo run -p gpui_ce_elements --example editable_text
+//! ```
+
 use gpui::{
-    App, Bounds, Context, Window, WindowBounds, WindowOptions, div, prelude::*, px, rgb, size,
+    App, AppContext as _, Bounds, Context, Entity, EntityInputHandler as _, Focusable as _,
+    InteractiveElement as _, IntoElement, ParentElement as _, Render, StatefulInteractiveElement as _,
+    Styled as _, Window, WindowBounds, WindowOptions, div, px, rgb, size,
 };
 use gpui_ce_elements::editable_text::{
+    EditableTextState, StringStorage, TextChanged,
     actions::{DEFAULT_INPUT_CONTEXT, default_bindings},
     text_area, text_input,
 };
 
-struct Example;
+struct Example {
+    /// Single-line field, owned here rather than by the element so the buttons can drive it.
+    name: Entity<EditableTextState>,
+    /// Multi-line field.
+    notes: Entity<EditableTextState>,
+}
+
+impl Example {
+    fn new(cx: &mut Context<Self>) -> Self {
+        let name = cx.new(|cx| EditableTextState::new(StringStorage::default(), cx));
+        let notes = cx.new(|cx| EditableTextState::new(StringStorage::default(), cx));
+
+        // Re-render whenever either field changes, so the readout below stays current.
+        cx.subscribe(&name, |_, _, _: &TextChanged, cx| cx.notify())
+            .detach();
+        cx.subscribe(&notes, |_, _, _: &TextChanged, cx| cx.notify())
+            .detach();
+
+        Self { name, notes }
+    }
+}
+
 impl Render for Example {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let name_value = self.name.read(cx).as_str().to_string();
+        let notes_len = self.notes.read(cx).as_str().chars().count();
+
         div()
+            .id("editable-text-example")
             .size_full()
-            .background(rgb(0x505050))
+            .background(rgb(0x1b1b1f))
+            .text_color(rgb(0xe6e6e6))
+            .p_6()
             .flex()
             .flex_col()
-            .p_2()
-            .gap_2()
-            .items_start()
-            .justify_start()
+            .gap_3()
+            .child(div().text_xl().child("Editable text"))
+            .child(div().text_sm().text_color(rgb(0x9a9a9a)).child(
+                "Type, select, undo — the field handles it. The buttons drive the same state \
+                 the element edits.",
+            ))
             .child(
-                text_input("input-field")
+                text_input("name-input")
+                    .state(self.name.downgrade())
+                    .placeholder("Name")
                     .caret_blink_interval_500ms()
-                    .placeholder("some placeholder text")
+                    // The colour hooks take `Hsla`; the hex values are in the comments.
+                    .placeholder_color(gpui::hsla(0.0, 0.0, 0.42, 1.0)) // #6b6b6b
+                    .caret_color(gpui::hsla(0.133, 0.845, 0.531, 1.0)) // #facc15
+                    .selection_color(gpui::hsla(0.13, 0.9, 0.6, 0.35))
                     .border_1()
+                    .border_color(rgb(0x3a3a40))
                     .rounded_lg()
-                    .border_color(gpui::white()) // has a border
-                    .p_2() // padding between the text and border
-                    .min_w_10()
-                    .max_w_128()
-                    .min_h_auto()
-                    .max_h_auto()
+                    .p_2()
+                    .w_full()
                     .whitespace_nowrap(),
             )
             .child(
-                text_area("text-area")
-                    .placeholder("empty text")
+                text_area("notes-input")
+                    .state(self.notes.downgrade())
+                    .placeholder("Notes — multi-line, wraps, scrolls")
                     .border_1()
+                    .border_color(rgb(0x3a3a40))
                     .rounded_lg()
-                    .border_color(gpui::white()) // has a border
-                    .p_2() // padding between the text and border
+                    .p_2()
                     .w_full()
                     .min_h_24()
-                    .max_h_128()
-                    .whitespace_normal() // default
+                    .max_h_32()
                     .overflow_y_scroll(),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap_2()
+                    // Appending goes through the same input handler the platform uses, so it
+                    // lands at the caret and is undoable.
+                    .child(
+                        div()
+                            .id("append")
+                            .px_3()
+                            .py_1()
+                            .rounded_lg()
+                            .background(rgb(0x2f2f36))
+                            .hover(|style| style.background(rgb(0x3d3d46)))
+                            .child("Append to name")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.name.update(cx, |state, cx| {
+                                    state.replace_text_in_range(None, "-postfix", window, cx);
+                                });
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id("clear")
+                            .px_3()
+                            .py_1()
+                            .rounded_lg()
+                            .background(rgb(0x2f2f36))
+                            .hover(|style| style.background(rgb(0x3d3d46)))
+                            .child("Clear notes")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.notes.update(cx, |state, cx| state.emplace("", cx));
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id("focus")
+                            .px_3()
+                            .py_1()
+                            .rounded_lg()
+                            .background(rgb(0x2f2f36))
+                            .hover(|style| style.background(rgb(0x3d3d46)))
+                            .child("Focus notes")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.notes.read(cx).focus_handle(cx).focus(window, cx);
+                            })),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .text_sm()
+                    .text_color(rgb(0x9a9a9a))
+                    .child(format!("name = {name_value:?}"))
+                    .child(format!("notes = {notes_len} chars")),
+            )
+            // A read-only field: the element lays it out, but edits are refused while
+            // selection and copy still work.
+            .child(
+                text_input("readonly-input")
+                    .placeholder("Read-only")
+                    .accepts_input(false)
+                    .border_1()
+                    .border_color(rgb(0x3a3a40))
+                    .rounded_lg()
+                    .p_2()
+                    .w_full()
+                    .whitespace_nowrap(),
             )
     }
 }
 
 fn main() {
     gpui_platform::application().run(|cx: &mut App| {
+        // Installs the keystroke bindings the fields listen for (navigation, delete,
+        // cut/copy/paste, undo/redo) under the `EditableText` key context.
         cx.bind_keys(default_bindings().as_keybindings(Some(DEFAULT_INPUT_CONTEXT)));
 
-        let bounds = Bounds::centered(None, size(px(500.), px(500.0)), cx);
+        let bounds = Bounds::centered(None, size(px(520.), px(560.)), cx);
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 ..Default::default()
             },
-            |_, cx| cx.new(|_| Example),
+            |_, cx| cx.new(Example::new),
         )
         .unwrap();
         cx.activate(true);
