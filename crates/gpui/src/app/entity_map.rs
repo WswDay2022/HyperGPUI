@@ -1161,7 +1161,7 @@ impl fmt::Debug for BacktraceFormatter {
                     | "scheduler::executor::spawn_local_with_source_location::impl$1::poll<core::pin::Pin<alloc::boxed::Box<dyn$<core::future::future::Future<assoc$<Output,enum2$<core::result::Result<workspace::OpenResult,anyhow::Error> > > > >,alloc::alloc::Global> > >" => {
                         strip = true
                     }
-                    "gpui::app::entity_map::LeakDetector::handle_created" => {
+                    "hgpui::app::entity_map::LeakDetector::handle_created" => {
                         strip = false;
                         continue;
                     }

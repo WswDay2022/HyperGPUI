@@ -4,7 +4,7 @@ use cosmic_text::{
     Attrs, AttrsList, Ellipsize, Family, Font as CosmicTextFont,
     FontFeatures as CosmicFontFeatures, FontSystem, ShapeBuffer, ShapeLine,
 };
-use gpui::{
+use hgpui::{
     Bounds, DevicePixels, Font, FontFallbacks, FontFeatures, FontId, FontMetrics, FontRun, GlyphId,
     LineLayout, Pixels, PlatformTextSystem, RenderGlyphParams, SUBPIXEL_VARIANTS_X,
     SUBPIXEL_VARIANTS_Y, ShapedGlyph, ShapedRun, SharedString, Size, TextRenderingMode, point,
@@ -272,7 +272,7 @@ impl CosmicTextSystemState {
             _ => Arc::from(Vec::new()),
         };
 
-        let name = gpui::font_name_with_fallbacks(name, &self.system_font_fallback);
+        let name = hgpui::font_name_with_fallbacks(name, &self.system_font_fallback);
 
         let families = self
             .font_system
@@ -816,7 +816,7 @@ fn find_best_match(
     let target_weight = font.weight.0;
     let target_italic = matches!(
         font.style,
-        gpui::FontStyle::Italic | gpui::FontStyle::Oblique
+        hgpui::FontStyle::Italic | hgpui::FontStyle::Oblique
     );
 
     let mut best_index = 0;
@@ -975,12 +975,12 @@ fn cosmic_font_features(features: &FontFeatures) -> Result<CosmicFontFeatures> {
 }
 
 #[cfg(feature = "font-kit")]
-fn font_into_properties(font: &gpui::Font) -> font_kit::properties::Properties {
+fn font_into_properties(font: &hgpui::Font) -> font_kit::properties::Properties {
     font_kit::properties::Properties {
         style: match font.style {
-            gpui::FontStyle::Normal => font_kit::properties::Style::Normal,
-            gpui::FontStyle::Italic => font_kit::properties::Style::Italic,
-            gpui::FontStyle::Oblique => font_kit::properties::Style::Oblique,
+            hgpui::FontStyle::Normal => font_kit::properties::Style::Normal,
+            hgpui::FontStyle::Italic => font_kit::properties::Style::Italic,
+            hgpui::FontStyle::Oblique => font_kit::properties::Style::Oblique,
         },
         weight: font_kit::properties::Weight(font.weight.0),
         stretch: Default::default(),
@@ -1056,13 +1056,13 @@ mod tests {
     }
 
     fn layout_text(text_system: &CosmicTextSystem, text: &str) -> Result<LineLayout> {
-        let font_id = text_system.font_id(&gpui::font("IBM Plex Sans"))?;
+        let font_id = text_system.font_id(&hgpui::font("IBM Plex Sans"))?;
         let runs = [FontRun {
             len: text.len(),
             font_id,
             letter_spacing: None,
         }];
-        Ok(text_system.layout_line(text, gpui::px(14.0), &runs))
+        Ok(text_system.layout_line(text, hgpui::px(14.0), &runs))
     }
 
     /// Mirrors the original crash: mixed-direction text reaching the shaper
@@ -1070,17 +1070,17 @@ mod tests {
     #[test]
     fn shape_text_with_mixed_direction_paragraphs() -> Result<()> {
         let platform_text_system = Arc::new(text_system()?);
-        let text_system = Arc::new(gpui::TextSystem::new(platform_text_system));
-        let window_text_system = gpui::WindowTextSystem::new(text_system);
+        let text_system = Arc::new(hgpui::TextSystem::new(platform_text_system));
+        let window_text_system = hgpui::WindowTextSystem::new(text_system);
 
         let text: SharedString = "first line\n\u{05d0}\u{001c}A".into();
-        let runs = [gpui::TextRun {
+        let runs = [hgpui::TextRun {
             len: text.len(),
-            font: gpui::font("IBM Plex Sans"),
+            font: hgpui::font("IBM Plex Sans"),
             ..Default::default()
         }];
 
-        let lines = window_text_system.shape_text(text, gpui::px(14.0), &runs, None, None)?;
+        let lines = window_text_system.shape_text(text, hgpui::px(14.0), &runs, None, None)?;
 
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[1].len(), "\u{05d0}\u{001c}A".len());
@@ -1162,7 +1162,7 @@ mod tests {
     #[test]
     fn layout_line_with_font_run_straddling_a_separator() -> Result<()> {
         let text_system = text_system()?;
-        let font_id = text_system.font_id(&gpui::font("IBM Plex Sans"))?;
+        let font_id = text_system.font_id(&hgpui::font("IBM Plex Sans"))?;
         let text = "ab\u{001c}\u{05d0}\u{05d1}";
 
         // The run boundary falls inside the trailing RTL paragraph.
@@ -1178,7 +1178,7 @@ mod tests {
                 letter_spacing: None,
             },
         ];
-        let layout = text_system.layout_line(text, gpui::px(14.0), &runs);
+        let layout = text_system.layout_line(text, hgpui::px(14.0), &runs);
 
         assert_eq!(layout.len, text.len());
         assert!(layout.width > Pixels::ZERO);

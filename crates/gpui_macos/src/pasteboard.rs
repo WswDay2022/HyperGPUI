@@ -15,7 +15,7 @@ use smallvec::SmallVec;
 use strum::IntoEnumIterator as _;
 
 use crate::ns_string;
-use gpui::{
+use hgpui::{
     ClipboardEntry, ClipboardItem, ClipboardString, ExternalPaths, Image, ImageFormat, hash,
 };
 
@@ -338,7 +338,7 @@ mod tests {
     };
     use std::ffi::c_void;
 
-    use gpui::{ClipboardEntry, ClipboardItem, ClipboardString, ImageFormat};
+    use hgpui::{ClipboardEntry, ClipboardItem, ClipboardString, ImageFormat};
     use objc::rc::autoreleasepool;
 
     use super::*;

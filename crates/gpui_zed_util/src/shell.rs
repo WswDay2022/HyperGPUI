@@ -122,7 +122,7 @@ pub fn get_windows_bash() -> Option<String> {
 
 pub fn get_windows_system_shell() -> String {
     #[cfg(windows)]
-    return gpui::get_windows_system_shell();
+    return hgpui::get_windows_system_shell();
 
     #[cfg(not(windows))]
     return "cmd.exe".to_string();

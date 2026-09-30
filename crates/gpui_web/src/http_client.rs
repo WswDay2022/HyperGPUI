@@ -1,5 +1,5 @@
 use anyhow::anyhow;
-use gpui::http_client::{HttpClient, HttpResponse};
+use hgpui::http_client::{HttpClient, HttpResponse};
 use std::future::Future;
 use std::pin::Pin;
 use std::task::Poll;

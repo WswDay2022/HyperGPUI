@@ -1,6 +1,6 @@
 use std::{path::Path, sync::Arc, time::Duration};
 
-use gpui::{
+use hgpui::{
     Animation, AnimationExt, App, Asset, AssetLogger, AssetSource, Bounds, Context, Hsla,
     ImageAssetLoader, ImageCacheError, ImgResourceLoader, LOADING_DELAY, Length, RenderImage,
     Resource, SharedString, Window, WindowBounds, WindowOptions, black, div, img, prelude::*,
@@ -108,7 +108,7 @@ impl Render for ImageLoadingExample {
             div().flex().flex_row().w_full().justify_around().child(
                 div()
                     .flex()
-                    .background(gpui::white())
+                    .background(hgpui::white())
                     .size(Length::Definite(px(300.0).into()))
                     .justify_center()
                     .items_center()
@@ -197,7 +197,7 @@ impl Render for ImageLoadingExample {
 
 fn main() {
     env_logger::init();
-    gpui_platform::application()
+    hgpui_platform::application()
         .with_assets(Assets {})
         .run(|cx: &mut App| {
             let options = WindowOptions {

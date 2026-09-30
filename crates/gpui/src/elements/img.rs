@@ -829,7 +829,7 @@ mod tests {
         )
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn zero_frame_image_does_not_panic_on_paint(cx: &mut TestAppContext) {
         cx.add_empty_window()
             .draw(point(px(0.), px(0.)), size(px(100.), px(100.)), |_, _| {
@@ -837,7 +837,7 @@ mod tests {
             });
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn image_object_fit_cover_crops_to_element_bounds(cx: &mut TestAppContext) {
         let window = cx.add_empty_window();
         let image = test_image_with_size(200, 100);
@@ -892,7 +892,7 @@ mod tests {
         );
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn image_object_fit_cover_clamps_corner_radii_to_visible_bounds(cx: &mut TestAppContext) {
         let window = cx.add_empty_window();
         window.draw(point(px(0.), px(0.)), size(px(100.), px(100.)), |_, _| {
@@ -917,7 +917,7 @@ mod tests {
         assert_eq!(corner_radius, Some(expected_corner_radius));
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn stale_frame_index_is_clamped_when_image_changes(cx: &mut TestAppContext) {
         let window = cx.add_empty_window();
 

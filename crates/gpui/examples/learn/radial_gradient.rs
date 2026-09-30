@@ -26,14 +26,14 @@
 //! Run it on either backend:
 //!
 //! ```sh
-//! cargo run -p gpui-ce --example radial-gradient
-//! cargo run -p gpui-ce --example radial-gradient --features wgpu
+//! cargo run -p hgpui --example radial-gradient
+//! cargo run -p hgpui --example radial-gradient --features wgpu
 //! ```
 
 #[path = "../shared/prelude.rs"]
 mod example_prelude;
 
-use gpui::{
+use hgpui::{
     App, AppContext, Background, Bounds, Context, IntoElement, ParentElement, RadialShape,
     RadialSize, Render, Styled, Window, WindowBounds, WindowOptions, div, linear_color_stop,
     linear_gradient, point, px, radial_gradient, rgb, rgba, size,
@@ -302,7 +302,7 @@ fn hard_stop_card() -> impl IntoElement {
 }
 
 fn main() {
-    gpui_platform::application().run(|cx: &mut App| {
+    hgpui_platform::application().run(|cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(760.0), px(880.0)), cx);
 
         let _ = cx.open_window(

@@ -1,10 +1,10 @@
 [package]
-name = "gpui_ce_media"
+name = "hgpui_media"
 version = "0.2.2"
 edition = "2024"
 license = "Apache-2.0"
 publish = true
-description = "macOS CoreMedia/CoreVideo bindings for gpui-ce (vendored from Zed)."
+description = "macOS CoreMedia/CoreVideo bindings for hgpui (vendored from Zed)."
 
 [lib]
 name = "media"

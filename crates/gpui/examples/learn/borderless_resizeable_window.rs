@@ -15,7 +15,7 @@
 #[path = "../shared/prelude.rs"]
 mod example_prelude;
 
-use gpui::{
+use hgpui::{
     App, Bounds, Context, CursorStyle, MouseButton, ResizeEdge, SharedString, TitlebarOptions,
     Window, WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowDecorations,
     WindowOptions, div, hsla, prelude::*, px, rgb, size, transparent_black,
@@ -54,7 +54,7 @@ impl Render for BorderlessResizableWindow {
                             .border_1()
                             .border_color(rgb(0x3b82f6))
                             .shadow(vec![
-                                gpui::BoxShadow::new(px(0.0), px(0.0), hsla(0.0, 0.0, 0.0, 0.5))
+                                hgpui::BoxShadow::new(px(0.0), px(0.0), hsla(0.0, 0.0, 0.0, 0.5))
                                     .blur_radius(px(SHADOW_SIZE)),
                             ])
                             .flex()
@@ -166,7 +166,7 @@ fn resize_handle((edge, cursor): (ResizeEdge, CursorStyle)) -> impl IntoElement 
 }
 
 fn main() {
-    gpui_platform::application().run(|cx: &mut App| {
+    hgpui_platform::application().run(|cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(480.0), px(360.0)), cx);
 
         let _ = cx.open_window(

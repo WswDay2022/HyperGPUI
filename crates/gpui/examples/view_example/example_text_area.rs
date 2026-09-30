@@ -2,7 +2,7 @@
 //! and `Enter` inserts a newline instead of being ignored. Constructible from a
 //! string or an editor, exactly like [`Input`](crate::example_input::Input).
 
-use gpui::{
+use hgpui::{
     App, BoxShadow, CursorStyle, Entity, EntityId, Hsla, IntoElement, StyleRefinement, Window, div,
     hsla, point, prelude::*, px, white,
 };
@@ -45,7 +45,7 @@ impl TextArea {
     }
 }
 
-impl gpui::View for TextArea {
+impl hgpui::View for TextArea {
     fn entity_id(&self) -> Option<EntityId> {
         Some(match &self.source {
             Source::Value(value) => value.entity_id(),

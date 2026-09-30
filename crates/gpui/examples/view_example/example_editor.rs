@@ -10,7 +10,7 @@
 use std::ops::Range;
 use std::time::Duration;
 
-use gpui::{
+use hgpui::{
     App, Bounds, Context, ElementInputHandler, Entity, EntityInputHandler, FocusHandle, Focusable,
     InteractiveElement, LayoutId, PaintQuad, Pixels, ShapedLine, SharedString, Subscription, Task,
     TextRun, UTF16Selection, Window, fill, hsla, point, prelude::*, px, relative, size,
@@ -320,7 +320,7 @@ impl EntityInputHandler for Editor {
 
     fn character_index_for_point(
         &mut self,
-        _point: gpui::Point<Pixels>,
+        _point: hgpui::Point<Pixels>,
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<usize> {
@@ -328,7 +328,7 @@ impl EntityInputHandler for Editor {
     }
 }
 
-impl gpui::Render for Editor {
+impl hgpui::Render for Editor {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Editor>) -> impl IntoElement {
         EditorText {
             editor: cx.entity(),
@@ -361,7 +361,7 @@ impl Element for EditorText {
     type RequestLayoutState = ();
     type PrepaintState = EditorTextPrepaint;
 
-    fn id(&self) -> Option<gpui::ElementId> {
+    fn id(&self) -> Option<hgpui::ElementId> {
         None
     }
 
@@ -371,8 +371,8 @@ impl Element for EditorText {
 
     fn request_layout(
         &mut self,
-        _id: Option<&gpui::GlobalElementId>,
-        _inspector_id: Option<&gpui::InspectorElementId>,
+        _id: Option<&hgpui::GlobalElementId>,
+        _inspector_id: Option<&hgpui::InspectorElementId>,
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
@@ -380,7 +380,7 @@ impl Element for EditorText {
         let content = editor.value.read(cx);
         let line_count = content.split('\n').count().max(1);
         let line_height = window.line_height();
-        let mut style = gpui::Style::default();
+        let mut style = hgpui::Style::default();
         style.size.width = relative(1.).into();
         style.size.height = (line_height * line_count as f32).into();
         (window.request_layout(style, [], cx), ())
@@ -388,8 +388,8 @@ impl Element for EditorText {
 
     fn prepaint(
         &mut self,
-        _id: Option<&gpui::GlobalElementId>,
-        _inspector_id: Option<&gpui::InspectorElementId>,
+        _id: Option<&hgpui::GlobalElementId>,
+        _inspector_id: Option<&hgpui::InspectorElementId>,
         bounds: Bounds<Pixels>,
         _request_layout: &mut Self::RequestLayoutState,
         window: &mut Window,
@@ -474,8 +474,8 @@ impl Element for EditorText {
 
     fn paint(
         &mut self,
-        _id: Option<&gpui::GlobalElementId>,
-        _inspector_id: Option<&gpui::InspectorElementId>,
+        _id: Option<&hgpui::GlobalElementId>,
+        _inspector_id: Option<&hgpui::InspectorElementId>,
         bounds: Bounds<Pixels>,
         _request_layout: &mut Self::RequestLayoutState,
         prepaint: &mut Self::PrepaintState,
@@ -492,7 +492,7 @@ impl Element for EditorText {
         let line_height = window.line_height();
         for (i, line) in prepaint.lines.iter().enumerate() {
             let origin = point(bounds.left(), bounds.top() + line_height * i as f32);
-            line.paint(origin, line_height, gpui::TextAlign::Left, None, window, cx)
+            line.paint(origin, line_height, hgpui::TextAlign::Left, None, window, cx)
                 .unwrap();
         }
 

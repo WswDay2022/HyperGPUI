@@ -3,14 +3,14 @@ use crate::events::{ClickState, EventListenerHandle, WebEventListeners, is_mac_p
 use std::sync::Arc;
 use std::{cell::Cell, cell::RefCell, rc::Rc};
 
-use gpui::{
+use hgpui::{
     AnyWindowHandle, Bounds, Capslock, Decorations, DevicePixels, DispatchEventResult, GpuSpecs,
     Modifiers, MouseButton, Pixels, PlatformAtlas, PlatformDisplay, PlatformInput,
     PlatformInputHandler, PlatformWindow, Point, PromptButton, PromptLevel, RequestFrameOptions,
     ResizeEdge, Scene, Size, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
     WindowControlArea, WindowControls, WindowDecorations, WindowParams, px,
 };
-use gpui_wgpu::{WgpuContext, WgpuRenderer, WgpuSurfaceConfig};
+use hgpui_wgpu::{WgpuContext, WgpuRenderer, WgpuSurfaceConfig};
 use wasm_bindgen::prelude::*;
 
 #[derive(Default)]

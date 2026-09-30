@@ -1,4 +1,4 @@
-use gpui::{
+use hgpui::{
     App, Bounds, Context, CursorStyle, Decorations, HitboxBehavior, Hsla, MouseButton, Pixels,
     Point, ResizeEdge, Size, Window, WindowBackgroundAppearance, WindowBounds, WindowDecorations,
     WindowOptions, black, canvas, div, green, point, prelude::*, px, rgb, size, transparent_black,
@@ -28,7 +28,7 @@ impl Render for WindowShadow {
             .map(|div| match decorations {
                 Decorations::Server => div,
                 Decorations::Client { tiling, .. } => div
-                    .background(gpui::transparent_black())
+                    .background(hgpui::transparent_black())
                     .child(
                         canvas(
                             |_bounds, window, _cx| {
@@ -105,7 +105,7 @@ impl Render for WindowShadow {
                             .when(!tiling.right, |div| div.border_r(border_size))
                             .when(!tiling.is_tiled(), |div| {
                                 div.shadow(vec![
-                                    gpui::BoxShadow::new(
+                                    hgpui::BoxShadow::new(
                                         px(0.),
                                         px(0.),
                                         Hsla::new(0., 0., 0., 0.4),
@@ -117,7 +117,7 @@ impl Render for WindowShadow {
                     .on_mouse_move(|_e, _, cx| {
                         cx.stop_propagation();
                     })
-                    .background(gpui::rgb(0xCCCCFF))
+                    .background(hgpui::rgb(0xCCCCFF))
                     .size_full()
                     .flex()
                     .flex_col()
@@ -142,7 +142,7 @@ impl Render for WindowShadow {
                                         .h(px(100.0))
                                         .background(green())
                                         .shadow(vec![
-                                            gpui::BoxShadow::new(
+                                            hgpui::BoxShadow::new(
                                                 px(0.),
                                                 px(0.),
                                                 Hsla::new(0., 0., 0., 1.),
@@ -197,7 +197,7 @@ fn resize_edge(pos: Point<Pixels>, shadow_size: Pixels, size: Size<Pixels>) -> O
 }
 
 fn main() {
-    gpui_platform::application().run(|cx: &mut App| {
+    hgpui_platform::application().run(|cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(600.0), px(600.0)), cx);
         cx.open_window(
             WindowOptions {

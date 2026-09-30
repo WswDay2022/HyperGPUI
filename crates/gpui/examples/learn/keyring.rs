@@ -7,14 +7,14 @@
 //! 3. `cx.delete_credentials` - remove them
 //!
 //! On Linux/FreeBSD, every stored item is tagged with a keyring *label*. It
-//! defaults to `"gpui-ce"`, but consumers can override it with
+//! defaults to `"hgpui"`, but consumers can override it with
 //! `cx.set_keyring_label(..)` so the items show up under their own app's name.
 
 #[path = "../shared/prelude.rs"]
 mod example_prelude;
 
-use gpui::colors::Colors;
-use gpui::{
+use hgpui::colors::Colors;
+use hgpui::{
     App, Bounds, Context, Render, Window, WindowBounds, WindowOptions, div, prelude::*, px, size,
 };
 
@@ -96,7 +96,7 @@ impl Render for KeyringExample {
                 .child(
                     div()
                         .text_xl()
-                        .font_weight(gpui::FontWeight::BOLD)
+                        .font_weight(hgpui::FontWeight::BOLD)
                         .text_color(colors.text)
                         .child("Keyring Credentials"),
                 )
@@ -140,9 +140,9 @@ impl Render for KeyringExample {
 
 fn button(
     colors: &Colors,
-    id: impl Into<gpui::ElementId>,
+    id: impl Into<hgpui::ElementId>,
     label: &'static str,
-) -> gpui::Stateful<gpui::Div> {
+) -> hgpui::Stateful<hgpui::Div> {
     let bg_hover = colors.border;
     div()
         .id(id)
@@ -158,8 +158,8 @@ fn button(
 }
 
 fn main() {
-    gpui_platform::application().run(|cx: &mut App| {
-        cx.set_keyring_label("gpui-ce-keyring-example");
+    hgpui_platform::application().run(|cx: &mut App| {
+        cx.set_keyring_label("hgpui-keyring-example");
 
         let bounds = Bounds::centered(None, size(px(500.), px(360.)), cx);
         cx.open_window(

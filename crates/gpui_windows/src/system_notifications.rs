@@ -7,7 +7,7 @@ use std::rc::Rc;
 
 use futures::StreamExt as _;
 use futures::channel::mpsc;
-use gpui::{
+use hgpui::{
     ForegroundExecutor, SharedString, SystemNotification, SystemNotificationResponse, Task,
 };
 use windows::Data::Xml::Dom::XmlDocument;

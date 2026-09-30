@@ -4,7 +4,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use gpui::ResultExt;
+use hgpui::ResultExt;
 use windows::{
     Win32::{
         Foundation::HWND,
@@ -21,7 +21,7 @@ use windows::{
 
 use crate::directx_renderer::shader_resources::{RawShaderBytes, ShaderModule, ShaderTarget};
 use crate::*;
-use gpui::*;
+use hgpui::*;
 
 /// The largest blur radius in a scene-space filter chain, in device pixels — used to size the
 /// blur kernel and the dilated region the blur passes are scissored to.
@@ -1204,7 +1204,7 @@ impl DirectXRenderer {
             let render_params: IDWriteRenderingParams1 =
                 factory.CreateRenderingParams().unwrap().cast().unwrap();
             FontInfo {
-                gamma_ratios: gpui::get_gamma_correction_ratios(render_params.GetGamma()),
+                gamma_ratios: hgpui::get_gamma_correction_ratios(render_params.GetGamma()),
                 grayscale_enhanced_contrast: render_params.GetGrayscaleEnhancedContrast(),
                 subpixel_enhanced_contrast: render_params.GetEnhancedContrast(),
                 is_bgr: render_params.GetPixelGeometry() == DWRITE_PIXEL_GEOMETRY_BGR,
@@ -2622,14 +2622,14 @@ mod dxgi {
 #[cfg(test)]
 mod tests {
     // NOTE: do NOT use `use super::*;` here — the top-level module glob-imports
-    // `gpui::*`, and gpui re-exports a macro named `test` (gpui.rs: `pub use
-    // gpui_macros::{..., test, ...}`). That glob chain shadows the built-in
+    // `hgpui::*`, and hgpui re-exports a macro named `test` (gpui.rs: `pub use
+    // hgpui_macros::{..., test, ...}`). That glob chain shadows the built-in
     // `#[test]` attribute and blows up `#[test]` expansion with an infinite
     // recursion. Import only what this module needs, explicitly.
     use super::{create_blend_state, update_buffer, GlobalParams, PipelineState, RENDER_TARGET_FORMAT};
     use crate::directx_renderer::shader_resources::ShaderModule;
     use anyhow::Result;
-    use gpui::{
+    use hgpui::{
         bounds, hsla, linear_color_stop, linear_gradient, point, radial_gradient, rgba, size,
         Background, ContentMask, Corners, Quad, RadialShape, RadialSize, ScaledPixels,
     };

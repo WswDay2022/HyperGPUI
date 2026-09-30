@@ -36,7 +36,7 @@ identical paths here. The script uses a **vendor-branch 3-way merge** (a general
    -ce line).
 3. The merge is committed as **two commits** for reviewability:
    - **Commit 1 — raw merge:** git's auto-merges applied, conflict markers committed in
-     as-is (deterministic add/delete conflicts settled by policy: gpui-ce's deletions
+     as-is (deterministic add/delete conflicts settled by policy: hgpui's deletions
      kept). This captures exactly what git could *not* resolve.
    - **Commit 2 — resolution:** `claude -p` (`resolve-conflicts.prompt.md`, looped up to
      `--retries`) edits out the markers. Because it's a separate commit, its diff shows
@@ -60,7 +60,7 @@ Synced with **path remapping** — vendored + renamed by the fork (PR #91 remove
 `gpui_derive_refineable`←`refineable/derive_refineable`, `gpui_scheduler`←`scheduler`,
 `gpui_media`←`media`, `gpui_zed_util`←`util`, `gpui_path`←`path`.
 The merge preserves each
-crate's gpui-ce adaptations (package rename, path deps, `ztracing`→`tracing`, `zlog` removal) via
+crate's hgpui adaptations (package rename, path deps, `ztracing`→`tracing`, `zlog` removal) via
 conflict resolution while taking upstream's real changes — so upstream API additions land through the
 merge instead of being hand-ported during the build-fix pass.
 
@@ -74,7 +74,7 @@ Upstream relocates code between crates (e.g. #61029 split `util/src/rel_path.rs`
 delete/modify policy would resurrect a stale duplicate of code that now lives elsewhere.
 
 Because **both sides of a vendor-history diff are already remapped to fork paths**, git's rename
-detection reports such a move directly in gpui-ce terms — `detect_moves()` runs
+detection reports such a move directly in hgpui terms — `detect_moves()` runs
 `git diff -M<similarity> --diff-filter=R <prev vendor tip> <new tip>` and keeps the cross-directory
 hits (`crates/gpui_zed_util/src/rel_path.rs` → `crates/gpui_path/src/rel_path.rs`, detected at 61%
 similarity for #61029). Those moves then:

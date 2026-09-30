@@ -11,7 +11,7 @@
 //!   * `Input` / `TextArea` — the shaping layer. Each takes a `String` (and grows
 //!                 the editor internally) OR an `Editor` (so you can read the cursor).
 //!
-//! Run: `cargo run -p gpui --example view_example`
+//! Run: `cargo run -p hgpui --example view_example`
 
 mod example_editor;
 mod example_input;
@@ -24,11 +24,11 @@ use example_editor::Editor;
 use example_input::Input;
 use example_text_area::TextArea;
 
-use gpui::{
+use hgpui::{
     App, Bounds, Context, Div, Entity, IntoElement, KeyBinding, Render, SharedString, Window,
     WindowBounds, WindowOptions, actions, div, hsla, prelude::*, px, rgb, size,
 };
-use gpui_platform::application;
+use hgpui_platform::application;
 
 actions!(
     view_example,
@@ -48,7 +48,7 @@ impl CursorReadout {
     }
 }
 
-impl gpui::RenderOnce for CursorReadout {
+impl hgpui::RenderOnce for CursorReadout {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         let cursor = self.editor.read(cx).cursor;
         div()
@@ -168,6 +168,6 @@ fn main() {
 #[cfg(target_family = "wasm")]
 #[wasm_bindgen::prelude::wasm_bindgen(start)]
 pub fn start() {
-    gpui_platform::web_init();
+    hgpui_platform::web_init();
     run_example();
 }

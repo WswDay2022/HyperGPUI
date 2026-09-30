@@ -18,7 +18,7 @@
 //!    on each sibling) versus `blur` on the parent (one group covering all blocks, so the blur is
 //!    continuous and the seams are clean — the CSS "blur the wrapper" idiom).
 
-use gpui::{
+use hgpui::{
     App, Bounds, Context, Render, Window, WindowBounds, WindowOptions, deferred, div, point,
     prelude::*, px, rgb, rgba, size,
 };
@@ -187,7 +187,7 @@ const SEAM_COLORS: [u32; 4] = [0xef4444, 0x22c55e, 0x3b82f6, 0xeab308];
 
 /// One numbered, brightly-coloured block of the seam row. With `blur_each` it becomes its own
 /// content-filter group; otherwise it is a plain block (relying on a blurred parent, if any).
-/// Square corners on purpose: gpui content masks are axis-aligned rectangles, so a *rounded*
+/// Square corners on purpose: hgpui content masks are axis-aligned rectangles, so a *rounded*
 /// parent would not clip the blurred children to its radius and the busy background would leak
 /// through the corner triangles — a separate concern from the seam blending under test here.
 fn seam_block(i: usize, hex: u32, blur_each: bool) -> impl IntoElement {
@@ -290,7 +290,7 @@ impl Render for BlurExample {
 }
 
 fn main() {
-    gpui_platform::application().run(|cx: &mut App| {
+    hgpui_platform::application().run(|cx: &mut App| {
         cx.activate(true);
         cx.on_window_closed(|cx, _| {
             if cx.windows().is_empty() {

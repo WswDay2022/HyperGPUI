@@ -1,4 +1,4 @@
-//! Implementation for editable-text elements (gpui equivalent of html
+//! Implementation for editable-text elements (hgpui equivalent of html
 //! [`<input>`](https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Elements/input) and
 //! [`<textarea>`](https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Elements/textarea)).
 //!
@@ -17,8 +17,8 @@
 //! Standard library strings are not ideal though for large text documents. For such uses,
 //! it is encouraged that implementers consider rolling their own [`UnicodeTextStorage`] medium.
 //!
-//! Unlike other elements, editable text internally owns its [`FocusHandle`](gpui::FocusHandle).
-//! This is required due to limitations of the [`Interactivity`](gpui::Interactivity) api and
+//! Unlike other elements, editable text internally owns its [`FocusHandle`](hgpui::FocusHandle).
+//! This is required due to limitations of the [`Interactivity`](hgpui::Interactivity) api and
 //! that a user cannot interact with a text-input field if it cannot be focused.
 //!
 //! ### Usage Samples
@@ -26,9 +26,9 @@
 //! A single-line text input with a fixed width and text that does not wrap
 //! (overflow text is clipped and does not scroll).
 //! ```
-//! # use gpui::prelude::*;
-//! # fn test() -> gpui_ce_elements::editable_text::EditableTextElement {
-//! use gpui_ce_elements::editable_text::text_input;
+//! # use hgpui::prelude::*;
+//! # fn test() -> hgpui_elements::editable_text::EditableTextElement {
+//! use hgpui_elements::editable_text::text_input;
 //! text_input("my_input")
 //!     .placeholder("empty text")
 //!     .w_5()
@@ -39,12 +39,12 @@
 //!
 //! A single-line text input with a flexible width and text that does not wrap, but will scroll if overflowing.
 //! ```
-//! # use gpui::{prelude::*, Hsla};
-//! # fn test() -> gpui_ce_elements::editable_text::EditableTextElement {
-//! use gpui_ce_elements::editable_text::text_input;
+//! # use hgpui::{prelude::*, Hsla};
+//! # fn test() -> hgpui_elements::editable_text::EditableTextElement {
+//! use hgpui_elements::editable_text::text_input;
 //! text_input("my_input")
 //!     .placeholder("empty text")
-//!     .border_1().rounded_lg().border_color(gpui::white()) // has a border
+//!     .border_1().rounded_lg().border_color(hgpui::white()) // has a border
 //!     .p_2() // padding between the text and border
 //!     .min_w_10().max_w_128()
 //!     .min_h_auto()
@@ -55,12 +55,12 @@
 //!
 //! A multi-line text area with flexible height, wrapping text, and scrolling overflow on both axes.
 //! ```
-//! # use gpui::{prelude::*, Hsla};
-//! # fn test() -> gpui_ce_elements::editable_text::EditableTextElement {
-//! use gpui_ce_elements::editable_text::text_area;
+//! # use hgpui::{prelude::*, Hsla};
+//! # fn test() -> hgpui_elements::editable_text::EditableTextElement {
+//! use hgpui_elements::editable_text::text_area;
 //! text_area("message")
 //!     .placeholder("empty text")
-//!     .border_1().rounded_lg().border_color(gpui::white()) // has a border
+//!     .border_1().rounded_lg().border_color(hgpui::white()) // has a border
 //!     .p_2() // padding between the text and border
 //!     .min_w_10().max_w_128()
 //!     .min_h_24().max_h_128()
@@ -74,9 +74,9 @@
 //! users write a [debounce](https://developer.mozilla.org/en-US/docs/Glossary/Debounce)
 //! or some way to detect "focus lost" to signify the user leaving the field.
 //! ```
-//! # use gpui::{prelude::*, App, Entity, Window, AppContext, ElementId};
-//! # fn test(window: &mut Window, cx: &mut App) -> gpui_ce_elements::editable_text::EditableTextElement {
-//! use gpui_ce_elements::editable_text::{text_input, EditableTextState, TextChanged};
+//! # use hgpui::{prelude::*, App, Entity, Window, AppContext, ElementId};
+//! # fn test(window: &mut Window, cx: &mut App) -> hgpui_elements::editable_text::EditableTextElement {
+//! use hgpui_elements::editable_text::{text_input, EditableTextState, TextChanged};
 //!
 //! // A unique id to the editable text element within the outer scope.
 //! let id = ElementId::from("my_input");
@@ -97,9 +97,9 @@
 //!
 //! You can configure the default value of the editable text by using [`use_keyed_init`]:
 //! ```
-//! # use gpui::{prelude::*, App, Entity, Window, AppContext, ElementId};
-//! # use gpui_ce_elements::editable_text::{text_input, EditableTextState, StringStorage};
-//! # fn test(window: &mut Window, cx: &mut App) -> gpui_ce_elements::editable_text::EditableTextElement {
+//! # use hgpui::{prelude::*, App, Entity, Window, AppContext, ElementId};
+//! # use hgpui_elements::editable_text::{text_input, EditableTextState, StringStorage};
+//! # fn test(window: &mut Window, cx: &mut App) -> hgpui_elements::editable_text::EditableTextElement {
 //! let id = ElementId::from("my_input");
 //!
 //! // The function parameter will only be called when the state is created/initialized.
@@ -117,9 +117,9 @@
 //!
 //! To use a blinking caret, you can use one of the templated functions:
 //! ```
-//! # use gpui::{prelude::*, App, Entity, Window, AppContext, ElementId};
-//! # fn test(window: &mut Window, cx: &mut App) -> gpui_ce_elements::editable_text::EditableTextElement {
-//! use gpui_ce_elements::editable_text::{text_input};
+//! # use hgpui::{prelude::*, App, Entity, Window, AppContext, ElementId};
+//! # fn test(window: &mut Window, cx: &mut App) -> hgpui_elements::editable_text::EditableTextElement {
+//! use hgpui_elements::editable_text::{text_input};
 //! let id = ElementId::from("my_input");
 //! text_input(id)
 //!     .caret_blink_interval_500ms()
@@ -130,9 +130,9 @@
 //!
 //! or construct a caret entity with a blinking interval when constructing the state:
 //! ```
-//! # use gpui::{prelude::*, App, Entity, Window, AppContext, ElementId};
-//! # fn test(window: &mut Window, cx: &mut App) -> gpui_ce_elements::editable_text::EditableTextElement {
-//! use gpui_ce_elements::editable_text::{text_input, EditableTextState, TextChanged, Caret};
+//! # use hgpui::{prelude::*, App, Entity, Window, AppContext, ElementId};
+//! # fn test(window: &mut Window, cx: &mut App) -> hgpui_elements::editable_text::EditableTextElement {
+//! use hgpui_elements::editable_text::{text_input, EditableTextState, TextChanged, Caret};
 //! let id = ElementId::from("my_input");
 //!
 //! let state = EditableTextState::use_keyed(id.clone(), window, cx);

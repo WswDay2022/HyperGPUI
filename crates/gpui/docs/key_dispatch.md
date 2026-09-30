@@ -10,10 +10,10 @@ Actions are similar to framework-level events like `MouseDown`, `KeyDown`, etc, 
 
 ```rust
 mod menu {
-    #[gpui::action]
+    #[hgpui::action]
     struct MoveUp;
 
-    #[gpui::action]
+    #[hgpui::action]
     struct MoveDown;
 }
 ```
@@ -22,7 +22,7 @@ Actions are frequently unit structs, for which we have a macro. The above could 
 
 ```rust
 mod menu {
-    actions!(gpui, [MoveUp, MoveDown]);
+    actions!(hgpui, [MoveUp, MoveDown]);
 }
 ```
 
@@ -30,7 +30,7 @@ Actions can also be more complex types:
 
 ```rust
 mod menu {
-    #[gpui::action]
+    #[hgpui::action]
     struct Move {
         direction: Direction,
         select: bool,

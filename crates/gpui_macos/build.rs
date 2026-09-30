@@ -88,7 +88,7 @@ mod macos_build {
 
         let crate_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
 
-        // Source files from gpui that define types used in shaders
+        // Source files from hgpui that define types used in shaders
         let gpui_src_paths = [
             gpui_dir.join("src/scene.rs"),
             gpui_dir.join("src/geometry.rs"),
@@ -114,9 +114,9 @@ mod macos_build {
         output_path
     }
 
-    /// Locate the gpui crate directory relative to this crate.
+    /// Locate the hgpui crate directory relative to this crate.
     fn find_gpui_crate_dir() -> PathBuf {
-        gpui::GPUI_MANIFEST_DIR.into()
+        hgpui::GPUI_MANIFEST_DIR.into()
     }
 
     /// To enable runtime compilation, we need to "stitch" the shaders file with the generated header

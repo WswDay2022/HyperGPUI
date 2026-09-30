@@ -1,4 +1,4 @@
-use gpui::{Bounds, Pixels, Point, Size, WrappedLine};
+use hgpui::{Bounds, Pixels, Point, Size, WrappedLine};
 use std::{ops::Range, sync::Arc};
 
 /// Data used across successive layout requests to gauge whether layout must be recomputed.

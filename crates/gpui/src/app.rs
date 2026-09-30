@@ -234,9 +234,9 @@ impl Application {
     ///
     /// # Example
     /// ```no_run
-    /// # use gpui::Application;
+    /// # use hgpui::Application;
     /// # fn configure(app: Application) -> Application {
-    /// app.with_activation_policy(gpui::MacActivationPolicy::Accessory)
+    /// app.with_activation_policy(hgpui::MacActivationPolicy::Accessory)
     /// # }
     /// ```
     #[cfg(target_os = "macos")]
@@ -1270,7 +1270,7 @@ impl App {
 
     /// Register additional GPU device requirements (extra features and/or
     /// limits) before opening any windows.  The `Box` must contain a
-    /// `gpui_wgpu::WgpuDeviceRequirements`.
+    /// `hgpui_wgpu::WgpuDeviceRequirements`.
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     pub fn set_gpu_requirements(&self, requirements: Box<dyn std::any::Any>) {
         self.platform.set_gpu_requirements(requirements);
@@ -2784,7 +2784,7 @@ impl App {
         self.inspector_element_registry.register(f);
     }
 
-    /// Initializes gpui's default colors for the application.
+    /// Initializes hgpui's default colors for the application.
     ///
     /// These colors can be accessed through `cx.default_colors()`.
     pub fn init_colors(&mut self) {

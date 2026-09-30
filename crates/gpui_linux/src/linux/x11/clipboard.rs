@@ -47,7 +47,7 @@ use x11rb::{
     wrapper::ConnectionExt as _,
 };
 
-use gpui::{ClipboardItem, Image, ImageFormat, hash};
+use hgpui::{ClipboardItem, Image, ImageFormat, hash};
 use strum::IntoEnumIterator;
 
 type Result<T, E = Error> = std::result::Result<T, E>;
@@ -844,7 +844,7 @@ fn serve_requests(context: Arc<Inner>) -> Result<(), Box<dyn std::error::Error>>
 
     log::trace!("Started serve requests thread.");
 
-    let _guard = gpui::defer(|| {
+    let _guard = hgpui::defer(|| {
         context.serve_stopped.store(true, Ordering::Relaxed);
     });
 

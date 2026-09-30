@@ -11,8 +11,8 @@
 mod example_prelude;
 
 use example_prelude::init_example;
-use gpui::colors::Colors;
-use gpui::{
+use hgpui::colors::Colors;
+use hgpui::{
     App, Bounds, Context, Entity, IntoElement, Render, RenderOnce, Window, WindowBounds,
     WindowOptions, div, prelude::*, px, rgb, size,
 };
@@ -374,7 +374,7 @@ impl Render for CreatingComponentsExample {
                     .child(
                         div()
                             .text_2xl()
-                            .font_weight(gpui::FontWeight::BOLD)
+                            .font_weight(hgpui::FontWeight::BOLD)
                             .text_color(colors.text)
                             .child("Creating Components"),
                     )
@@ -419,7 +419,7 @@ impl Render for CreatingComponentsExample {
 }
 
 fn main() {
-    gpui_platform::application().run(|cx: &mut App| {
+    hgpui_platform::application().run(|cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(700.), px(400.)), cx);
         cx.open_window(
             WindowOptions {

@@ -55,7 +55,7 @@ use core_graphics::display::CGDirectDisplayID;
 use dispatch2::{
     _dispatch_source_type_data_add, DispatchObject, DispatchQueue, DispatchRetained, DispatchSource,
 };
-use gpui::ResultExt;
+use hgpui::ResultExt;
 use std::{
     collections::{BTreeMap, btree_map},
     ffi::c_void,

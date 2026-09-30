@@ -1,4 +1,4 @@
-use gpui::NavigationDirection;
+use hgpui::NavigationDirection;
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
 

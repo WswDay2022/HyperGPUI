@@ -13,7 +13,7 @@
 mod example_prelude;
 
 use example_prelude::init_example;
-use gpui::{
+use hgpui::{
     App, Bounds, ColorExt, Context, DragMoveEvent, FontWeight, HapticFeedbackStyle, Hsla,
     InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ParentElement, Pixels, Render,
     StatefulInteractiveElement, Styled, Window, WindowBounds, WindowOptions, colors::Colors, div,
@@ -31,7 +31,7 @@ struct SliderDrag;
 
 impl Render for SliderDrag {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        gpui::Empty
+        hgpui::Empty
     }
 }
 
@@ -319,7 +319,7 @@ impl Render for HapticFeedbackExample {
 }
 
 fn main() {
-    gpui_platform::application().run(|cx: &mut App| {
+    hgpui_platform::application().run(|cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(520.), px(520.)), cx);
         cx.open_window(
             WindowOptions {

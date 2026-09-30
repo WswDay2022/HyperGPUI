@@ -1,5 +1,5 @@
 use anyhow::Result;
-use gpui::{Bounds, DisplayId, Pixels, PlatformDisplay, Point, Size, px};
+use hgpui::{Bounds, DisplayId, Pixels, PlatformDisplay, Point, Size, px};
 
 #[derive(Debug)]
 pub struct WebDisplay {

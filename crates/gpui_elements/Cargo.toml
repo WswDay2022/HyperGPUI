@@ -1,5 +1,5 @@
 [package]
-name = "gpui_ce_elements"
+name = "hgpui_elements"
 version = "0.1.0"
 description.workspace = true
 edition.workspace = true
@@ -10,17 +10,17 @@ license = "Apache-2.0"
 workspace = true
 
 [package.metadata.cargo-machete]
-ignored = ["gpui"]
+ignored = ["hgpui"]
 
 [dependencies]
-gpui.workspace = true
+hgpui.workspace = true
 unicode-segmentation.workspace = true
 palette.workspace = true
 smallvec.workspace = true
 
 [dev-dependencies]
-gpui = { path = "../gpui", package = "gpui-ce", features = ["test-support"] }
-gpui_platform = { workspace = true, features = ["font-kit", "wayland", "x11"] }
+hgpui = { path = "../gpui", package = "hgpui", features = ["test-support"] }
+hgpui_platform = { workspace = true, features = ["font-kit", "wayland", "x11"] }
 
 [[example]]
 name = "editable_text"

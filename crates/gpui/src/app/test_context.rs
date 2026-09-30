@@ -15,7 +15,7 @@ use std::{
     cell::RefCell, future::Future, ops::Deref, path::PathBuf, rc::Rc, sync::Arc, time::Duration,
 };
 
-/// A TestAppContext is provided to tests created with `#[gpui::test]`, it provides
+/// A TestAppContext is provided to tests created with `#[hgpui::test]`, it provides
 /// an implementation of `Context` with additional methods that are useful in tests.
 #[derive(Clone)]
 pub struct TestAppContext {
@@ -123,7 +123,7 @@ impl AppContext for TestAppContext {
 }
 
 impl TestAppContext {
-    /// Creates a new `TestAppContext`. Usually you can rely on `#[gpui::test]` to do this for you.
+    /// Creates a new `TestAppContext`. Usually you can rely on `#[hgpui::test]` to do this for you.
     pub fn build(dispatcher: TestDispatcher, fn_name: Option<&'static str>) -> Self {
         let arc_dispatcher = Arc::new(dispatcher.clone());
         let background_executor = BackgroundExecutor::new(arc_dispatcher.clone());
@@ -1150,7 +1150,7 @@ mod tests {
     use std::path::PathBuf;
     use std::rc::Rc;
 
-    #[gpui::test]
+    #[hgpui::test]
     async fn test_system_notifications_require_identity_and_replace_matching_tags(
         cx: &mut TestAppContext,
     ) {
@@ -1207,7 +1207,7 @@ mod tests {
         assert_eq!(cx.dismissed_system_notifications(), ["thread-1"]);
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     async fn test_system_notification_body_and_action_responses(cx: &mut TestAppContext) {
         let responses = Rc::new(RefCell::new(Vec::new()));
         cx.update(|cx| {
@@ -1241,7 +1241,7 @@ mod tests {
         );
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     async fn test_system_notification_response_handler_can_be_replaced(cx: &mut TestAppContext) {
         let first_responses = Rc::new(RefCell::new(Vec::new()));
         let second_responses = Rc::new(RefCell::new(Vec::new()));
@@ -1266,7 +1266,7 @@ mod tests {
         assert_eq!(second_responses.borrow().as_slice(), &[response]);
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     async fn test_system_notification_response_handler_can_reenter_app(cx: &mut TestAppContext) {
         cx.update(|cx| {
             cx.set_app_identity("com.example.tasks", "Tasks");
@@ -1290,7 +1290,7 @@ mod tests {
         assert_eq!(cx.dismissed_system_notifications(), ["thread-1"]);
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     async fn test_simulate_path_prompt_response(cx: &mut TestAppContext) {
         assert!(!cx.did_prompt_for_paths());
 
@@ -1318,7 +1318,7 @@ mod tests {
         assert_eq!(response, Some(selected));
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     async fn test_simulate_path_prompt_cancellation(cx: &mut TestAppContext) {
         let receiver = cx.update(|cx| {
             cx.prompt_for_paths(PathPromptOptions {

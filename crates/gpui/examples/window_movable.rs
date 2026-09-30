@@ -1,11 +1,11 @@
 #![cfg_attr(target_family = "wasm", no_main)]
 
-use gpui::{
+use hgpui::{
     App, Bounds, Context, FocusHandle, Window, WindowBounds, WindowOptions, div, prelude::*, px,
     rgb, size,
 };
-use gpui::{SharedString, TitlebarOptions};
-use gpui_platform::application;
+use hgpui::{SharedString, TitlebarOptions};
+use hgpui_platform::application;
 
 struct ExampleWindow {
     label: SharedString,
@@ -38,7 +38,7 @@ impl Render for ExampleWindow {
 
 fn open_test_window(
     cx: &mut App,
-    bounds: Bounds<gpui::Pixels>,
+    bounds: Bounds<hgpui::Pixels>,
     label: &str,
     is_movable: bool,
     appears_transparent: bool,
@@ -120,6 +120,6 @@ fn main() {
 #[cfg(target_family = "wasm")]
 #[wasm_bindgen::prelude::wasm_bindgen(start)]
 pub fn start() {
-    gpui_platform::web_init();
+    hgpui_platform::web_init();
     run_example();
 }

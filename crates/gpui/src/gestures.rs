@@ -1,7 +1,7 @@
 //! Touch gesture recognition vocabulary.
 //!
 //! GPUI recognizes gestures from raw [`TouchEvent`](crate::TouchEvent)s in a
-//! single, portable arena in gpui core: recognizers compete for in-flight
+//! single, portable arena in hgpui core: recognizers compete for in-flight
 //! touches, winners claim them, and losers are cancelled. Recognized gestures
 //! are surfaced through *existing* semantic events wherever possible, a tap
 //! becomes [`ClickEvent::Touch`](crate::ClickEvent), a pan becomes
@@ -125,7 +125,7 @@ impl Default for GestureTuning {
 /// The set of gesture kinds that participate in recognition.
 ///
 /// Used by [`PlatformGestures::native_recognizers`] to declare which gestures
-/// the platform recognizes natively rather than leaving to gpui core's
+/// the platform recognizes natively rather than leaving to hgpui core's
 /// portable recognizers.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct GestureKinds {
@@ -141,7 +141,7 @@ pub struct GestureKinds {
 }
 
 impl GestureKinds {
-    /// No gestures; gpui core's portable recognizers handle everything.
+    /// No gestures; hgpui core's portable recognizers handle everything.
     pub const NONE: Self = Self {
         tap: false,
         long_press: false,

@@ -973,6 +973,6 @@ fn test_spawn_dedicated_detached_child_runs_after_root_completes() {
     );
 }
 
-// The production smoke test for `spawn_dedicated` lives in the `gpui` crate
+// The production smoke test for `spawn_dedicated` lives in the `hgpui` crate
 // alongside `PlatformScheduler`, which is the real production implementation
 // of the `Scheduler` trait. See `crates/gpui/src/platform_scheduler.rs`.

@@ -7,7 +7,7 @@ use std::rc::Rc;
 
 use futures::StreamExt as _;
 use futures::channel::mpsc;
-use gpui::{
+use hgpui::{
     ForegroundExecutor, SharedString, SystemNotification, SystemNotificationResponse, Task,
 };
 
@@ -46,7 +46,7 @@ impl SystemNotificationState {
             .action(DEFAULT_ACTION, DEFAULT_ACTION);
         let mut action_ids = HashMap::new();
         for (index, action) in notification.actions.iter().enumerate() {
-            let transport_id = format!("gpui-action-{index}");
+            let transport_id = format!("hgpui-action-{index}");
             builder.action(&transport_id, &action.label);
             action_ids.insert(transport_id, action.id.clone());
         }
@@ -136,17 +136,17 @@ mod tests {
     #[test]
     fn caller_action_ids_do_not_collide_with_transport_action_ids() {
         let action_ids = HashMap::from([
-            ("gpui-action-0".to_string(), SharedString::from("default")),
-            ("gpui-action-1".to_string(), SharedString::from("__closed")),
+            ("hgpui-action-0".to_string(), SharedString::from("default")),
+            ("hgpui-action-1".to_string(), SharedString::from("__closed")),
         ]);
 
         assert_eq!(response_action_id(DEFAULT_ACTION, &action_ids), Some(None));
         assert_eq!(
-            response_action_id("gpui-action-0", &action_ids),
+            response_action_id("hgpui-action-0", &action_ids),
             Some(Some("default".into()))
         );
         assert_eq!(
-            response_action_id("gpui-action-1", &action_ids),
+            response_action_id("hgpui-action-1", &action_ids),
             Some(Some("__closed".into()))
         );
         assert_eq!(response_action_id("unknown", &action_ids), None);

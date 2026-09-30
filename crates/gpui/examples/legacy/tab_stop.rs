@@ -1,4 +1,4 @@
-use gpui::{
+use hgpui::{
     App, Bounds, Context, Div, ElementId, FocusHandle, KeyBinding, SharedString, Stateful, Window,
     WindowBounds, WindowOptions, actions, div, prelude::*, px, size,
 };
@@ -46,7 +46,7 @@ impl Example {
 impl Render for Example {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         fn tab_stop_style<T: Styled>(this: T) -> T {
-            this.border_3().border_color(gpui::blue())
+            this.border_3().border_color(hgpui::blue())
         }
 
         fn button(id: impl Into<ElementId>) -> Stateful<Div> {
@@ -58,9 +58,9 @@ impl Render for Example {
                 .justify_center()
                 .items_center()
                 .border_1()
-                .border_color(gpui::black())
-                .background(gpui::black())
-                .text_color(gpui::white())
+                .border_color(hgpui::black())
+                .background(hgpui::black())
+                .text_color(hgpui::white())
                 .focus(tab_stop_style)
                 .shadow_sm()
         }
@@ -75,8 +75,8 @@ impl Render for Example {
             .flex_col()
             .p_4()
             .gap_3()
-            .background(gpui::white())
-            .text_color(gpui::black())
+            .background(hgpui::white())
+            .text_color(hgpui::black())
             .child(self.message.clone())
             .children(
                 self.items
@@ -93,14 +93,14 @@ impl Render for Example {
                             .justify_center()
                             .items_center()
                             .border_1()
-                            .border_color(gpui::black())
+                            .border_color(hgpui::black())
                             .when(
                                 item_handle.tab_stop && item_handle.is_focused(window),
                                 tab_stop_style,
                             )
                             .map(|this| match item_handle.tab_stop {
                                 true => this
-                                    .hover(|this| this.background(gpui::black().with_alpha(0.1)))
+                                    .hover(|this| this.background(hgpui::black().with_alpha(0.1)))
                                     .child(format!("tab_index: {}", item_handle.tab_index)),
                                 false => this.opacity(0.4).child("tab_stop: false"),
                             })
@@ -135,7 +135,7 @@ impl Render for Example {
 }
 
 fn main() {
-    gpui_platform::application().run(|cx: &mut App| {
+    hgpui_platform::application().run(|cx: &mut App| {
         cx.bind_keys([
             KeyBinding::new("tab", Tab, None),
             KeyBinding::new("shift-tab", TabPrev, None),

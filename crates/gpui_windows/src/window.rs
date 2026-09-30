@@ -12,7 +12,7 @@ use std::{
 
 use anyhow::{Context as _, Result};
 use futures::channel::oneshot::{self, Receiver};
-use gpui::ResultExt;
+use hgpui::ResultExt;
 use raw_window_handle as rwh;
 use smallvec::SmallVec;
 use windows::{
@@ -30,10 +30,10 @@ use windows::{
 
 use crate::direct_manipulation::DirectManipulationHandler;
 use crate::*;
-use gpui::*;
+use hgpui::*;
 
 #[cfg(feature = "wgpu")]
-use gpui_wgpu::{WgpuRenderer, WgpuSurfaceConfig, wgpu};
+use hgpui_wgpu::{WgpuRenderer, WgpuSurfaceConfig, wgpu};
 
 pub(crate) struct WindowsWindow(pub Rc<WindowsWindowInner>);
 
@@ -448,7 +448,7 @@ impl WindowsWindow {
         creation_info: WindowCreationInfo,
     ) -> Result<Self> {
         // Native popups are not implemented on Windows yet. Rejecting lets callers fall back to
-        // gpui's in-window popovers.
+        // hgpui's in-window popovers.
         if let WindowKind::AnchoredPopup(_) = params.kind {
             return Err(popup::PopupNotSupportedError.into());
         }
@@ -710,7 +710,7 @@ impl PlatformWindow for WindowsWindow {
 
     fn resize(&mut self, size: Size<Pixels>) {
         let hwnd = self.0.hwnd;
-        let bounds = gpui::bounds(self.bounds().origin, size).to_device_pixels(self.scale_factor());
+        let bounds = hgpui::bounds(self.bounds().origin, size).to_device_pixels(self.scale_factor());
         let rect = calculate_window_rect(bounds, &self.state.border_offset);
 
         self.0
@@ -1208,7 +1208,7 @@ impl PlatformWindow for WindowsWindow {
         let _ = unsafe { MessageBeep(MB_OK) };
     }
 
-    fn a11y_init(&self, callbacks: gpui::A11yCallbacks) {
+    fn a11y_init(&self, callbacks: hgpui::A11yCallbacks) {
         let action_handler = A11yActionHandler(callbacks.action);
         let is_focused = unsafe { GetForegroundWindow() } == self.0.hwnd;
 
@@ -1825,7 +1825,7 @@ fn resize_edge_to_size_command(edge: ResizeEdge) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::{resize_edge_to_size_command, ClickState};
-    use gpui::{DevicePixels, MouseButton, ResizeEdge, point};
+    use hgpui::{DevicePixels, MouseButton, ResizeEdge, point};
     use std::time::Duration;
 
     #[test]

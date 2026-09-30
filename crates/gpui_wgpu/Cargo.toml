@@ -1,5 +1,5 @@
 [package]
-name = "gpui_ce_wgpu"
+name = "hgpui_wgpu"
 version = "0.1.0"
 description.workspace = true
 edition.workspace = true
@@ -17,7 +17,7 @@ default = []
 font-kit = ["dep:font-kit"]
 
 [dependencies]
-gpui.workspace = true
+hgpui.workspace = true
 anyhow.workspace = true
 bytemuck = "1"
 collections.workspace = true

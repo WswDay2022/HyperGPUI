@@ -7,12 +7,12 @@
 //! (see `validate_incoming_text` and the masked/number/validation TODOs around it) can be
 //! filled in without silently changing editing behaviour.
 //!
-//! Imports are explicit on purpose: a glob here would also pull in `gpui`'s `test` macro
+//! Imports are explicit on purpose: a glob here would also pull in `hgpui`'s `test` macro
 //! and shadow the `#[test]` attribute.
 
 use std::ops::Range;
 
-use gpui::{
+use hgpui::{
     AppContext as _, Bounds, Context, Entity, EntityInputHandler, Focusable as _,
     NavigationDirection, ParentElement as _, Render, Styled as _, TestAppContext, Window,
     WindowHandle, div, point, px, size,
@@ -34,7 +34,7 @@ struct TestView {
 }
 
 impl Render for TestView {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl gpui::IntoElement {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl hgpui::IntoElement {
         div().size_full().child(
             text_input("test-input")
                 .state(self.input.downgrade())
@@ -97,7 +97,7 @@ fn content(cx: &mut TestAppContext, input: &Entity<EditableTextState>) -> String
 // State machine (no window needed)
 // ---------------------------------------------------------------------------
 
-#[gpui::test]
+#[hgpui::test]
 fn new_state_starts_empty(cx: &mut TestAppContext) {
     let input = cx.new(|cx| EditableTextState::new(StringStorage::default(), cx));
     assert_eq!(content(cx, &input), "");
@@ -108,7 +108,7 @@ fn new_state_starts_empty(cx: &mut TestAppContext) {
     });
 }
 
-#[gpui::test]
+#[hgpui::test]
 fn emplace_replaces_the_content_and_bumps_the_version(cx: &mut TestAppContext) {
     let input = cx.new(|cx| EditableTextState::new(StringStorage::default(), cx));
     let version_before = cx.update(|cx| input.read(cx).version());
@@ -131,7 +131,7 @@ fn emplace_replaces_the_content_and_bumps_the_version(cx: &mut TestAppContext) {
     });
 }
 
-#[gpui::test]
+#[hgpui::test]
 fn move_to_sets_the_caret_and_clamps_past_the_end(cx: &mut TestAppContext) {
     let input = cx.new(|cx| EditableTextState::new(StringStorage::from("abc"), cx));
 
@@ -143,7 +143,7 @@ fn move_to_sets_the_caret_and_clamps_past_the_end(cx: &mut TestAppContext) {
     cx.update(|cx| assert_eq!(input.read(cx).caret_pos(), 3));
 }
 
-#[gpui::test]
+#[hgpui::test]
 fn select_to_extends_the_selection_and_reports_its_direction(cx: &mut TestAppContext) {
     let input = cx.new(|cx| EditableTextState::new(StringStorage::from("abcdef"), cx));
 
@@ -177,7 +177,7 @@ fn select_to_extends_the_selection_and_reports_its_direction(cx: &mut TestAppCon
     });
 }
 
-#[gpui::test]
+#[hgpui::test]
 fn select_document_selects_everything(cx: &mut TestAppContext) {
     let input = cx.new(|cx| EditableTextState::new(StringStorage::from("hello"), cx));
     cx.update(|cx| input.update(cx, |state, cx| state.select_document(cx)));
@@ -189,7 +189,7 @@ fn select_document_selects_everything(cx: &mut TestAppContext) {
 // on a state that was never rendered is a silent no-op, so these tests open a window and
 // draw the element first — same as typing does.
 
-#[gpui::test]
+#[hgpui::test]
 fn delete_linear_backwards_deletes_one_grapheme(cx: &mut TestAppContext) {
     let (window, input) = setup(cx, false);
     type_text(cx, &window, "a👨‍👩‍👧b");
@@ -204,7 +204,7 @@ fn delete_linear_backwards_deletes_one_grapheme(cx: &mut TestAppContext) {
     assert_eq!(content(cx, &input), "ab");
 }
 
-#[gpui::test]
+#[hgpui::test]
 fn delete_linear_by_word_removes_the_whole_word(cx: &mut TestAppContext) {
     let (window, input) = setup(cx, false);
     type_text(cx, &window, "hello world");
@@ -217,7 +217,7 @@ fn delete_linear_by_word_removes_the_whole_word(cx: &mut TestAppContext) {
     assert_eq!(content(cx, &input), "hello ");
 }
 
-#[gpui::test]
+#[hgpui::test]
 fn nav_linear_moves_by_grapheme_and_by_word(cx: &mut TestAppContext) {
     let (window, _input) = setup(cx, false);
     type_text(cx, &window, "one two");
@@ -241,7 +241,7 @@ fn nav_linear_moves_by_grapheme_and_by_word(cx: &mut TestAppContext) {
 // Typing through the platform input handler
 // ---------------------------------------------------------------------------
 
-#[gpui::test]
+#[hgpui::test]
 fn typing_inserts_text_at_the_caret(cx: &mut TestAppContext) {
     let (window, input) = setup(cx, false);
 
@@ -253,7 +253,7 @@ fn typing_inserts_text_at_the_caret(cx: &mut TestAppContext) {
     assert_eq!(content(cx, &input), "hello there");
 }
 
-#[gpui::test]
+#[hgpui::test]
 fn typing_replaces_the_selection(cx: &mut TestAppContext) {
     let (window, input) = setup(cx, false);
     type_text(cx, &window, "hello world");
@@ -268,7 +268,7 @@ fn typing_replaces_the_selection(cx: &mut TestAppContext) {
     assert_eq!(content(cx, &input), "hello there");
 }
 
-#[gpui::test]
+#[hgpui::test]
 fn backspace_and_delete_remove_the_expected_character(cx: &mut TestAppContext) {
     let (window, input) = setup(cx, false);
     type_text(cx, &window, "abcd");
@@ -282,7 +282,7 @@ fn backspace_and_delete_remove_the_expected_character(cx: &mut TestAppContext) {
     assert_eq!(content(cx, &input), "abc");
 }
 
-#[gpui::test]
+#[hgpui::test]
 fn single_line_input_strips_newlines_from_inserted_text(cx: &mut TestAppContext) {
     let (window, input) = setup(cx, false);
 
@@ -296,7 +296,7 @@ fn single_line_input_strips_newlines_from_inserted_text(cx: &mut TestAppContext)
     );
 }
 
-#[gpui::test]
+#[hgpui::test]
 fn multiline_input_keeps_newlines(cx: &mut TestAppContext) {
     let (window, input) = setup(cx, true);
 
@@ -309,7 +309,7 @@ fn multiline_input_keeps_newlines(cx: &mut TestAppContext) {
 // The IME contract: offsets are UTF-16, marked text is tracked
 // ---------------------------------------------------------------------------
 
-#[gpui::test]
+#[hgpui::test]
 fn text_length_and_selection_are_reported_in_utf16(cx: &mut TestAppContext) {
     let (window, _input) = setup(cx, false);
     type_text(cx, &window, "a世界🎉");
@@ -339,7 +339,7 @@ fn text_length_and_selection_are_reported_in_utf16(cx: &mut TestAppContext) {
     );
 }
 
-#[gpui::test]
+#[hgpui::test]
 fn ime_composition_marks_text_and_unmark_clears_it(cx: &mut TestAppContext) {
     let (window, input) = setup(cx, false);
 
@@ -369,7 +369,7 @@ fn ime_composition_marks_text_and_unmark_clears_it(cx: &mut TestAppContext) {
 // Events and history
 // ---------------------------------------------------------------------------
 
-#[gpui::test]
+#[hgpui::test]
 fn text_changed_event_fires_on_edit(cx: &mut TestAppContext) {
     use crate::editable_text::TextChanged;
     use std::cell::Cell;
@@ -382,7 +382,7 @@ fn text_changed_event_fires_on_edit(cx: &mut TestAppContext) {
     }
 
     impl Render for CounterView {
-        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl gpui::IntoElement {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl hgpui::IntoElement {
             div().size_full().child(text_input("counter").state(self.input.downgrade()))
         }
     }
@@ -413,7 +413,7 @@ fn text_changed_event_fires_on_edit(cx: &mut TestAppContext) {
     );
 }
 
-#[gpui::test]
+#[hgpui::test]
 fn undo_and_redo_restore_the_content(cx: &mut TestAppContext) {
     use crate::editable_text::actions::{Redo, Undo};
 
@@ -454,7 +454,7 @@ fn undo_and_redo_restore_the_content(cx: &mut TestAppContext) {
 // Layout-dependent surface
 // ---------------------------------------------------------------------------
 
-#[gpui::test]
+#[hgpui::test]
 fn text_for_range_answers_from_the_content(cx: &mut TestAppContext) {
     let (window, _input) = setup(cx, false);
     type_text(cx, &window, "hello world");
@@ -471,7 +471,7 @@ fn text_for_range_answers_from_the_content(cx: &mut TestAppContext) {
     );
 }
 
-#[gpui::test]
+#[hgpui::test]
 fn bounds_for_range_reports_a_laid_out_rectangle(cx: &mut TestAppContext) {
     let (window, _input) = setup(cx, false);
     type_text(cx, &window, "hello");

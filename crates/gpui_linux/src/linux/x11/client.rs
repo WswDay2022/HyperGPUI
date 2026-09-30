@@ -6,8 +6,8 @@ use calloop::{
 };
 use collections::HashMap;
 use core::str;
-use gpui::ResultExt as _;
-use gpui::{Capslock, profiler};
+use hgpui::ResultExt as _;
+use hgpui::{Capslock, profiler};
 use log::Level;
 use smallvec::SmallVec;
 use std::{
@@ -58,13 +58,13 @@ use crate::linux::{
 };
 use crate::linux::{LinuxCommon, LinuxKeyboardLayout, X11Window, modifiers_from_xinput_info};
 
-use gpui::{
+use hgpui::{
     AnyWindowHandle, Bounds, ClipboardItem, CursorStyle, DisplayId, FileDropEvent, Keystroke,
     Modifiers, ModifiersChangedEvent, MouseButton, Pixels, PlatformDisplay, PlatformInput,
     PlatformKeyboardLayout, PlatformWindow, Point, RequestFrameOptions, ScrollDelta, Size,
     TouchPhase, WindowButtonLayout, WindowParams, point, px,
 };
-use gpui_wgpu::{CompositorGpuHint, GpuContext};
+use hgpui_wgpu::{CompositorGpuHint, GpuContext};
 
 /// Value for DeviceId parameters which selects all devices.
 pub(crate) const XINPUT_ALL_DEVICES: xinput::DeviceId = 0;
@@ -179,7 +179,7 @@ pub struct X11ClientState {
 
     pub(crate) gpu_context: GpuContext,
     pub(crate) compositor_gpu: Option<CompositorGpuHint>,
-    pub(crate) gpu_requirements: Option<gpui_wgpu::WgpuDeviceRequirements>,
+    pub(crate) gpu_requirements: Option<hgpui_wgpu::WgpuDeviceRequirements>,
 
     pub(crate) scale_factor: f32,
 
@@ -935,7 +935,7 @@ impl X11Client {
                         .collect();
                     let input = PlatformInput::FileDrop(FileDropEvent::Entered {
                         position: state.xdnd_state.position,
-                        paths: gpui::ExternalPaths(paths),
+                        paths: hgpui::ExternalPaths(paths),
                     });
                     drop(state);
                     window.handle_input(input);
@@ -1109,7 +1109,7 @@ impl X11Client {
                     keystroke
                 };
                 drop(state);
-                window.handle_input(PlatformInput::KeyDown(gpui::KeyDownEvent {
+                window.handle_input(PlatformInput::KeyDown(hgpui::KeyDownEvent {
                     keystroke,
                     is_held: false,
                     prefer_character_input: false,
@@ -1135,7 +1135,7 @@ impl X11Client {
                     keystroke
                 };
                 drop(state);
-                window.handle_input(PlatformInput::KeyUp(gpui::KeyUpEvent { keystroke }));
+                window.handle_input(PlatformInput::KeyUp(hgpui::KeyUpEvent { keystroke }));
             }
             Event::XinputButtonPress(event) => {
                 let window = self.get_window(event.event)?;
@@ -1182,7 +1182,7 @@ impl X11Client {
                         let current_count = state.current_count;
 
                         drop(state);
-                        window.handle_input(PlatformInput::MouseDown(gpui::MouseDownEvent {
+                        window.handle_input(PlatformInput::MouseDown(hgpui::MouseDownEvent {
                             button,
                             position,
                             modifiers,
@@ -1228,7 +1228,7 @@ impl X11Client {
                     Some(ButtonOrScroll::Button(button)) => {
                         let click_count = state.current_count;
                         drop(state);
-                        window.handle_input(PlatformInput::MouseUp(gpui::MouseUpEvent {
+                        window.handle_input(PlatformInput::MouseUp(hgpui::MouseUpEvent {
                             button,
                             position,
                             modifiers,
@@ -1280,7 +1280,7 @@ impl X11Client {
                 drop(state);
 
                 if event.valuator_mask[0] & 3 != 0 {
-                    window.handle_input(PlatformInput::MouseMove(gpui::MouseMoveEvent {
+                    window.handle_input(PlatformInput::MouseMove(hgpui::MouseMoveEvent {
                         position,
                         pressed_button,
                         modifiers,
@@ -1323,7 +1323,7 @@ impl X11Client {
                 drop(state);
 
                 let window = self.get_window(event.event)?;
-                window.handle_input(PlatformInput::MouseExited(gpui::MouseExitEvent {
+                window.handle_input(PlatformInput::MouseExited(hgpui::MouseExitEvent {
                     pressed_button,
                     position,
                     modifiers,
@@ -1363,11 +1363,11 @@ impl X11Client {
                     px(event.event_y as f32 / u16::MAX as f32 / state.scale_factor),
                 );
                 drop(state);
-                window.handle_input(PlatformInput::Pinch(gpui::PinchEvent {
+                window.handle_input(PlatformInput::Pinch(hgpui::PinchEvent {
                     position,
                     delta: 0.0,
                     modifiers,
-                    phase: gpui::TouchPhase::Started,
+                    phase: hgpui::TouchPhase::Started,
                 }));
             }
             Event::XinputGesturePinchUpdate(event) => {
@@ -1385,11 +1385,11 @@ impl X11Client {
                 let zoom_delta = new_absolute_scale - previous_scale;
                 state.pinch_scale = new_absolute_scale;
                 drop(state);
-                window.handle_input(PlatformInput::Pinch(gpui::PinchEvent {
+                window.handle_input(PlatformInput::Pinch(hgpui::PinchEvent {
                     position,
                     delta: zoom_delta,
                     modifiers,
-                    phase: gpui::TouchPhase::Moved,
+                    phase: hgpui::TouchPhase::Moved,
                 }));
             }
             Event::XinputGesturePinchEnd(event) => {
@@ -1403,11 +1403,11 @@ impl X11Client {
                     px(event.event_y as f32 / u16::MAX as f32 / state.scale_factor),
                 );
                 drop(state);
-                window.handle_input(PlatformInput::Pinch(gpui::PinchEvent {
+                window.handle_input(PlatformInput::Pinch(hgpui::PinchEvent {
                     position,
                     delta: 0.0,
                     modifiers,
-                    phase: gpui::TouchPhase::Ended,
+                    phase: hgpui::TouchPhase::Ended,
                 }));
             }
             _ => {}
@@ -1591,13 +1591,13 @@ impl LinuxClient for X11Client {
     #[cfg(feature = "screen-capture")]
     fn screen_capture_sources(
         &self,
-    ) -> futures::channel::oneshot::Receiver<anyhow::Result<Vec<Rc<dyn gpui::ScreenCaptureSource>>>>
+    ) -> futures::channel::oneshot::Receiver<anyhow::Result<Vec<Rc<dyn hgpui::ScreenCaptureSource>>>>
     {
-        gpui::scap_screen_capture::scap_screen_sources(&self.0.borrow().common.foreground_executor)
+        hgpui::scap_screen_capture::scap_screen_sources(&self.0.borrow().common.foreground_executor)
     }
 
     fn set_gpu_requirements(&self, requirements: Box<dyn std::any::Any>) {
-        if let Ok(reqs) = requirements.downcast::<gpui_wgpu::WgpuDeviceRequirements>() {
+        if let Ok(reqs) = requirements.downcast::<hgpui_wgpu::WgpuDeviceRequirements>() {
             self.0.borrow_mut().gpu_requirements = Some(*reqs);
         } else {
             log::warn!("set_gpu_requirements: unexpected type, expected WgpuDeviceRequirements");
@@ -1747,7 +1747,7 @@ impl LinuxClient for X11Client {
         );
     }
 
-    fn write_to_primary(&self, item: gpui::ClipboardItem) {
+    fn write_to_primary(&self, item: hgpui::ClipboardItem) {
         let state = self.0.borrow_mut();
         state
             .clipboard
@@ -1760,7 +1760,7 @@ impl LinuxClient for X11Client {
             .log_with_level(log::Level::Debug);
     }
 
-    fn write_to_clipboard(&self, item: gpui::ClipboardItem) {
+    fn write_to_clipboard(&self, item: hgpui::ClipboardItem) {
         let mut state = self.0.borrow_mut();
         state
             .clipboard
@@ -1774,7 +1774,7 @@ impl LinuxClient for X11Client {
         state.clipboard_item.replace(item);
     }
 
-    fn read_from_primary(&self) -> Option<gpui::ClipboardItem> {
+    fn read_from_primary(&self) -> Option<hgpui::ClipboardItem> {
         let state = self.0.borrow_mut();
         state
             .clipboard
@@ -1783,7 +1783,7 @@ impl LinuxClient for X11Client {
             .log_with_level(log::Level::Debug)
     }
 
-    fn read_from_clipboard(&self) -> Option<gpui::ClipboardItem> {
+    fn read_from_clipboard(&self) -> Option<hgpui::ClipboardItem> {
         let state = self.0.borrow_mut();
         // if the last copy was from this app, return our cached item
         // which has metadata attached.
@@ -2495,7 +2495,7 @@ fn make_scroll_wheel_event(
     position: Point<Pixels>,
     scroll_delta: Point<f32>,
     modifiers: Modifiers,
-) -> gpui::ScrollWheelEvent {
+) -> hgpui::ScrollWheelEvent {
     // When shift is held down, vertical scrolling turns into horizontal scrolling.
     let delta = if modifiers.shift {
         Point {
@@ -2505,7 +2505,7 @@ fn make_scroll_wheel_event(
     } else {
         scroll_delta
     };
-    gpui::ScrollWheelEvent {
+    hgpui::ScrollWheelEvent {
         position,
         delta: ScrollDelta::Lines(delta),
         modifiers,

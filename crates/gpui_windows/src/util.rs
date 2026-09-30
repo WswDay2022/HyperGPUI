@@ -2,7 +2,7 @@ use std::sync::OnceLock;
 
 #[cfg(not(feature = "wgpu"))]
 use anyhow::Context;
-use gpui::ResultExt;
+use hgpui::ResultExt;
 use windows::{
     UI::{
         Color,
@@ -15,7 +15,7 @@ use windows::{
 use windows::{Win32::System::LibraryLoader::LoadLibraryA, core::PCSTR};
 
 use crate::*;
-use gpui::*;
+use hgpui::*;
 
 pub(crate) trait HiLoWord {
     fn hiword(&self) -> u16;

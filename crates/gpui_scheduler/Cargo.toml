@@ -1,10 +1,10 @@
 [package]
-name = "gpui_ce_scheduler"
+name = "hgpui_scheduler"
 version = "0.2.2"
 edition = "2024"
 license = "Apache-2.0"
 publish = true
-description = "Async task scheduler/executor for gpui-ce (vendored from Zed)."
+description = "Async task scheduler/executor for hgpui (vendored from Zed)."
 
 [lib]
 name = "scheduler"

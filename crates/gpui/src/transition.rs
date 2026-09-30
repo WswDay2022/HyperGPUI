@@ -306,7 +306,7 @@ mod tests {
     use crate::AppContext;
 
     use super::*;
-    use gpui::{Point, TestAppContext, px};
+    use hgpui::{Point, TestAppContext, px};
     use palette::rgb::Rgba;
 
     /// Helper to create a Transition directly without using window hooks.
@@ -320,7 +320,7 @@ mod tests {
         Transition::new(state, duration)
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_transition_creation(cx: &mut TestAppContext) {
         cx.update(|cx| {
             let transition = create_transition(cx, Duration::from_millis(300), 0.0_f32);
@@ -331,7 +331,7 @@ mod tests {
         });
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_transition_read_goal(cx: &mut TestAppContext) {
         cx.update(|cx| {
             let transition = create_transition(cx, Duration::from_millis(300), 42.0_f32);
@@ -341,7 +341,7 @@ mod tests {
         });
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_transition_update_returns_true_on_change(cx: &mut TestAppContext) {
         cx.update(|cx| {
             let transition = create_transition(cx, Duration::from_millis(300), 0.0_f32);
@@ -354,7 +354,7 @@ mod tests {
         });
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_transition_update_returns_false_on_no_change(cx: &mut TestAppContext) {
         cx.update(|cx| {
             let transition = create_transition(cx, Duration::from_millis(300), 50.0_f32);
@@ -368,7 +368,7 @@ mod tests {
         });
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_transition_goal_updated_after_update(cx: &mut TestAppContext) {
         cx.update(|cx| {
             let transition = create_transition(cx, Duration::from_millis(300), 0.0_f32);
@@ -382,7 +382,7 @@ mod tests {
         });
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_transition_entity_id(cx: &mut TestAppContext) {
         cx.update(|cx| {
             let transition1 = create_transition(cx, Duration::from_millis(300), 0.0_f32);
@@ -393,7 +393,7 @@ mod tests {
         });
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_transition_reset(cx: &mut TestAppContext) {
         cx.update(|cx| {
             let transition = create_transition(cx, Duration::from_millis(300), 10.0_f32);
@@ -413,7 +413,7 @@ mod tests {
         });
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_transition_cache_cleared_on_reset(cx: &mut TestAppContext) {
         cx.update(|cx| {
             let transition = create_transition(cx, Duration::from_millis(300), 25.0_f32);
@@ -431,7 +431,7 @@ mod tests {
         });
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_transition_with_custom_easing(cx: &mut TestAppContext) {
         cx.update(|cx| {
             // Custom easing that always returns 0.5
@@ -450,7 +450,7 @@ mod tests {
         });
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_transition_with_point(cx: &mut TestAppContext) {
         cx.update(|cx| {
             let initial: Point<f32> = Point { x: 0.0, y: 0.0 };
@@ -471,7 +471,7 @@ mod tests {
         });
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_transition_with_rgba(cx: &mut TestAppContext) {
         cx.update(|cx| {
             let initial = Rgba::new(1., 0., 0., 1.);
@@ -484,7 +484,7 @@ mod tests {
         });
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_transition_continuous_mode_default(cx: &mut TestAppContext) {
         cx.update(|cx| {
             // By default, transitions are continuous
@@ -505,7 +505,7 @@ mod tests {
         });
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_transition_non_continuous_mode(cx: &mut TestAppContext) {
         cx.update(|cx| {
             let transition =
@@ -520,7 +520,7 @@ mod tests {
         });
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_evaluate_delta_initial(cx: &mut TestAppContext) {
         cx.update(|cx| {
             let transition = create_transition(cx, Duration::from_millis(300), 0.0_f32);
@@ -532,7 +532,7 @@ mod tests {
         });
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_evaluate_delta_after_update(cx: &mut TestAppContext) {
         cx.update(|cx| {
             let transition = create_transition(cx, Duration::from_millis(300), 0.0_f32);
@@ -550,7 +550,7 @@ mod tests {
         });
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_transition_clone(cx: &mut TestAppContext) {
         cx.update(|cx| {
             let transition = create_transition(cx, Duration::from_millis(300), 42.0_f32);
@@ -569,7 +569,7 @@ mod tests {
         });
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_transition_cache_consistency(cx: &mut TestAppContext) {
         cx.update(|cx| {
             let transition =
@@ -589,7 +589,7 @@ mod tests {
         });
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_multiple_transitions_independent(cx: &mut TestAppContext) {
         cx.update(|cx| {
             let transition_a = create_transition(cx, Duration::from_millis(300), 0.0_f32);
@@ -606,7 +606,7 @@ mod tests {
         });
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_transition_with_pixels(cx: &mut TestAppContext) {
         cx.update(|cx| {
             let transition = create_transition(cx, Duration::from_millis(300), px(0.0));
@@ -623,7 +623,7 @@ mod tests {
         });
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_transition_rapid_updates(cx: &mut TestAppContext) {
         cx.update(|cx| {
             let transition = create_transition(cx, Duration::from_millis(300), 0.0_f32);
@@ -640,7 +640,7 @@ mod tests {
         });
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_raw_evaluate_in_progress(cx: &mut TestAppContext) {
         cx.update(|cx| {
             let transition = create_transition(cx, Duration::from_millis(300), 0.0_f32);
@@ -658,7 +658,7 @@ mod tests {
         });
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_raw_evaluate_completed(cx: &mut TestAppContext) {
         cx.update(|cx| {
             let transition = create_transition(cx, Duration::from_millis(300), 50.0_f32);
@@ -673,7 +673,7 @@ mod tests {
         });
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_transition_interpolation_with_easing(cx: &mut TestAppContext) {
         cx.update(|cx| {
             // Test with different easing values

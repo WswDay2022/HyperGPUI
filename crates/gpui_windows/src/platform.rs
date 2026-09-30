@@ -11,7 +11,7 @@ use std::{
 
 use anyhow::{Context as _, Result, anyhow};
 use futures::channel::oneshot::{self, Receiver};
-use gpui::{ResultExt, get_windows_system_shell, new_std_command};
+use hgpui::{ResultExt, get_windows_system_shell, new_std_command};
 use itertools::Itertools;
 use parking_lot::RwLock;
 use smallvec::SmallVec;
@@ -30,7 +30,7 @@ use windows::{
 };
 
 use crate::*;
-use gpui::*;
+use hgpui::*;
 
 pub struct WindowsPlatform {
     inner: Rc<WindowsPlatformInner>,
@@ -130,13 +130,13 @@ impl WindowsPlatform {
         } else {
             (
                 None,
-                Arc::new(gpui::NoopTextSystem::new()) as Arc<dyn PlatformTextSystem>,
+                Arc::new(hgpui::NoopTextSystem::new()) as Arc<dyn PlatformTextSystem>,
                 None,
             )
         };
         #[cfg(feature = "wgpu")]
         let text_system =
-            Arc::new(gpui_wgpu::CosmicTextSystem::new("Segoe UI")) as Arc<dyn PlatformTextSystem>;
+            Arc::new(hgpui_wgpu::CosmicTextSystem::new("Segoe UI")) as Arc<dyn PlatformTextSystem>;
 
         let (main_sender, main_receiver) = PriorityQueueReceiver::new();
         let validation_number = if usize::BITS == 64 {
@@ -539,7 +539,7 @@ impl Platform for WindowsPlatform {
     fn screen_capture_sources(
         &self,
     ) -> oneshot::Receiver<Result<Vec<Rc<dyn ScreenCaptureSource>>>> {
-        gpui::scap_screen_capture::scap_screen_sources(&self.foreground_executor)
+        hgpui::scap_screen_capture::scap_screen_sources(&self.foreground_executor)
     }
 
     fn active_window(&self) -> Option<AnyWindowHandle> {
@@ -689,7 +689,7 @@ impl Platform for WindowsPlatform {
         *self.app_identity.borrow_mut() = Some((identifier.to_string(), name.to_string()));
     }
 
-    fn show_system_notification(&self, notification: gpui::SystemNotification) {
+    fn show_system_notification(&self, notification: hgpui::SystemNotification) {
         let app_identity = self.app_identity.borrow().clone();
         self.system_notifications
             .borrow_mut()
@@ -709,7 +709,7 @@ impl Platform for WindowsPlatform {
 
     fn on_system_notification_response(
         &self,
-        callback: Box<dyn FnMut(gpui::SystemNotificationResponse)>,
+        callback: Box<dyn FnMut(hgpui::SystemNotificationResponse)>,
     ) {
         self.system_notifications
             .borrow_mut()
@@ -1039,8 +1039,8 @@ impl WindowsPlatformInner {
             'timeout_loop: loop {
                 if start.elapsed().as_millis() >= MAIN_TASK_TIMEOUT {
                     log::debug!("foreground task timeout reached");
-                    // we spent our budget on gpui tasks, we likely have a lot of work queued so drain system events first to stay responsive
-                    // then quit out of foreground work to allow us to process other gpui events first before returning back to foreground task work
+                    // we spent our budget on hgpui tasks, we likely have a lot of work queued so drain system events first to stay responsive
+                    // then quit out of foreground work to allow us to process other hgpui events first before returning back to foreground task work
                     // if we don't we might not for example process window quit events
                     let mut msg = MSG::default();
                     let process_message = |msg: &_| {
@@ -1060,7 +1060,7 @@ impl WindowsPlatformInner {
                     while peek_msg(&mut msg, PM_QS_INPUT) {
                         process_message(&msg);
                     }
-                    // Allow the main loop to process other gpui events before going back into `run_foreground_task`
+                    // Allow the main loop to process other hgpui events before going back into `run_foreground_task`
                     unsafe {
                         if let Err(_) = PostMessageW(
                             Some(self.dispatcher.platform_window_handle.as_raw()),
@@ -1532,7 +1532,7 @@ unsafe extern "system" fn window_procedure(
 #[cfg(test)]
 mod tests {
     use crate::{open_target, read_from_clipboard, write_to_clipboard};
-    use gpui::ClipboardItem;
+    use hgpui::ClipboardItem;
 
     #[test]
     fn test_clipboard() {

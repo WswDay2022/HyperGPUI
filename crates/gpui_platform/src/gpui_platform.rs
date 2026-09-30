@@ -1,37 +1,37 @@
 //! Convenience crate that re-exports GPUI's platform traits and the
 //! `current_platform` constructor so consumers don't need `#[cfg]` gating.
 
-pub use gpui::Platform;
+pub use hgpui::Platform;
 
 use std::rc::Rc;
 
 /// Returns a background executor for the current platform.
-pub fn background_executor() -> gpui::BackgroundExecutor {
+pub fn background_executor() -> hgpui::BackgroundExecutor {
     current_platform(true).background_executor()
 }
 
-pub fn application() -> gpui::Application {
+pub fn application() -> hgpui::Application {
     #[cfg(target_family = "wasm")]
     {
-        let platform = Rc::new(gpui_web::WebPlatform::new(true));
+        let platform = Rc::new(hgpui_web::WebPlatform::new(true));
         let http_client = std::sync::Arc::new(platform.fetch_http_client());
-        gpui::Application::with_platform(platform).with_http_client(http_client)
+        hgpui::Application::with_platform(platform).with_http_client(http_client)
     }
 
     #[cfg(not(target_family = "wasm"))]
-    gpui::Application::with_platform(current_platform(false))
+    hgpui::Application::with_platform(current_platform(false))
 }
 
-pub fn headless() -> gpui::Application {
-    gpui::Application::with_platform(current_platform(true))
+pub fn headless() -> hgpui::Application {
+    hgpui::Application::with_platform(current_platform(true))
 }
 
 /// Unlike `application`, this function returns a single-threaded web application.
 #[cfg(target_family = "wasm")]
-pub fn single_threaded_web() -> gpui::Application {
-    let platform = Rc::new(gpui_web::WebPlatform::new(false));
+pub fn single_threaded_web() -> hgpui::Application {
+    let platform = Rc::new(hgpui_web::WebPlatform::new(false));
     let http_client = std::sync::Arc::new(platform.fetch_http_client());
-    gpui::Application::with_platform(platform).with_http_client(http_client)
+    hgpui::Application::with_platform(platform).with_http_client(http_client)
 }
 
 /// Initializes panic hooks and logging for the web platform.
@@ -39,43 +39,43 @@ pub fn single_threaded_web() -> gpui::Application {
 #[cfg(target_family = "wasm")]
 pub fn web_init() {
     console_error_panic_hook::set_once();
-    gpui_web::init_logging();
+    hgpui_web::init_logging();
 }
 
 /// Returns the default [`Platform`] for the current OS.
 pub fn current_platform(headless: bool) -> Rc<dyn Platform> {
     #[cfg(target_os = "macos")]
     {
-        Rc::new(gpui_macos::MacPlatform::new(headless))
+        Rc::new(hgpui_macos::MacPlatform::new(headless))
     }
 
     #[cfg(target_os = "windows")]
     {
         Rc::new(
-            gpui_windows::WindowsPlatform::new(headless)
+            hgpui_windows::WindowsPlatform::new(headless)
                 .expect("failed to initialize Windows platform"),
         )
     }
 
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     {
-        gpui_linux::current_platform(headless)
+        hgpui_linux::current_platform(headless)
     }
 
     #[cfg(target_family = "wasm")]
     {
         let _ = headless;
-        Rc::new(gpui_web::WebPlatform::new(true))
+        Rc::new(hgpui_web::WebPlatform::new(true))
     }
 }
 
 /// Returns a new [`HeadlessRenderer`] for the current platform, if available.
 #[cfg(feature = "test-support")]
-pub fn current_headless_renderer() -> Option<Box<dyn gpui::PlatformHeadlessRenderer>> {
+pub fn current_headless_renderer() -> Option<Box<dyn hgpui::PlatformHeadlessRenderer>> {
     #[cfg(target_os = "macos")]
     {
         Some(Box::new(
-            gpui_macos::metal_renderer::MetalHeadlessRenderer::new(),
+            hgpui_macos::metal_renderer::MetalHeadlessRenderer::new(),
         ))
     }
 
@@ -88,7 +88,7 @@ pub fn current_headless_renderer() -> Option<Box<dyn gpui::PlatformHeadlessRende
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
-    use gpui::{AppContext, Empty, VisualTestAppContext};
+    use hgpui::{AppContext, Empty, VisualTestAppContext};
     use std::cell::RefCell;
     use std::time::Duration;
 
@@ -97,7 +97,7 @@ mod tests {
     // SIGABRT when interacting with macOS AppKit/Cocoa APIs.
     //
     // To run these tests, use:
-    // cargo test -p gpui visual_test_context -- --ignored --test-threads=1
+    // cargo test -p hgpui visual_test_context -- --ignored --test-threads=1
 
     #[test]
     #[ignore] // Requires macOS main thread

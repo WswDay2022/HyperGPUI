@@ -1,5 +1,5 @@
-use gpui::{App, Window};
-use gpui_macros::{AppContext, VisualContext};
+use hgpui::{App, Window};
+use hgpui_macros::{AppContext, VisualContext};
 
 #[derive(AppContext, VisualContext)]
 struct CustomContext<'a, 'b> {

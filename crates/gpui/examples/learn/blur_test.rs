@@ -17,14 +17,14 @@
 //! Run it on either backend:
 //!
 //! ```sh
-//! cargo run -p gpui-ce --example blur-test              # native (DirectX/HLSL) backend
-//! cargo run -p gpui-ce --example blur-test --features wgpu   # wgpu (WGSL) backend
+//! cargo run -p hgpui --example blur-test              # native (DirectX/HLSL) backend
+//! cargo run -p hgpui --example blur-test --features wgpu   # wgpu (WGSL) backend
 //! ```
 
 #[path = "../shared/prelude.rs"]
 mod example_prelude;
 
-use gpui::{
+use hgpui::{
     App, Bounds, Context, Window, WindowBounds, WindowOptions, div, hsla, prelude::*, px, rgb,
     rgba, size,
 };
@@ -149,7 +149,7 @@ fn blur_panel(
 }
 
 fn main() {
-    gpui_platform::application().run(|cx: &mut App| {
+    hgpui_platform::application().run(|cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(920.0), px(720.0)), cx);
 
         let _ = cx.open_window(

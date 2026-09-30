@@ -4,7 +4,7 @@ use std::{
 };
 
 use super::window::WaylandWindowStatePtr;
-use gpui::{
+use hgpui::{
     Modifiers, Pixels, PlatformInput, Point, ScrollDelta, ScrollWheelEvent, TouchPhase, point, px,
 };
 

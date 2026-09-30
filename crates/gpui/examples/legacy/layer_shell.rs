@@ -10,7 +10,7 @@ fn main() {
 mod example {
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-    use gpui::{
+    use hgpui::{
         App, Bounds, Context, FontWeight, Size, Window, WindowBackgroundAppearance, WindowBounds,
         WindowKind, WindowOptions, div, layer_shell::*, point, prelude::*, px, rems, rgba, white,
     };
@@ -59,7 +59,7 @@ mod example {
     }
 
     pub fn main() {
-        gpui_platform::application().run(|cx: &mut App| {
+        hgpui_platform::application().run(|cx: &mut App| {
             cx.open_window(
                 WindowOptions {
                     titlebar: None,
@@ -67,10 +67,10 @@ mod example {
                         origin: point(px(0.), px(0.)),
                         size: Size::new(px(500.), px(200.)),
                     })),
-                    app_id: Some("gpui-layer-shell-example".to_string()),
+                    app_id: Some("hgpui-layer-shell-example".to_string()),
                     window_background: WindowBackgroundAppearance::Transparent,
                     kind: WindowKind::LayerShell(LayerShellOptions {
-                        namespace: "gpui".to_string(),
+                        namespace: "hgpui".to_string(),
                         anchor: Anchor::LEFT | Anchor::RIGHT | Anchor::BOTTOM,
                         margin: Some((px(0.), px(0.), px(40.), px(0.))),
                         keyboard_interactivity: KeyboardInteractivity::None,

@@ -31,7 +31,7 @@
 //!
 //! In GPUI, each [`Element`] can have an [`id`][Element::id]:
 //! ```rust
-//! # use gpui::*;
+//! # use hgpui::*;
 //! let div_with_id = div().id("my-id").child(text!("hello"));
 //!
 //! // IDs are optional
@@ -42,7 +42,7 @@
 //! ID is formed by composing all the non-`None` IDs of its ancestors. For
 //! example:
 //! ```rust
-//! # use gpui::*;
+//! # use hgpui::*;
 //! let inner = div().id("inner-id");
 //! let middle = div().child(inner);  // no ID
 //! let outer = div().id("outer-id").child(middle);
@@ -68,7 +68,7 @@
 //! Nodes with the same global ID *across frames* are considered to be "the
 //! same" node. For example:
 //! ```rust
-//! # use gpui::*;
+//! # use hgpui::*;
 //! // The UI in frame 1
 //! let frame_1 = div()
 //!     .id("parent")
@@ -114,7 +114,7 @@
 //! **location in the source code of that invocation**. For example:
 //!
 //! ```rust
-//! # use gpui::*;
+//! # use hgpui::*;
 //! let a = text!("a");
 //! let b = text!("b");
 //!
@@ -134,7 +134,7 @@
 //! ```
 //! This can produce surprising behaviour. For example, this footgun:
 //! ```rust
-//! # use gpui::*;
+//! # use hgpui::*;
 //! let todos = vec!["eat lunch", "drink water", "go to gym"];
 //! let todo_divs = todos.into_iter().map(|todo| {
 //!     text!(todo)
@@ -153,7 +153,7 @@
 //!
 //! To fix this, you can set an ID:
 //! ```rust
-//! # use gpui::*;
+//! # use hgpui::*;
 //! let todos = vec!["eat lunch", "drink water", "go to gym"];
 //! let todo_divs = todos.into_iter().enumerate().map(|(index, todo)| {
 //!     text!(todo).with_id(index)  // OR `text(id = index, todo)`
@@ -167,7 +167,7 @@
 //! Another possible solution is to wrap the [`text!`] in another node that
 //! *does* have a unique global ID. For example:
 //! ```rust
-//! # use gpui::*;
+//! # use hgpui::*;
 //! let todos = vec!["eat lunch", "drink water", "go to gym"];
 //! let todo_divs = todos.into_iter().enumerate().map(|(index, todo)| {
 //!     div().id(index).child(text!(todo))
@@ -229,7 +229,7 @@
 //!
 //! This is possible using [`Element::a11y_synthetic_children`]. For example:
 //! ```rust,ignore
-//! # use gpui::*;
+//! # use hgpui::*;
 //! impl Element for MyCustomTextField {
 //!
 //!     // ...

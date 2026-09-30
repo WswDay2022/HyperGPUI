@@ -1,4 +1,4 @@
-use gpui::{
+use hgpui::{
     App, Bounds, Context, SharedString, Window, WindowBounds, WindowOptions, div, prelude::*, px,
     rgb, size,
 };
@@ -30,64 +30,64 @@ impl Render for HelloWorld {
                     .child(
                         div()
                             .size_8()
-                            .background(gpui::red())
+                            .background(hgpui::red())
                             .border_1()
                             .border_dashed()
                             .rounded_md()
-                            .border_color(gpui::white()),
+                            .border_color(hgpui::white()),
                     )
                     .child(
                         div()
                             .size_8()
-                            .background(gpui::green())
+                            .background(hgpui::green())
                             .border_1()
                             .border_dashed()
                             .rounded_md()
-                            .border_color(gpui::white()),
+                            .border_color(hgpui::white()),
                     )
                     .child(
                         div()
                             .size_8()
-                            .background(gpui::blue())
+                            .background(hgpui::blue())
                             .border_1()
                             .border_dashed()
                             .rounded_md()
-                            .border_color(gpui::white()),
+                            .border_color(hgpui::white()),
                     )
                     .child(
                         div()
                             .size_8()
-                            .background(gpui::yellow())
+                            .background(hgpui::yellow())
                             .border_1()
                             .border_dashed()
                             .rounded_md()
-                            .border_color(gpui::white()),
+                            .border_color(hgpui::white()),
                     )
                     .child(
                         div()
                             .size_8()
-                            .background(gpui::black())
+                            .background(hgpui::black())
                             .border_1()
                             .border_dashed()
                             .rounded_md()
                             .rounded_md()
-                            .border_color(gpui::white()),
+                            .border_color(hgpui::white()),
                     )
                     .child(
                         div()
                             .size_8()
-                            .background(gpui::white())
+                            .background(hgpui::white())
                             .border_1()
                             .border_dashed()
                             .rounded_md()
-                            .border_color(gpui::black()),
+                            .border_color(hgpui::black()),
                     ),
             )
     }
 }
 
 fn main() {
-    gpui_platform::application().run(|cx: &mut App| {
+    hgpui_platform::application().run(|cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(500.), px(500.0)), cx);
         cx.open_window(
             WindowOptions {

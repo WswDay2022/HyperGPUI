@@ -10,7 +10,7 @@
 //! input's *identity*, the internal `use_state(Editor)` is collision-safe across
 //! any number of inputs.
 
-use gpui::{
+use hgpui::{
     App, BoxShadow, CursorStyle, Entity, EntityId, Hsla, IntoElement, Pixels, StyleRefinement,
     Window, div, hsla, point, prelude::*, px, white,
 };
@@ -59,7 +59,7 @@ impl Input {
     }
 }
 
-impl gpui::View for Input {
+impl hgpui::View for Input {
     fn entity_id(&self) -> Option<EntityId> {
         Some(match &self.source {
             Source::Value(value) => value.entity_id(),

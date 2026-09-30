@@ -7,8 +7,8 @@
 //! 3. `window.paint_*` methods - Drawing quads, paths, and more
 //! 4. Interactive drawing - Responding to mouse events
 
-use gpui::colors::Colors;
-use gpui::{
+use hgpui::colors::Colors;
+use hgpui::{
     App, Bounds, ColorExt, Context, Hsla, MouseButton, MouseDownEvent, MouseMoveEvent,
     MouseUpEvent, Path, PathBuilder, Pixels, Point, Render, Rgba, Window, WindowBounds,
     WindowOptions, canvas, div, fill, point, prelude::*, px, rgb, size,
@@ -353,7 +353,7 @@ impl Render for DrawingCanvas {
 // Main Application View
 
 struct CustomDrawingExample {
-    drawing_canvas: gpui::Entity<DrawingCanvas>,
+    drawing_canvas: hgpui::Entity<DrawingCanvas>,
 }
 
 impl CustomDrawingExample {
@@ -388,7 +388,7 @@ impl Render for CustomDrawingExample {
                             .child(
                                 div()
                                     .text_xl()
-                                    .font_weight(gpui::FontWeight::BOLD)
+                                    .font_weight(hgpui::FontWeight::BOLD)
                                     .text_color(colors.text)
                                     .child("Custom Drawing"),
                             )
@@ -450,7 +450,7 @@ fn section(
                 .child(
                     div()
                         .text_sm()
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .font_weight(hgpui::FontWeight::SEMIBOLD)
                         .text_color(colors.text)
                         .child(title),
                 )
@@ -465,7 +465,7 @@ fn section(
 }
 
 fn main() {
-    gpui_platform::application().run(|cx: &mut App| {
+    hgpui_platform::application().run(|cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(550.), px(800.)), cx);
         cx.open_window(
             WindowOptions {

@@ -633,7 +633,7 @@ impl A11yNodeBuilder {
 #[cfg(test)]
 mod tests {
     // Import specific items rather than glob-importing `super`, which would pull
-    // in gpui's own `test` attribute macro and shadow the standard one.
+    // in hgpui's own `test` attribute macro and shadow the standard one.
     use super::{A11y, A11yNodeBuilder, ROOT_NODE_ID};
     use crate::FocusId;
     use accesskit::{NodeId, Role};

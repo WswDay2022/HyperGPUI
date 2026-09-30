@@ -21,7 +21,7 @@ use crate::{
 /// # Example
 ///
 /// ```
-/// # use gpui::{container_query, div, px, IntoElement, ParentElement};
+/// # use hgpui::{container_query, div, px, IntoElement, ParentElement};
 /// container_query(|size, _window, _cx| {
 ///     if size.width < px(240.) {
 ///         div().child("Narrow layout")

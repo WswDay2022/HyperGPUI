@@ -2,7 +2,7 @@
 //! handle deep hierarchies (even though it cannot just yet!).
 use std::sync::LazyLock;
 
-use gpui::{App, Bounds, Context, Window, WindowBounds, WindowOptions, div, prelude::*, px, size};
+use hgpui::{App, Bounds, Context, Window, WindowBounds, WindowOptions, div, prelude::*, px, size};
 
 struct Tree {}
 
@@ -16,7 +16,7 @@ static DEPTH: LazyLock<u64> = LazyLock::new(|| {
 impl Render for Tree {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         let mut depth = *DEPTH;
-        static COLORS: [gpui::Hsla; 4] = [gpui::red(), gpui::blue(), gpui::green(), gpui::yellow()];
+        static COLORS: [hgpui::Hsla; 4] = [hgpui::red(), hgpui::blue(), hgpui::green(), hgpui::yellow()];
         let mut colors = COLORS.iter().cycle().copied();
         let mut next_div = || div().p_0p5().background(colors.next().unwrap());
         let mut innermost_node = next_div();
@@ -29,7 +29,7 @@ impl Render for Tree {
 }
 
 fn main() {
-    gpui_platform::application().run(|cx: &mut App| {
+    hgpui_platform::application().run(|cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(300.0), px(300.0)), cx);
         cx.open_window(
             WindowOptions {

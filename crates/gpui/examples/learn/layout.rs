@@ -10,8 +10,8 @@
 mod example_prelude;
 
 use example_prelude::init_example;
-use gpui::colors::Colors;
-use gpui::{
+use hgpui::colors::Colors;
+use hgpui::{
     Bounds, ColorExt, Context, Div, Hsla, Render, Rgba, Window, WindowBounds, WindowOptions, div,
     prelude::*, px, size,
 };
@@ -26,7 +26,7 @@ fn block(label: &'static str, color: Hsla, text_color: Rgba) -> Div {
         .justify_center()
         .background(color)
         .border_1()
-        .border_color(gpui::white().with_alpha(0.3))
+        .border_color(hgpui::white().with_alpha(0.3))
         .rounded_md()
         .text_xs()
         .text_color(text_color)
@@ -54,9 +54,9 @@ fn flexbox_row_example(colors: &Colors) -> impl IntoElement {
                 .flex()
                 .flex_row()
                 .gap_2()
-                .child(block("A", gpui::red(), text).size_8())
-                .child(block("B", gpui::green(), text).size_8())
-                .child(block("C", gpui::blue(), text).size_8()),
+                .child(block("A", hgpui::red(), text).size_8())
+                .child(block("B", hgpui::green(), text).size_8())
+                .child(block("C", hgpui::blue(), text).size_8()),
         )
 }
 
@@ -80,9 +80,9 @@ fn flexbox_column_example(colors: &Colors) -> impl IntoElement {
                 .flex()
                 .flex_col()
                 .gap_2()
-                .child(block("A", gpui::red(), text).h_6())
-                .child(block("B", gpui::green(), text).h_6())
-                .child(block("C", gpui::blue(), text).h_6()),
+                .child(block("A", hgpui::red(), text).h_6())
+                .child(block("B", hgpui::green(), text).h_6())
+                .child(block("C", hgpui::blue(), text).h_6()),
         )
 }
 
@@ -113,8 +113,8 @@ fn flexbox_justify_example(colors: &Colors) -> impl IntoElement {
                         .p_1()
                         .background(surface)
                         .rounded_sm()
-                        .child(block("Start", gpui::red(), text).px_2().py_1())
-                        .child(block("End", gpui::blue(), text).px_2().py_1()),
+                        .child(block("Start", hgpui::red(), text).px_2().py_1())
+                        .child(block("End", hgpui::blue(), text).px_2().py_1()),
                 )
                 .child(
                     div()
@@ -123,7 +123,7 @@ fn flexbox_justify_example(colors: &Colors) -> impl IntoElement {
                         .p_1()
                         .background(surface)
                         .rounded_sm()
-                        .child(block("Center", gpui::green(), text).px_2().py_1()),
+                        .child(block("Center", hgpui::green(), text).px_2().py_1()),
                 )
                 .child(
                     div()
@@ -132,7 +132,7 @@ fn flexbox_justify_example(colors: &Colors) -> impl IntoElement {
                         .p_1()
                         .background(surface)
                         .rounded_sm()
-                        .child(block("End", gpui::yellow(), text).px_2().py_1()),
+                        .child(block("End", hgpui::yellow(), text).px_2().py_1()),
                 ),
         )
 }
@@ -155,9 +155,9 @@ fn flexbox_grow_example(colors: &Colors) -> impl IntoElement {
             div()
                 .flex()
                 .gap_2()
-                .child(block("fixed", gpui::red(), text).flex_none().w_16().h_8())
-                .child(block("flex_1 (grows)", gpui::green(), text).flex_1().h_8())
-                .child(block("fixed", gpui::blue(), text).flex_none().w_16().h_8()),
+                .child(block("fixed", hgpui::red(), text).flex_none().w_16().h_8())
+                .child(block("flex_1 (grows)", hgpui::green(), text).flex_1().h_8())
+                .child(block("fixed", hgpui::blue(), text).flex_none().w_16().h_8()),
         )
 }
 
@@ -182,12 +182,12 @@ fn grid_basic_example(colors: &Colors) -> impl IntoElement {
                 .grid()
                 .grid_cols(3)
                 .gap_1()
-                .child(block("1", gpui::red(), text).h_8())
-                .child(block("2", gpui::green(), text).h_8())
-                .child(block("3", gpui::blue(), text).h_8())
-                .child(block("4", gpui::yellow(), text).h_8())
-                .child(block("5", gpui::red(), text).h_8())
-                .child(block("6", gpui::green(), text).h_8()),
+                .child(block("1", hgpui::red(), text).h_8())
+                .child(block("2", hgpui::green(), text).h_8())
+                .child(block("3", hgpui::blue(), text).h_8())
+                .child(block("4", hgpui::yellow(), text).h_8())
+                .child(block("5", hgpui::red(), text).h_8())
+                .child(block("6", hgpui::green(), text).h_8()),
         )
 }
 
@@ -212,18 +212,18 @@ fn grid_span_example(colors: &Colors) -> impl IntoElement {
                 .grid_rows(3)
                 .gap_1()
                 .child(
-                    block("Header (col_span_full)", gpui::red(), text)
+                    block("Header (col_span_full)", hgpui::red(), text)
                         .col_span_full()
                         .h_6(),
                 )
                 .child(
-                    block("Side", gpui::green(), text)
+                    block("Side", hgpui::green(), text)
                         .col_span(1)
                         .row_span(2)
                         .h_full(),
                 )
                 .child(
-                    block("Content (col_span 3)", gpui::blue(), text)
+                    block("Content (col_span 3)", hgpui::blue(), text)
                         .col_span(3)
                         .row_span(2)
                         .h_full(),
@@ -364,7 +364,7 @@ fn stack_pattern(colors: &Colors) -> impl IntoElement {
                         .top_2()
                         .left_2()
                         .size_10()
-                        .background(gpui::red().with_alpha(0.7))
+                        .background(hgpui::red().with_alpha(0.7))
                         .rounded_md(),
                 )
                 .child(
@@ -373,7 +373,7 @@ fn stack_pattern(colors: &Colors) -> impl IntoElement {
                         .top_4()
                         .left_4()
                         .size_10()
-                        .background(gpui::green().with_alpha(0.7))
+                        .background(hgpui::green().with_alpha(0.7))
                         .rounded_md(),
                 )
                 .child(
@@ -382,7 +382,7 @@ fn stack_pattern(colors: &Colors) -> impl IntoElement {
                         .top_6()
                         .left_6()
                         .size_10()
-                        .background(gpui::blue().with_alpha(0.7))
+                        .background(hgpui::blue().with_alpha(0.7))
                         .rounded_md(),
                 ),
         )
@@ -416,7 +416,7 @@ impl Render for LayoutExample {
                             .child(
                                 div()
                                     .text_xl()
-                                    .font_weight(gpui::FontWeight::BOLD)
+                                    .font_weight(hgpui::FontWeight::BOLD)
                                     .text_color(colors.text)
                                     .child("Layout Patterns"),
                             )
@@ -477,7 +477,7 @@ fn section(colors: &Colors, title: &'static str, content: impl IntoElement) -> i
         .child(
             div()
                 .text_sm()
-                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .font_weight(hgpui::FontWeight::SEMIBOLD)
                 .text_color(colors.text)
                 .child(title),
         )
@@ -485,7 +485,7 @@ fn section(colors: &Colors, title: &'static str, content: impl IntoElement) -> i
 }
 
 fn main() {
-    gpui_platform::application().run(|cx| {
+    hgpui_platform::application().run(|cx| {
         let bounds = Bounds::centered(None, size(px(650.), px(700.)), cx);
         cx.open_window(
             WindowOptions {

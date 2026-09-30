@@ -31,7 +31,7 @@ use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1;
 
 use crate::linux::wayland::{display::WaylandDisplay, serial::SerialKind};
 use crate::linux::{Globals, Output, WaylandClientStatePtr, get_window};
-use gpui::{
+use hgpui::{
     AnyWindowHandle, Bounds, Capslock, Decorations, DevicePixels, GpuSpecs, Modifiers, Pixels,
     PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow, Point,
     PromptButton, PromptLevel, RequestFrameOptions, ResizeEdge, Scene, Size, Tiling,
@@ -41,12 +41,12 @@ use gpui::{
     popup::PopupOptions,
     px, size,
 };
-use gpui_wgpu::{CompositorGpuHint, WgpuRenderer, WgpuSurfaceConfig, wgpu};
+use hgpui_wgpu::{CompositorGpuHint, WgpuRenderer, WgpuSurfaceConfig, wgpu};
 
 #[derive(Default)]
 pub(crate) struct Callbacks {
     request_frame: Option<Box<dyn FnMut(RequestFrameOptions)>>,
-    input: Option<Box<dyn FnMut(gpui::PlatformInput) -> gpui::DispatchEventResult>>,
+    input: Option<Box<dyn FnMut(hgpui::PlatformInput) -> hgpui::DispatchEventResult>>,
     active_status_change: Option<Box<dyn FnMut(bool)>>,
     hover_status_change: Option<Box<dyn FnMut(bool)>>,
     resize: Option<Box<dyn FnMut(Size<Pixels>, f32)>>,
@@ -325,7 +325,7 @@ fn build_popup_positioner(
     );
 
     // The protocol wants the anchor rect relative to the parent's window geometry, while
-    // `options.anchor_rect` is in gpui window coordinates (surface-local). A rect extending
+    // `options.anchor_rect` is in hgpui window coordinates (surface-local). A rect extending
     // outside the geometry or with a zero size is a protocol error, so translate, then clamp
     // to at least one pixel inside the geometry, pulling the origin inward at the edges.
     let anchor_rect = Bounds {
@@ -547,9 +547,9 @@ impl WaylandWindowState {
         viewport: Option<wp_viewport::WpViewport>,
         client: WaylandClientStatePtr,
         globals: Globals,
-        gpu_context: gpui_wgpu::GpuContext,
+        gpu_context: hgpui_wgpu::GpuContext,
         compositor_gpu: Option<CompositorGpuHint>,
-        gpu_requirements: Option<gpui_wgpu::WgpuDeviceRequirements>,
+        gpu_requirements: Option<hgpui_wgpu::WgpuDeviceRequirements>,
         options: WindowParams,
         parent: Option<WaylandWindowStatePtr>,
     ) -> anyhow::Result<Self> {
@@ -745,9 +745,9 @@ impl WaylandWindow {
     pub fn new(
         handle: AnyWindowHandle,
         globals: Globals,
-        gpu_context: gpui_wgpu::GpuContext,
+        gpu_context: hgpui_wgpu::GpuContext,
         compositor_gpu: Option<CompositorGpuHint>,
-        gpu_requirements: Option<gpui_wgpu::WgpuDeviceRequirements>,
+        gpu_requirements: Option<hgpui_wgpu::WgpuDeviceRequirements>,
         client: WaylandClientStatePtr,
         params: WindowParams,
         appearance: WindowAppearance,
@@ -823,7 +823,7 @@ impl WaylandWindowStatePtr {
     }
 
     /// This window's xdg window geometry in surface-local coordinates. Child popup anchor
-    /// rectangles are relative to it, while gpui coordinates are surface-local.
+    /// rectangles are relative to it, while hgpui coordinates are surface-local.
     pub fn window_geometry(&self) -> Bounds<Pixels> {
         let state = self.state.borrow();
         inset_by_tiling(
@@ -1674,7 +1674,7 @@ impl PlatformWindow for WaylandWindow {
         self.0.callbacks.borrow_mut().request_frame = Some(callback);
     }
 
-    fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> gpui::DispatchEventResult>) {
+    fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> hgpui::DispatchEventResult>) {
         self.0.callbacks.borrow_mut().input = Some(callback);
     }
 
@@ -1783,7 +1783,7 @@ impl PlatformWindow for WaylandWindow {
         }
     }
 
-    fn start_window_resize(&self, edge: gpui::ResizeEdge) {
+    fn start_window_resize(&self, edge: hgpui::ResizeEdge) {
         let state = self.borrow();
         if let Some(toplevel) = state.surface_state.toplevel() {
             toplevel.resize(
@@ -1921,7 +1921,7 @@ impl PlatformWindow for WaylandWindow {
         }
     }
 
-    fn a11y_init(&self, callbacks: gpui::A11yCallbacks) {
+    fn a11y_init(&self, callbacks: hgpui::A11yCallbacks) {
         let activation_handler = TrivialActivationHandler {
             callback: callbacks.activation,
         };

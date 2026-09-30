@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use gpui::{
+use hgpui::{
     Capslock, DispatchEventResult, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers,
     ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseExitEvent, MouseMoveEvent,
     MouseUpEvent, NavigationDirection, Pixels, PlatformInput, Point, ScrollDelta, ScrollWheelEvent,

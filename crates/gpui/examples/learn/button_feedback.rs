@@ -16,7 +16,7 @@ mod example_prelude;
 
 use std::time::{Duration, Instant};
 
-use gpui::{
+use hgpui::{
     App, AppContext, Bounds, Context, CursorStyle, Hsla, InteractiveElement, IntoElement,
     MouseButton, ParentElement, Render, ResizeEdge, Rgba, SharedString,
     StatefulInteractiveElement, Styled, TitlebarOptions, Transition, Window,
@@ -182,7 +182,7 @@ impl Render for ButtonFeedback {
                             .border_1()
                             .border_color(rgb(0x3b82f6))
                             .shadow(vec![
-                                gpui::BoxShadow::new(px(0.0), px(0.0), hsla(0.0, 0.0, 0.0, 0.5))
+                                hgpui::BoxShadow::new(px(0.0), px(0.0), hsla(0.0, 0.0, 0.0, 0.5))
                                     .blur_radius(px(SHADOW_SIZE)),
                             ])
                             .flex()
@@ -311,7 +311,7 @@ fn resize_handle((edge, cursor): (ResizeEdge, CursorStyle)) -> impl IntoElement 
 }
 
 fn main() {
-    gpui_platform::application().run(|cx: &mut App| {
+    hgpui_platform::application().run(|cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(520.0), px(400.0)), cx);
 
         let _ = cx.open_window(

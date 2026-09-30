@@ -1,4 +1,4 @@
-#[cfg_attr(not(rust_analyzer), gpui_macros::derive_inspector_reflection)]
+#[cfg_attr(not(rust_analyzer), hgpui_macros::derive_inspector_reflection)]
 trait Transform: Clone {
     /// Doubles the value
     fn double(self) -> Self;

@@ -14,7 +14,7 @@ pub fn bench(args: TokenStream, function: TokenStream) -> TokenStream {
                 let value: syn::LitInt = meta.value()?.parse()?;
                 let value = value.base10_parse::<u64>()?;
                 if value == 0 {
-                    return Err(meta.error("#[gpui::bench] `fps` must be greater than zero"));
+                    return Err(meta.error("#[hgpui::bench] `fps` must be greater than zero"));
                 }
                 fps = Some(value);
                 Ok(())
@@ -32,14 +32,14 @@ pub fn bench(args: TokenStream, function: TokenStream) -> TokenStream {
                 let value = value.base10_parse::<usize>()?;
                 if value == 0 {
                     return Err(
-                        meta.error("#[gpui::bench] `sample_size` must be greater than zero")
+                        meta.error("#[hgpui::bench] `sample_size` must be greater than zero")
                     );
                 }
                 sample_size = Some(value);
                 Ok(())
             } else {
                 Err(meta.error(
-                    "#[gpui::bench] only accepts `fps = N`, `inputs = EXPR`, `input_name = \"...\"`, `group = \"...\"`, and `sample_size = N`",
+                    "#[hgpui::bench] only accepts `fps = N`, `inputs = EXPR`, `input_name = \"...\"`, `group = \"...\"`, and `sample_size = N`",
                 ))
             }
         });
@@ -51,8 +51,8 @@ pub fn bench(args: TokenStream, function: TokenStream) -> TokenStream {
     // The frame budget math lives in `BenchReport` so `bench_context` is the
     // single source of truth; `default()` supplies the default frame rate.
     let report_expr = match fps {
-        Some(fps) => quote! { gpui::BenchReport::with_fps(#fps) },
-        None => quote! { gpui::BenchReport::default() },
+        Some(fps) => quote! { hgpui::BenchReport::with_fps(#fps) },
+        None => quote! { hgpui::BenchReport::default() },
     };
 
     let mut inner_fn = match syn::parse::<ItemFn>(function) {
@@ -63,7 +63,7 @@ pub fn bench(args: TokenStream, function: TokenStream) -> TokenStream {
     if let Some(asyncness) = &inner_fn.sig.asyncness {
         return error_to_stream(syn::Error::new(
             asyncness.span(),
-            "#[gpui::bench] does not support async benchmark functions yet",
+            "#[hgpui::bench] does not support async benchmark functions yet",
         ));
     }
 
@@ -90,12 +90,12 @@ pub fn bench(args: TokenStream, function: TokenStream) -> TokenStream {
                 group.bench_with_input(criterion::BenchmarkId::new(#input_name, &input), &input, {
                     let report = report.clone();
                     move |bencher, input| {
-                        let mut cx = gpui::BenchAppContext::new_with_platform_and_report(
-                            gpui::bench_platform(
+                        let mut cx = hgpui::BenchAppContext::new_with_platform_and_report(
+                            hgpui::bench_platform(
                                 Some(Box::new(|| {
-                                    gpui_platform::current_headless_renderer()
+                                    hgpui_platform::current_headless_renderer()
                                 })),
-                                gpui_platform::current_platform(true).text_system(),
+                                hgpui_platform::current_platform(true).text_system(),
                             ),
                             Some(stringify!(#outer_fn_name)),
                             bencher,
@@ -113,19 +113,19 @@ pub fn bench(args: TokenStream, function: TokenStream) -> TokenStream {
         if let Some(input_name) = input_name {
             return error_to_stream(syn::Error::new(
                 input_name.span(),
-                "#[gpui::bench] `input_name` requires `inputs`",
+                "#[hgpui::bench] `input_name` requires `inputs`",
             ));
         }
         if let Some(group_name) = group_name {
             return error_to_stream(syn::Error::new(
                 group_name.span(),
-                "#[gpui::bench] `group` requires `inputs`",
+                "#[hgpui::bench] `group` requires `inputs`",
             ));
         }
         if sample_size.is_some() {
             return error_to_stream(syn::Error::new(
                 proc_macro2::Span::call_site(),
-                "#[gpui::bench] `sample_size` requires `inputs`",
+                "#[hgpui::bench] `sample_size` requires `inputs`",
             ));
         }
         quote! {
@@ -133,12 +133,12 @@ pub fn bench(args: TokenStream, function: TokenStream) -> TokenStream {
             criterion.bench_function(stringify!(#outer_fn_name), {
                 let report = report.clone();
                 move |bencher| {
-                    let mut cx = gpui::BenchAppContext::new_with_platform_and_report(
-                        gpui::bench_platform(
+                    let mut cx = hgpui::BenchAppContext::new_with_platform_and_report(
+                        hgpui::bench_platform(
                             Some(Box::new(|| {
-                                gpui_platform::current_headless_renderer()
+                                hgpui_platform::current_headless_renderer()
                             })),
-                            gpui_platform::current_platform(true).text_system(),
+                            hgpui_platform::current_platform(true).text_system(),
                         ),
                         Some(stringify!(#outer_fn_name)),
                         bencher,

@@ -152,7 +152,7 @@ mod tests {
     /// previously they were measured against a transient per-round vector, so
     /// reusing the panel's subtree grafted the wrong deferred draws and
     /// panicked in the dispatch tree.
-    #[gpui::test]
+    #[hgpui::test]
     fn test_nested_deferred_draws_with_reused_views(cx: &mut TestAppContext) {
         let window = cx.open_window(size(px(800.), px(600.)), |_, cx| {
             let panel = cx.new(|_| PanelView);

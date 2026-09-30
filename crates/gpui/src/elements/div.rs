@@ -2182,7 +2182,7 @@ impl Interactivity {
         window: &mut Window,
         point: Point<Pixels>,
     ) {
-        window.with_optional_element_state::<gpui::InteractiveElementState, _>(
+        window.with_optional_element_state::<hgpui::InteractiveElementState, _>(
             global_id,
             |element_state, _window| {
                 let mut element_state =
@@ -4397,7 +4397,7 @@ mod tests {
         }
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn group_hover_styles_update_only_on_transitions(cx: &mut TestAppContext) {
         let render_count = Rc::new(Cell::new(0));
         let anonymous_paint_count = Rc::new(Cell::new(0));

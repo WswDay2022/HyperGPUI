@@ -1,5 +1,5 @@
-use gpui::{Action, actions};
-use gpui_macros::register_action;
+use hgpui::{Action, actions};
+use hgpui_macros::register_action;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -19,18 +19,18 @@ fn test_action_macros() {
     #[serde(deny_unknown_fields)]
     struct AnotherAction;
 
-    #[derive(PartialEq, Clone, gpui::private::serde::Deserialize)]
+    #[derive(PartialEq, Clone, hgpui::private::serde::Deserialize)]
     #[serde(deny_unknown_fields)]
     struct RegisterableAction {}
 
     register_action!(RegisterableAction);
 
-    impl gpui::Action for RegisterableAction {
-        fn boxed_clone(&self) -> Box<dyn gpui::Action> {
+    impl hgpui::Action for RegisterableAction {
+        fn boxed_clone(&self) -> Box<dyn hgpui::Action> {
             unimplemented!()
         }
 
-        fn partial_eq(&self, _action: &dyn gpui::Action) -> bool {
+        fn partial_eq(&self, _action: &dyn hgpui::Action) -> bool {
             unimplemented!()
         }
 
@@ -45,7 +45,7 @@ fn test_action_macros() {
             unimplemented!()
         }
 
-        fn build(_value: serde_json::Value) -> anyhow::Result<Box<dyn gpui::Action>>
+        fn build(_value: serde_json::Value) -> anyhow::Result<Box<dyn hgpui::Action>>
         where
             Self: Sized,
         {

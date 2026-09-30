@@ -1,4 +1,4 @@
-pub use gpui::popup::*;
+pub use hgpui::popup::*;
 
 use wayland_protocols::xdg::shell::client::xdg_positioner;
 

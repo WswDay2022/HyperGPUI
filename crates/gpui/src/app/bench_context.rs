@@ -27,11 +27,11 @@ use crate::{
 /// every Criterion calibration pass.
 ///
 /// Text is shaped with the provided platform text system. Benchmarks generated
-/// by `#[gpui::bench]` use the current platform's text system, so text-heavy
+/// by `#[hgpui::bench]` use the current platform's text system, so text-heavy
 /// benchmark measurements include production shaping and glyph rasterization.
 ///
 /// `headless_renderer_factory` supplies a renderer for benchmark windows, e.g.
-/// `gpui_platform::current_headless_renderer`. When present, scenes drawn by
+/// `hgpui_platform::current_headless_renderer`. When present, scenes drawn by
 /// benchmarks are rasterized through the real sprite atlas and submitted to
 /// the GPU on present, so quad/sprite regressions show up in measurements.
 /// When `None`, presenting discards the scene. Currently only macOS provides
@@ -314,7 +314,7 @@ impl<'a, 'measurement> BenchAppContext<'a, 'measurement> {
         assert!(
             background_executor.dispatcher().as_bench().is_some(),
             "BenchAppContext requires a platform whose executors are backed by a \
-             BenchDispatcher; construct one with gpui::bench_platform"
+             BenchDispatcher; construct one with hgpui::bench_platform"
         );
         let foreground_executor = platform.foreground_executor();
         let asset_source = Arc::new(());

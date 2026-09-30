@@ -5,10 +5,10 @@ use std::{any::TypeId, collections::HashMap};
 /// Use `as_keybindings` to create an iterator of `KeyBinding` to provide to `App::bind_keys`.
 ///
 /// ```rust
-/// # use gpui::{ActionBindingCollection, Action};
-/// gpui::actions!([MyAction]);
-/// # #[gpui::test]
-/// # fn test(app: &mut gpui::TestAppContext) {
+/// # use hgpui::{ActionBindingCollection, Action};
+/// hgpui::actions!([MyAction]);
+/// # #[hgpui::test]
+/// # fn test(app: &mut hgpui::TestAppContext) {
 /// app.bind_keys(ActionBindingCollection::default().with::<MyAction>("enter").as_keybindings(None));
 /// # }
 /// ```
@@ -71,12 +71,12 @@ mod tests {
 
     actions!([TestAction]);
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_default_empty(_cx: &mut TestAppContext) {
         assert!(ActionBindingCollection::default().entries.is_empty());
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_single_binding(_cx: &mut TestAppContext) {
         let collection = ActionBindingCollection::default();
         let collection = collection.with::<TestAction>("enter");
@@ -89,7 +89,7 @@ mod tests {
         assert_eq!(out_bindings.len(), 1);
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_single_action_many_keys(_cx: &mut TestAppContext) {
         let collection = ActionBindingCollection::default();
         let collection = collection.with::<TestAction>("enter");
@@ -109,7 +109,7 @@ mod tests {
         assert_eq!(out_bindings.len(), 2);
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_single_action_many_keys_context(_cx: &mut TestAppContext) {
         let collection = ActionBindingCollection::default();
         let collection = collection.with::<TestAction>("enter");

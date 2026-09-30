@@ -12,7 +12,7 @@ use std::rc::Rc;
 use block2::RcBlock;
 use futures::StreamExt as _;
 use futures::channel::mpsc;
-use gpui::{
+use hgpui::{
     ForegroundExecutor, SharedString, SystemNotification, SystemNotificationAction,
     SystemNotificationResponse, Task,
 };
@@ -201,7 +201,7 @@ impl NotificationCenter {
         }
 
         let identifier =
-            SharedString::from(format!("gpui-system-notification-{}", categories.len()));
+            SharedString::from(format!("hgpui-system-notification-{}", categories.len()));
         let platform_actions: Vec<Retained<UNNotificationAction>> = actions
             .iter()
             .map(|action| {

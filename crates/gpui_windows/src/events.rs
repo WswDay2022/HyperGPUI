@@ -3,7 +3,7 @@ use crate::window::RawWindow;
 use std::{cell::Cell, rc::Rc, sync::atomic::Ordering};
 
 use anyhow::Context as _;
-use gpui::ResultExt;
+use hgpui::ResultExt;
 use windows::{
     Win32::{
         Foundation::*,
@@ -20,7 +20,7 @@ use windows::{
 };
 
 use crate::*;
-use gpui::*;
+use hgpui::*;
 
 pub(crate) const WM_GPUI_CURSOR_STYLE_CHANGED: u32 = WM_USER + 1;
 pub(crate) const WM_GPUI_CLOSE_ONE_WINDOW: u32 = WM_USER + 2;

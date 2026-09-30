@@ -1,11 +1,11 @@
 use crate::{
-    self as gpui, AbsoluteLength, AlignContent, AlignItems, AlignSelf, BorderStyle, CssTransform,
+    self as hgpui, AbsoluteLength, AlignContent, AlignItems, AlignSelf, BorderStyle, CssTransform,
     CursorStyle, DefiniteLength, Display, Fill, Filter, FlexDirection, FlexWrap, Font, FontFeatures,
     FontStyle, FontWeight, GridPlacement, GridTemplate, GridTemplateMinSize, JustifyContent, Length,
     Pixels, SharedString, StrikethroughStyle, StyleRefinement, TextAlign, TextOverflow,
     TextStyleRefinement, TextTransform, UnderlineStyle, WhiteSpace, px, relative, rems,
 };
-pub use gpui_macros::{
+pub use hgpui_macros::{
     border_style_methods, box_shadow_style_methods, cursor_style_methods, margin_style_methods,
     overflow_style_methods, padding_style_methods, position_style_methods,
     visibility_style_methods,
@@ -18,22 +18,22 @@ const ELLIPSIS: SharedString = SharedString::new_static("…");
 // gate on rust-analyzer so rust-analyzer never needs to expand this macro, it takes up to 10 seconds to expand due to inefficiencies in rust-analyzers proc-macro srv
 #[cfg_attr(
     all(any(feature = "inspector", debug_assertions), not(rust_analyzer)),
-    gpui_macros::derive_inspector_reflection
+    hgpui_macros::derive_inspector_reflection
 )]
 pub trait Styled: Sized {
     /// Returns a reference to the style memory of this element.
     fn style(&mut self) -> &mut StyleRefinement;
 
-    gpui_macros::style_helpers!();
-    gpui_macros::visibility_style_methods!();
-    gpui_macros::margin_style_methods!();
-    gpui_macros::padding_style_methods!();
-    gpui_macros::position_style_methods!();
-    gpui_macros::overflow_style_methods!();
-    gpui_macros::cursor_style_methods!();
-    gpui_macros::border_style_methods!();
-    gpui_macros::box_shadow_style_methods!();
-    gpui_macros::transform_style_methods!();
+    hgpui_macros::style_helpers!();
+    hgpui_macros::visibility_style_methods!();
+    hgpui_macros::margin_style_methods!();
+    hgpui_macros::padding_style_methods!();
+    hgpui_macros::position_style_methods!();
+    hgpui_macros::overflow_style_methods!();
+    hgpui_macros::cursor_style_methods!();
+    hgpui_macros::border_style_methods!();
+    hgpui_macros::box_shadow_style_methods!();
+    hgpui_macros::transform_style_methods!();
 
     /// Blur this element's own content and children, like CSS `filter: blur(<radius>)`.
     ///
@@ -96,7 +96,7 @@ pub trait Styled: Sized {
     /// bounds, in the ancestor's own space.
     ///
     /// ```
-    /// # use gpui::*;
+    /// # use hgpui::*;
     /// let _ = div().transform(CssTransform::identity().translate_x(px(10.)).scale(1.5, 1.5));
     /// ```
     fn transform(mut self, transform: impl Into<CssTransform>) -> Self {

@@ -1,4 +1,4 @@
-use gpui::{App, Bounds, Context, Window, WindowBounds, WindowOptions, div, prelude::*, px, size};
+use hgpui::{App, Bounds, Context, Window, WindowBounds, WindowOptions, div, prelude::*, px, size};
 use palette::WithAlpha;
 
 struct Scrollable {}
@@ -10,14 +10,14 @@ impl Render for Scrollable {
             .id("vertical")
             .p_4()
             .overflow_scroll()
-            .background(gpui::white())
+            .background(hgpui::white())
             .child("Example for test 2 way scroll in nested layout")
             .child(
                 div()
                     .h(px(5000.))
                     .border_1()
-                    .border_color(gpui::blue())
-                    .background(gpui::blue().with_alpha(0.05))
+                    .border_color(hgpui::blue())
+                    .background(hgpui::blue().with_alpha(0.05))
                     .p_4()
                     .child(
                         div()
@@ -29,10 +29,10 @@ impl Render for Scrollable {
                                 div()
                                     .w(px(2000.))
                                     .h(px(150.))
-                                    .background(gpui::green().with_alpha(0.1))
-                                    .hover(|this| this.background(gpui::green().with_alpha(0.2)))
+                                    .background(hgpui::green().with_alpha(0.1))
+                                    .hover(|this| this.background(hgpui::green().with_alpha(0.2)))
                                     .border_1()
-                                    .border_color(gpui::green())
+                                    .border_color(hgpui::green())
                                     .p_4()
                                     .child("Scroll Horizontal"),
                             ),
@@ -43,7 +43,7 @@ impl Render for Scrollable {
 }
 
 fn main() {
-    gpui_platform::application().run(|cx: &mut App| {
+    hgpui_platform::application().run(|cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(500.), px(500.0)), cx);
         cx.open_window(
             WindowOptions {

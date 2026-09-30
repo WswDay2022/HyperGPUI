@@ -18,7 +18,7 @@ use windows::Win32::{
 };
 use windows::core::{Owned, PCWSTR};
 
-use gpui::{
+use hgpui::{
     ClipboardEntry, ClipboardItem, ClipboardString, ExternalPaths, Image, ImageFormat, hash,
 };
 

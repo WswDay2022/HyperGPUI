@@ -4231,7 +4231,7 @@ impl Window {
         //
         // `opacity` is 1.0 — NOT `element_opacity()`. The group's children/bg/border are painted
         // through the normal paint methods while `element_opacity` is still in effect, so they
-        // already carry the element's opacity (consistent with gpui's per-primitive opacity for
+        // already carry the element's opacity (consistent with hgpui's per-primitive opacity for
         // non-filtered elements). Re-applying it at composite time would double it (e.g.
         // `.blur(r).opacity(0.5)` would render at 0.25 instead of 0.5).
         let boundary = FilterBoundary {
@@ -7276,7 +7276,7 @@ mod tests {
     /// The transform stack starts empty, `None` short-circuits without pushing,
     /// nested `with_transform` calls compose (inner transform applies first),
     /// and every push is popped on exit so no transform leaks past its element.
-    #[gpui::test]
+    #[hgpui::test]
     fn transform_stack_composes_nested_transforms_and_restores(cx: &mut TestAppContext) {
         cx.add_window(|_, _| TransformStackProbe);
     }
@@ -7345,7 +7345,7 @@ mod tests {
     /// subtree's own transforms applied once on top, never twice. Prior to the
     /// capture, the re-paint ran with an empty transform stack, so the inner
     /// subtree lost every ancestor transform.
-    #[gpui::test]
+    #[hgpui::test]
     fn deferred_draws_capture_and_replay_ancestor_transforms(cx: &mut TestAppContext) {
         let main = Rc::new(Cell::new(TransformationMatrix::unit()));
         let re_prepaint = Rc::new(Cell::new(TransformationMatrix::unit()));
@@ -7383,7 +7383,7 @@ mod tests {
             .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_appearance_change_runs_after_app_update(cx: &mut TestAppContext) {
         let window = cx.add_window(|_, _| EmptyView);
         let observed_appearance = Rc::new(Cell::new(None));
@@ -7504,7 +7504,7 @@ mod tests {
         }
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn file_drag_is_promoted_once_and_restored_in_source_window(cx: &mut TestAppContext) {
         struct Drag {
             window: AnyWindowHandle,
@@ -7796,7 +7796,7 @@ mod tests {
     /// When a focus listener moves focus again (e.g. a dock forwarding focus to its
     /// active panel), the resulting focus events must be dispatched without waiting
     /// for an unrelated redraw of the window.
-    #[gpui::test]
+    #[hgpui::test]
     fn test_focus_moved_by_focus_listener_is_dispatched(cx: &mut TestAppContext) {
         let b_focus_count = Rc::new(Cell::new(0));
         let window = cx.add_window({

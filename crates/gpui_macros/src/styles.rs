@@ -54,14 +54,14 @@ pub fn visibility_style_methods(input: TokenStream) -> TokenStream {
         /// Sets the visibility of the element to `visible`.
         /// [Docs](https://tailwindcss.com/docs/visibility)
         #visibility fn visible(mut self) -> Self {
-            self.style().visibility = Some(gpui::Visibility::Visible);
+            self.style().visibility = Some(hgpui::Visibility::Visible);
             self
         }
 
         /// Sets the visibility of the element to `hidden`.
         /// [Docs](https://tailwindcss.com/docs/visibility)
         #visibility fn invisible(mut self) -> Self {
-            self.style().visibility = Some(gpui::Visibility::Hidden);
+            self.style().visibility = Some(hgpui::Visibility::Hidden);
             self
         }
     };
@@ -109,14 +109,14 @@ pub fn position_style_methods(input: TokenStream) -> TokenStream {
         /// Sets the position of the element to `relative`.
         /// [Docs](https://tailwindcss.com/docs/position)
         #visibility fn relative(mut self) -> Self {
-            self.style().position = Some(gpui::Position::Relative);
+            self.style().position = Some(hgpui::Position::Relative);
             self
         }
 
         /// Sets the position of the element to `absolute`.
         /// [Docs](https://tailwindcss.com/docs/position)
         #visibility fn absolute(mut self) -> Self {
-            self.style().position = Some(gpui::Position::Absolute);
+            self.style().position = Some(hgpui::Position::Absolute);
             self
         }
 
@@ -133,22 +133,22 @@ pub fn overflow_style_methods(input: TokenStream) -> TokenStream {
         /// Sets the behavior of content that overflows the container to be hidden.
         /// [Docs](https://tailwindcss.com/docs/overflow#hiding-content-that-overflows)
         #visibility fn overflow_hidden(mut self) -> Self {
-            self.style().overflow.x = Some(gpui::Overflow::Hidden);
-            self.style().overflow.y = Some(gpui::Overflow::Hidden);
+            self.style().overflow.x = Some(hgpui::Overflow::Hidden);
+            self.style().overflow.y = Some(hgpui::Overflow::Hidden);
             self
         }
 
         /// Sets the behavior of content that overflows the container on the X axis to be hidden.
         /// [Docs](https://tailwindcss.com/docs/overflow#hiding-content-that-overflows)
         #visibility fn overflow_x_hidden(mut self) -> Self {
-            self.style().overflow.x = Some(gpui::Overflow::Hidden);
+            self.style().overflow.x = Some(hgpui::Overflow::Hidden);
             self
         }
 
         /// Sets the behavior of content that overflows the container on the Y axis to be hidden.
         /// [Docs](https://tailwindcss.com/docs/overflow#hiding-content-that-overflows)
         #visibility fn overflow_y_hidden(mut self) -> Self {
-            self.style().overflow.y = Some(gpui::Overflow::Hidden);
+            self.style().overflow.y = Some(hgpui::Overflow::Hidden);
             self
         }
     };
@@ -169,161 +169,161 @@ pub fn cursor_style_methods(input: TokenStream) -> TokenStream {
         /// Sets the cursor style when hovering an element to `default`.
         /// [Docs](https://tailwindcss.com/docs/cursor)
         #visibility fn cursor_default(mut self) -> Self {
-            self.style().mouse_cursor = Some(gpui::CursorStyle::Arrow);
+            self.style().mouse_cursor = Some(hgpui::CursorStyle::Arrow);
             self
         }
 
         /// Sets the cursor style when hovering an element to `pointer`.
         /// [Docs](https://tailwindcss.com/docs/cursor)
         #visibility fn cursor_pointer(mut self) -> Self {
-            self.style().mouse_cursor = Some(gpui::CursorStyle::PointingHand);
+            self.style().mouse_cursor = Some(hgpui::CursorStyle::PointingHand);
             self
         }
 
         /// Sets cursor style when hovering over an element to `text`.
         /// [Docs](https://tailwindcss.com/docs/cursor)
         #visibility fn cursor_text(mut self) -> Self {
-            self.style().mouse_cursor = Some(gpui::CursorStyle::IBeam);
+            self.style().mouse_cursor = Some(hgpui::CursorStyle::IBeam);
             self
         }
 
         /// Sets cursor style when hovering over an element to `move`.
         /// [Docs](https://tailwindcss.com/docs/cursor)
         #visibility fn cursor_move(mut self) -> Self {
-            self.style().mouse_cursor = Some(gpui::CursorStyle::ClosedHand);
+            self.style().mouse_cursor = Some(hgpui::CursorStyle::ClosedHand);
             self
         }
 
         /// Sets cursor style when hovering over an element to `not-allowed`.
         /// [Docs](https://tailwindcss.com/docs/cursor)
         #visibility fn cursor_not_allowed(mut self) -> Self {
-            self.style().mouse_cursor = Some(gpui::CursorStyle::OperationNotAllowed);
+            self.style().mouse_cursor = Some(hgpui::CursorStyle::OperationNotAllowed);
             self
         }
 
         /// Sets cursor style when hovering over an element to `context-menu`.
         /// [Docs](https://tailwindcss.com/docs/cursor)
         #visibility fn cursor_context_menu(mut self) -> Self {
-            self.style().mouse_cursor = Some(gpui::CursorStyle::ContextualMenu);
+            self.style().mouse_cursor = Some(hgpui::CursorStyle::ContextualMenu);
             self
         }
 
         /// Sets cursor style when hovering over an element to `crosshair`.
         /// [Docs](https://tailwindcss.com/docs/cursor)
         #visibility fn cursor_crosshair(mut self) -> Self {
-            self.style().mouse_cursor = Some(gpui::CursorStyle::Crosshair);
+            self.style().mouse_cursor = Some(hgpui::CursorStyle::Crosshair);
             self
         }
 
         /// Sets cursor style when hovering over an element to `vertical-text`.
         /// [Docs](https://tailwindcss.com/docs/cursor)
         #visibility fn cursor_vertical_text(mut self) -> Self {
-            self.style().mouse_cursor = Some(gpui::CursorStyle::IBeamCursorForVerticalLayout);
+            self.style().mouse_cursor = Some(hgpui::CursorStyle::IBeamCursorForVerticalLayout);
             self
         }
 
         /// Sets cursor style when hovering over an element to `alias`.
         /// [Docs](https://tailwindcss.com/docs/cursor)
         #visibility fn cursor_alias(mut self) -> Self {
-            self.style().mouse_cursor = Some(gpui::CursorStyle::DragLink);
+            self.style().mouse_cursor = Some(hgpui::CursorStyle::DragLink);
             self
         }
 
         /// Sets cursor style when hovering over an element to `copy`.
         /// [Docs](https://tailwindcss.com/docs/cursor)
         #visibility fn cursor_copy(mut self) -> Self {
-            self.style().mouse_cursor = Some(gpui::CursorStyle::DragCopy);
+            self.style().mouse_cursor = Some(hgpui::CursorStyle::DragCopy);
             self
         }
 
         /// Sets cursor style when hovering over an element to `no-drop`.
         /// [Docs](https://tailwindcss.com/docs/cursor)
         #visibility fn cursor_no_drop(mut self) -> Self {
-            self.style().mouse_cursor = Some(gpui::CursorStyle::OperationNotAllowed);
+            self.style().mouse_cursor = Some(hgpui::CursorStyle::OperationNotAllowed);
             self
         }
 
         /// Sets cursor style when hovering over an element to `grab`.
         /// [Docs](https://tailwindcss.com/docs/cursor)
         #visibility fn cursor_grab(mut self) -> Self {
-            self.style().mouse_cursor = Some(gpui::CursorStyle::OpenHand);
+            self.style().mouse_cursor = Some(hgpui::CursorStyle::OpenHand);
             self
         }
 
         /// Sets cursor style when hovering over an element to `grabbing`.
         /// [Docs](https://tailwindcss.com/docs/cursor)
         #visibility fn cursor_grabbing(mut self) -> Self {
-            self.style().mouse_cursor = Some(gpui::CursorStyle::ClosedHand);
+            self.style().mouse_cursor = Some(hgpui::CursorStyle::ClosedHand);
             self
         }
 
         /// Sets cursor style when hovering over an element to `ew-resize`.
         /// [Docs](https://tailwindcss.com/docs/cursor)
         #visibility fn cursor_ew_resize(mut self) -> Self {
-            self.style().mouse_cursor = Some(gpui::CursorStyle::ResizeLeftRight);
+            self.style().mouse_cursor = Some(hgpui::CursorStyle::ResizeLeftRight);
             self
         }
 
         /// Sets cursor style when hovering over an element to `ns-resize`.
         /// [Docs](https://tailwindcss.com/docs/cursor)
         #visibility fn cursor_ns_resize(mut self) -> Self {
-            self.style().mouse_cursor = Some(gpui::CursorStyle::ResizeUpDown);
+            self.style().mouse_cursor = Some(hgpui::CursorStyle::ResizeUpDown);
             self
         }
 
         /// Sets cursor style when hovering over an element to `nesw-resize`.
         /// [Docs](https://tailwindcss.com/docs/cursor)
         #visibility fn cursor_nesw_resize(mut self) -> Self {
-            self.style().mouse_cursor = Some(gpui::CursorStyle::ResizeUpRightDownLeft);
+            self.style().mouse_cursor = Some(hgpui::CursorStyle::ResizeUpRightDownLeft);
             self
         }
 
         /// Sets cursor style when hovering over an element to `nwse-resize`.
         /// [Docs](https://tailwindcss.com/docs/cursor)
         #visibility fn cursor_nwse_resize(mut self) -> Self {
-            self.style().mouse_cursor = Some(gpui::CursorStyle::ResizeUpLeftDownRight);
+            self.style().mouse_cursor = Some(hgpui::CursorStyle::ResizeUpLeftDownRight);
             self
         }
 
         /// Sets cursor style when hovering over an element to `col-resize`.
         /// [Docs](https://tailwindcss.com/docs/cursor)
         #visibility fn cursor_col_resize(mut self) -> Self {
-            self.style().mouse_cursor = Some(gpui::CursorStyle::ResizeColumn);
+            self.style().mouse_cursor = Some(hgpui::CursorStyle::ResizeColumn);
             self
         }
 
         /// Sets cursor style when hovering over an element to `row-resize`.
         /// [Docs](https://tailwindcss.com/docs/cursor)
         #visibility fn cursor_row_resize(mut self) -> Self {
-            self.style().mouse_cursor = Some(gpui::CursorStyle::ResizeRow);
+            self.style().mouse_cursor = Some(hgpui::CursorStyle::ResizeRow);
             self
         }
 
         /// Sets cursor style when hovering over an element to `n-resize`.
         /// [Docs](https://tailwindcss.com/docs/cursor)
         #visibility fn cursor_n_resize(mut self) -> Self {
-            self.style().mouse_cursor = Some(gpui::CursorStyle::ResizeUp);
+            self.style().mouse_cursor = Some(hgpui::CursorStyle::ResizeUp);
             self
         }
 
         /// Sets cursor style when hovering over an element to `e-resize`.
         /// [Docs](https://tailwindcss.com/docs/cursor)
         #visibility fn cursor_e_resize(mut self) -> Self {
-            self.style().mouse_cursor = Some(gpui::CursorStyle::ResizeRight);
+            self.style().mouse_cursor = Some(hgpui::CursorStyle::ResizeRight);
             self
         }
 
         /// Sets cursor style when hovering over an element to `s-resize`.
         /// [Docs](https://tailwindcss.com/docs/cursor)
         #visibility fn cursor_s_resize(mut self) -> Self {
-            self.style().mouse_cursor = Some(gpui::CursorStyle::ResizeDown);
+            self.style().mouse_cursor = Some(hgpui::CursorStyle::ResizeDown);
             self
         }
 
         /// Sets cursor style when hovering over an element to `w-resize`.
         /// [Docs](https://tailwindcss.com/docs/cursor)
         #visibility fn cursor_w_resize(mut self) -> Self {
-            self.style().mouse_cursor = Some(gpui::CursorStyle::ResizeLeft);
+            self.style().mouse_cursor = Some(hgpui::CursorStyle::ResizeLeft);
             self
         }
 
@@ -387,7 +387,7 @@ pub fn box_shadow_style_methods(input: TokenStream) -> TokenStream {
     let output = quote! {
         /// Sets the box shadow of the element.
         /// [Docs](https://tailwindcss.com/docs/box-shadow)
-        #visibility fn shadow(mut self, shadows: std::vec::Vec<gpui::BoxShadow>) -> Self {
+        #visibility fn shadow(mut self, shadows: std::vec::Vec<hgpui::BoxShadow>) -> Self {
             self.style().box_shadow = Some(shadows);
             self
         }
@@ -402,7 +402,7 @@ pub fn box_shadow_style_methods(input: TokenStream) -> TokenStream {
         /// Sets the box shadow of the element.
         /// [Docs](https://tailwindcss.com/docs/box-shadow)
         #visibility fn shadow_2xs(mut self) -> Self {
-            use gpui::{BoxShadow, hsla, px};
+            use hgpui::{BoxShadow, hsla, px};
             use std::vec;
 
             self.style().box_shadow = Some(vec![
@@ -414,7 +414,7 @@ pub fn box_shadow_style_methods(input: TokenStream) -> TokenStream {
         /// Sets the box shadow of the element.
         /// [Docs](https://tailwindcss.com/docs/box-shadow)
         #visibility fn shadow_xs(mut self) -> Self {
-            use gpui::{BoxShadow, hsla, px};
+            use hgpui::{BoxShadow, hsla, px};
             use std::vec;
 
             self.style().box_shadow = Some(vec![
@@ -426,7 +426,7 @@ pub fn box_shadow_style_methods(input: TokenStream) -> TokenStream {
         /// Sets the box shadow of the element.
         /// [Docs](https://tailwindcss.com/docs/box-shadow)
         #visibility fn shadow_sm(mut self) -> Self {
-            use gpui::{BoxShadow, hsla, px};
+            use hgpui::{BoxShadow, hsla, px};
             use std::vec;
 
             self.style().box_shadow = Some(vec![
@@ -439,7 +439,7 @@ pub fn box_shadow_style_methods(input: TokenStream) -> TokenStream {
         /// Sets the box shadow of the element.
         /// [Docs](https://tailwindcss.com/docs/box-shadow)
         #visibility fn shadow_md(mut self) -> Self {
-            use gpui::{BoxShadow, hsla, px};
+            use hgpui::{BoxShadow, hsla, px};
             use std::vec;
 
             self.style().box_shadow = Some(vec![
@@ -452,7 +452,7 @@ pub fn box_shadow_style_methods(input: TokenStream) -> TokenStream {
         /// Sets the box shadow of the element.
         /// [Docs](https://tailwindcss.com/docs/box-shadow)
         #visibility fn shadow_lg(mut self) -> Self {
-            use gpui::{BoxShadow, hsla, px};
+            use hgpui::{BoxShadow, hsla, px};
             use std::vec;
 
             self.style().box_shadow = Some(vec![
@@ -465,7 +465,7 @@ pub fn box_shadow_style_methods(input: TokenStream) -> TokenStream {
         /// Sets the box shadow of the element.
         /// [Docs](https://tailwindcss.com/docs/box-shadow)
         #visibility fn shadow_xl(mut self) -> Self {
-            use gpui::{BoxShadow, hsla, px};
+            use hgpui::{BoxShadow, hsla, px};
             use std::vec;
 
             self.style().box_shadow = Some(vec![
@@ -478,7 +478,7 @@ pub fn box_shadow_style_methods(input: TokenStream) -> TokenStream {
         /// Sets the box shadow of the element.
         /// [Docs](https://tailwindcss.com/docs/box-shadow)
         #visibility fn shadow_2xl(mut self) -> Self {
-            use gpui::{BoxShadow, hsla, px};
+            use hgpui::{BoxShadow, hsla, px};
             use std::vec;
 
             self.style().box_shadow = Some(vec![
@@ -645,7 +645,7 @@ fn generate_predefined_setter(
         .iter()
         .map(|field_tokens| {
             quote! {
-                style.#field_tokens = Some((#negation_token gpui::#length_tokens).into());
+                style.#field_tokens = Some((#negation_token hgpui::#length_tokens).into());
             }
         })
         .collect::<Vec<_>>();
@@ -686,7 +686,7 @@ fn generate_custom_value_setter(
 
     let method = quote! {
         #[doc = #doc_string]
-        #visibility fn #method_name(mut self, length: impl std::clone::Clone + Into<gpui::#length_type>) -> Self {
+        #visibility fn #method_name(mut self, length: impl std::clone::Clone + Into<hgpui::#length_type>) -> Self {
             let style = self.style();
             #(#field_assignments)*
             self
@@ -1417,7 +1417,7 @@ fn border_suffixes() -> Vec<BorderStyleSuffix> {
 }
 
 /// Generates the transform shortcut methods for the `Styled` trait: one parameterized method per
-/// [`CssTransform`](gpui::CssTransform) builder function, so a transform reads
+/// [`CssTransform`](hgpui::CssTransform) builder function, so a transform reads
 /// `div().scale(2.0, 2.0)` instead of
 /// `div().transform(CssTransform::identity().scale(2.0, 2.0))`.
 ///
@@ -1433,45 +1433,45 @@ pub fn transform_style_methods(input: TokenStream) -> TokenStream {
     let output = quote! {
         /// Appends `translate(x, y)` to the element's transform.
         /// [Docs](https://developer.mozilla.org/en-US/docs/Web/CSS/transform-function/translate)
-        #visibility fn translate(mut self, x: impl Into<gpui::Pixels>, y: impl Into<gpui::Pixels>) -> Self {
+        #visibility fn translate(mut self, x: impl Into<hgpui::Pixels>, y: impl Into<hgpui::Pixels>) -> Self {
             let style = self.style();
-            let transform = style.transform.take().unwrap_or_else(gpui::CssTransform::identity);
+            let transform = style.transform.take().unwrap_or_else(hgpui::CssTransform::identity);
             style.transform = Some(transform.translate(x, y));
             self
         }
 
         /// Appends `translateX(x)` to the element's transform.
         /// [Docs](https://developer.mozilla.org/en-US/docs/Web/CSS/transform-function/translateX)
-        #visibility fn translate_x(mut self, x: impl Into<gpui::Pixels>) -> Self {
+        #visibility fn translate_x(mut self, x: impl Into<hgpui::Pixels>) -> Self {
             let style = self.style();
-            let transform = style.transform.take().unwrap_or_else(gpui::CssTransform::identity);
+            let transform = style.transform.take().unwrap_or_else(hgpui::CssTransform::identity);
             style.transform = Some(transform.translate_x(x));
             self
         }
 
         /// Appends `translateY(y)` to the element's transform.
         /// [Docs](https://developer.mozilla.org/en-US/docs/Web/CSS/transform-function/translateY)
-        #visibility fn translate_y(mut self, y: impl Into<gpui::Pixels>) -> Self {
+        #visibility fn translate_y(mut self, y: impl Into<hgpui::Pixels>) -> Self {
             let style = self.style();
-            let transform = style.transform.take().unwrap_or_else(gpui::CssTransform::identity);
+            let transform = style.transform.take().unwrap_or_else(hgpui::CssTransform::identity);
             style.transform = Some(transform.translate_y(y));
             self
         }
 
         /// Appends `translate3d(x, y, z)` to the element's transform. Declared for CSS parity; the
         /// 3D functions are not implemented yet and currently contribute the identity.
-        #visibility fn translate3d(mut self, x: impl Into<gpui::Pixels>, y: impl Into<gpui::Pixels>, z: impl Into<gpui::Pixels>) -> Self {
+        #visibility fn translate3d(mut self, x: impl Into<hgpui::Pixels>, y: impl Into<hgpui::Pixels>, z: impl Into<hgpui::Pixels>) -> Self {
             let style = self.style();
-            let transform = style.transform.take().unwrap_or_else(gpui::CssTransform::identity);
+            let transform = style.transform.take().unwrap_or_else(hgpui::CssTransform::identity);
             style.transform = Some(transform.translate3d(x, y, z));
             self
         }
 
         /// Appends `translateZ(z)` to the element's transform. Declared for CSS parity; not
         /// implemented yet and currently contributes the identity.
-        #visibility fn translate_z(mut self, z: impl Into<gpui::Pixels>) -> Self {
+        #visibility fn translate_z(mut self, z: impl Into<hgpui::Pixels>) -> Self {
             let style = self.style();
-            let transform = style.transform.take().unwrap_or_else(gpui::CssTransform::identity);
+            let transform = style.transform.take().unwrap_or_else(hgpui::CssTransform::identity);
             style.transform = Some(transform.translate_z(z));
             self
         }
@@ -1480,7 +1480,7 @@ pub fn transform_style_methods(input: TokenStream) -> TokenStream {
         /// [Docs](https://developer.mozilla.org/en-US/docs/Web/CSS/transform-function/scale)
         #visibility fn scale(mut self, x: f32, y: f32) -> Self {
             let style = self.style();
-            let transform = style.transform.take().unwrap_or_else(gpui::CssTransform::identity);
+            let transform = style.transform.take().unwrap_or_else(hgpui::CssTransform::identity);
             style.transform = Some(transform.scale(x, y));
             self
         }
@@ -1488,7 +1488,7 @@ pub fn transform_style_methods(input: TokenStream) -> TokenStream {
         /// Appends `scale(factor, factor)` to the element's transform.
         #visibility fn scale_both(mut self, factor: f32) -> Self {
             let style = self.style();
-            let transform = style.transform.take().unwrap_or_else(gpui::CssTransform::identity);
+            let transform = style.transform.take().unwrap_or_else(hgpui::CssTransform::identity);
             style.transform = Some(transform.scale_both(factor));
             self
         }
@@ -1497,7 +1497,7 @@ pub fn transform_style_methods(input: TokenStream) -> TokenStream {
         /// [Docs](https://developer.mozilla.org/en-US/docs/Web/CSS/transform-function/scaleX)
         #visibility fn scale_x(mut self, x: f32) -> Self {
             let style = self.style();
-            let transform = style.transform.take().unwrap_or_else(gpui::CssTransform::identity);
+            let transform = style.transform.take().unwrap_or_else(hgpui::CssTransform::identity);
             style.transform = Some(transform.scale_x(x));
             self
         }
@@ -1506,7 +1506,7 @@ pub fn transform_style_methods(input: TokenStream) -> TokenStream {
         /// [Docs](https://developer.mozilla.org/en-US/docs/Web/CSS/transform-function/scaleY)
         #visibility fn scale_y(mut self, y: f32) -> Self {
             let style = self.style();
-            let transform = style.transform.take().unwrap_or_else(gpui::CssTransform::identity);
+            let transform = style.transform.take().unwrap_or_else(hgpui::CssTransform::identity);
             style.transform = Some(transform.scale_y(y));
             self
         }
@@ -1515,7 +1515,7 @@ pub fn transform_style_methods(input: TokenStream) -> TokenStream {
         /// implemented yet and currently contributes the identity.
         #visibility fn scale3d(mut self, x: f32, y: f32, z: f32) -> Self {
             let style = self.style();
-            let transform = style.transform.take().unwrap_or_else(gpui::CssTransform::identity);
+            let transform = style.transform.take().unwrap_or_else(hgpui::CssTransform::identity);
             style.transform = Some(transform.scale3d(x, y, z));
             self
         }
@@ -1524,69 +1524,69 @@ pub fn transform_style_methods(input: TokenStream) -> TokenStream {
         /// yet and currently contributes the identity.
         #visibility fn scale_z(mut self, z: f32) -> Self {
             let style = self.style();
-            let transform = style.transform.take().unwrap_or_else(gpui::CssTransform::identity);
+            let transform = style.transform.take().unwrap_or_else(hgpui::CssTransform::identity);
             style.transform = Some(transform.scale_z(z));
             self
         }
 
         /// Appends `rotate(angle)` to the element's transform.
         /// [Docs](https://developer.mozilla.org/en-US/docs/Web/CSS/transform-function/rotate)
-        #visibility fn rotate(mut self, angle: impl Into<gpui::Radians>) -> Self {
+        #visibility fn rotate(mut self, angle: impl Into<hgpui::Radians>) -> Self {
             let style = self.style();
-            let transform = style.transform.take().unwrap_or_else(gpui::CssTransform::identity);
+            let transform = style.transform.take().unwrap_or_else(hgpui::CssTransform::identity);
             style.transform = Some(transform.rotate(angle));
             self
         }
 
         /// Appends `rotateX(angle)` to the element's transform. Declared for CSS parity; not
         /// implemented yet and currently contributes the identity.
-        #visibility fn rotate_x(mut self, angle: impl Into<gpui::Radians>) -> Self {
+        #visibility fn rotate_x(mut self, angle: impl Into<hgpui::Radians>) -> Self {
             let style = self.style();
-            let transform = style.transform.take().unwrap_or_else(gpui::CssTransform::identity);
+            let transform = style.transform.take().unwrap_or_else(hgpui::CssTransform::identity);
             style.transform = Some(transform.rotate_x(angle));
             self
         }
 
         /// Appends `rotateY(angle)` to the element's transform. Declared for CSS parity; not
         /// implemented yet and currently contributes the identity.
-        #visibility fn rotate_y(mut self, angle: impl Into<gpui::Radians>) -> Self {
+        #visibility fn rotate_y(mut self, angle: impl Into<hgpui::Radians>) -> Self {
             let style = self.style();
-            let transform = style.transform.take().unwrap_or_else(gpui::CssTransform::identity);
+            let transform = style.transform.take().unwrap_or_else(hgpui::CssTransform::identity);
             style.transform = Some(transform.rotate_y(angle));
             self
         }
 
         /// Appends `rotateZ(angle)`, a clockwise rotation in the 2D plane (same as `rotate`).
-        #visibility fn rotate_z(mut self, angle: impl Into<gpui::Radians>) -> Self {
+        #visibility fn rotate_z(mut self, angle: impl Into<hgpui::Radians>) -> Self {
             let style = self.style();
-            let transform = style.transform.take().unwrap_or_else(gpui::CssTransform::identity);
+            let transform = style.transform.take().unwrap_or_else(hgpui::CssTransform::identity);
             style.transform = Some(transform.rotate_z(angle));
             self
         }
 
         /// Appends `skewX(angle)` to the element's transform.
         /// [Docs](https://developer.mozilla.org/en-US/docs/Web/CSS/transform-function/skewX)
-        #visibility fn skew_x(mut self, angle: impl Into<gpui::Radians>) -> Self {
+        #visibility fn skew_x(mut self, angle: impl Into<hgpui::Radians>) -> Self {
             let style = self.style();
-            let transform = style.transform.take().unwrap_or_else(gpui::CssTransform::identity);
+            let transform = style.transform.take().unwrap_or_else(hgpui::CssTransform::identity);
             style.transform = Some(transform.skew_x(angle));
             self
         }
 
         /// Appends `skewY(angle)` to the element's transform.
         /// [Docs](https://developer.mozilla.org/en-US/docs/Web/CSS/transform-function/skewY)
-        #visibility fn skew_y(mut self, angle: impl Into<gpui::Radians>) -> Self {
+        #visibility fn skew_y(mut self, angle: impl Into<hgpui::Radians>) -> Self {
             let style = self.style();
-            let transform = style.transform.take().unwrap_or_else(gpui::CssTransform::identity);
+            let transform = style.transform.take().unwrap_or_else(hgpui::CssTransform::identity);
             style.transform = Some(transform.skew_y(angle));
             self
         }
 
         /// Appends `perspective(d)` to the element's transform. Declared for CSS parity; not
         /// implemented yet and currently contributes the identity.
-        #visibility fn perspective(mut self, d: impl Into<gpui::Pixels>) -> Self {
+        #visibility fn perspective(mut self, d: impl Into<hgpui::Pixels>) -> Self {
             let style = self.style();
-            let transform = style.transform.take().unwrap_or_else(gpui::CssTransform::identity);
+            let transform = style.transform.take().unwrap_or_else(hgpui::CssTransform::identity);
             style.transform = Some(transform.perspective(d));
             self
         }
@@ -1594,9 +1594,9 @@ pub fn transform_style_methods(input: TokenStream) -> TokenStream {
         /// Appends `matrix(a, b, c, d, e, f)` — the CSS 2D affine matrix (`e`/`f` in pixels) — to
         /// the element's transform.
         /// [Docs](https://developer.mozilla.org/en-US/docs/Web/CSS/transform-function/matrix)
-        #visibility fn matrix(mut self, a: f32, b: f32, c: f32, d: f32, e: impl Into<gpui::Pixels>, f: impl Into<gpui::Pixels>) -> Self {
+        #visibility fn matrix(mut self, a: f32, b: f32, c: f32, d: f32, e: impl Into<hgpui::Pixels>, f: impl Into<hgpui::Pixels>) -> Self {
             let style = self.style();
-            let transform = style.transform.take().unwrap_or_else(gpui::CssTransform::identity);
+            let transform = style.transform.take().unwrap_or_else(hgpui::CssTransform::identity);
             style.transform = Some(transform.matrix(a, b, c, d, e, f));
             self
         }
@@ -1605,7 +1605,7 @@ pub fn transform_style_methods(input: TokenStream) -> TokenStream {
         /// implemented yet and currently contributes the identity.
         #visibility fn matrix3d(mut self, values: [f32; 16]) -> Self {
             let style = self.style();
-            let transform = style.transform.take().unwrap_or_else(gpui::CssTransform::identity);
+            let transform = style.transform.take().unwrap_or_else(hgpui::CssTransform::identity);
             style.transform = Some(transform.matrix3d(values));
             self
         }

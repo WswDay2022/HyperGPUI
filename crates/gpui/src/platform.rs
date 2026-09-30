@@ -165,7 +165,7 @@ pub trait Platform: 'static {
         let (sources_tx, sources_rx) = oneshot::channel();
         sources_tx
             .send(Err(anyhow::anyhow!(
-                "gpui was compiled without the screen-capture feature"
+                "hgpui was compiled without the screen-capture feature"
             )))
             .ok();
         sources_rx
@@ -234,7 +234,7 @@ pub trait Platform: 'static {
     fn on_memory_warning(&self, _callback: Box<dyn FnMut()>) {}
 
     /// The platform's gesture recognition services, if it provides any
-    /// beyond gpui's portable recognizers. See
+    /// beyond hgpui's portable recognizers. See
     /// [`PlatformGestures`](crate::PlatformGestures).
     fn gestures(&self) -> Option<Rc<dyn PlatformGestures>> {
         None
@@ -342,7 +342,7 @@ pub trait Platform: 'static {
 
     /// Register additional GPU device requirements (features, limits) before
     /// the first window is opened.  The concrete type inside the `Box` must be
-    /// `gpui_wgpu::WgpuDeviceRequirements`.
+    /// `hgpui_wgpu::WgpuDeviceRequirements`.
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     fn set_gpu_requirements(&self, _requirements: Box<dyn std::any::Any>) {}
 

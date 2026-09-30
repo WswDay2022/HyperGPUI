@@ -7,7 +7,7 @@ mod example_prelude;
 
 use std::time::Duration;
 
-use gpui::{
+use hgpui::{
     AnyElement, App, AppContext, Bounds, Context, ElementId, Lerp, Rgba, Window, WindowBounds,
     WindowOptions, actions, div, ease_in_out, prelude::*, px, rgb, size,
 };
@@ -93,7 +93,7 @@ impl Render for TransitionExample {
 }
 
 fn main() {
-    gpui_platform::application().run(|cx: &mut App| {
+    hgpui_platform::application().run(|cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(500.), px(650.)), cx);
         cx.open_window(
             WindowOptions {

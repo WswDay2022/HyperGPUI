@@ -295,8 +295,8 @@ impl Keymap {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate as gpui;
-    use gpui::{NoAction, Unbind};
+    use crate as hgpui;
+    use hgpui::{NoAction, Unbind};
 
     actions!(
         test_only,

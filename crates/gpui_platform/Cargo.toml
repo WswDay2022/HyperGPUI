@@ -1,5 +1,5 @@
 [package]
-name = "gpui_ce_platform"
+name = "hgpui_platform"
 version = "0.1.0"
 description.workspace = true
 edition.workspace = true
@@ -14,32 +14,32 @@ path = "src/gpui_platform.rs"
 
 [features]
 default = []
-font-kit = ["gpui_macos/font-kit"]
-test-support = ["gpui/test-support", "gpui_macos/test-support"]
+font-kit = ["hgpui_macos/font-kit"]
+test-support = ["hgpui/test-support", "hgpui_macos/test-support"]
 screen-capture = [
-  "gpui/screen-capture",
-  "gpui_macos/screen-capture",
-  "gpui_windows/screen-capture",
-  "gpui_linux/screen-capture",
+  "hgpui/screen-capture",
+  "hgpui_macos/screen-capture",
+  "hgpui_windows/screen-capture",
+  "hgpui_linux/screen-capture",
 ]
-runtime_shaders = ["gpui_macos/runtime_shaders"]
-wayland = ["gpui_linux/wayland"]
-x11 = ["gpui_linux/x11"]
-wgpu = ["gpui_windows/wgpu"]
+runtime_shaders = ["hgpui_macos/runtime_shaders"]
+wayland = ["hgpui_linux/wayland"]
+x11 = ["hgpui_linux/x11"]
+wgpu = ["hgpui_windows/wgpu"]
 
 [dependencies]
-gpui.workspace = true
+hgpui.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
-gpui_macos.workspace = true
+hgpui_macos.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
-gpui_windows.workspace = true
-gpui = { workspace = true, features = ["windows-manifest"] }
+hgpui_windows.workspace = true
+hgpui = { workspace = true, features = ["windows-manifest"] }
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
-gpui_linux.workspace = true
+hgpui_linux.workspace = true
 
 [target.'cfg(target_family = "wasm")'.dependencies]
-gpui_web.workspace = true
+hgpui_web.workspace = true
 console_error_panic_hook.workspace = true

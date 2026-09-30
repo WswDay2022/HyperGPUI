@@ -15,7 +15,7 @@ use calloop::{
 use calloop_wayland_source::WaylandSource;
 use collections::HashMap;
 use filedescriptor::Pipe;
-use gpui::ResultExt as _;
+use hgpui::ResultExt as _;
 use smallvec::SmallVec;
 use url::Url;
 use wayland_backend::client::ObjectId;
@@ -94,7 +94,7 @@ use crate::linux::{
     },
     xdg_desktop_portal::{Event as XDPEvent, XDPEventSource},
 };
-use gpui::{
+use hgpui::{
     AnyWindowHandle, Bounds, Capslock, CursorStyle, DevicePixels, DisplayId, FileDropEvent,
     ForegroundExecutor, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, ModifiersChangedEvent,
     MouseButton, MouseDownEvent, MouseExitEvent, MouseMoveEvent, MouseUpEvent, NavigationDirection,
@@ -102,7 +102,7 @@ use gpui::{
     ScrollDelta, ScrollWheelEvent, SharedString, Size, TouchPhase, WindowButtonLayout, WindowKind,
     WindowParams, point, profiler, px, size,
 };
-use gpui_wgpu::{CompositorGpuHint, GpuContext};
+use hgpui_wgpu::{CompositorGpuHint, GpuContext};
 use wayland_protocols::wp::linux_dmabuf::zv1::client::{
     zwp_linux_dmabuf_feedback_v1, zwp_linux_dmabuf_v1,
 };
@@ -307,7 +307,7 @@ pub(crate) struct WaylandClientState {
     globals: Globals,
     pub gpu_context: GpuContext,
     pub compositor_gpu: Option<CompositorGpuHint>,
-    pub gpu_requirements: Option<gpui_wgpu::WgpuDeviceRequirements>,
+    pub gpu_requirements: Option<hgpui_wgpu::WgpuDeviceRequirements>,
     wl_seat: wl_seat::WlSeat, // TODO: Multi seat support
     wl_pointer: Option<wl_pointer::WlPointer>,
     pinch_gesture: Option<zwp_pointer_gesture_pinch_v1::ZwpPointerGesturePinchV1>,
@@ -904,7 +904,7 @@ impl LinuxClient for WaylandClient {
     #[cfg(feature = "screen-capture")]
     fn screen_capture_sources(
         &self,
-    ) -> futures::channel::oneshot::Receiver<anyhow::Result<Vec<Rc<dyn gpui::ScreenCaptureSource>>>>
+    ) -> futures::channel::oneshot::Receiver<anyhow::Result<Vec<Rc<dyn hgpui::ScreenCaptureSource>>>>
     {
         // TODO: Get screen capture working on wayland. Be sure to try window resizing as that may
         // be tricky.
@@ -920,7 +920,7 @@ impl LinuxClient for WaylandClient {
     }
 
     fn set_gpu_requirements(&self, requirements: Box<dyn std::any::Any>) {
-        if let Ok(reqs) = requirements.downcast::<gpui_wgpu::WgpuDeviceRequirements>() {
+        if let Ok(reqs) = requirements.downcast::<hgpui_wgpu::WgpuDeviceRequirements>() {
             self.0.borrow_mut().gpu_requirements = Some(*reqs);
         } else {
             log::warn!("set_gpu_requirements: unexpected type, expected WgpuDeviceRequirements");
@@ -1099,7 +1099,7 @@ impl LinuxClient for WaylandClient {
             .log_err();
     }
 
-    fn write_to_primary(&self, item: gpui::ClipboardItem) {
+    fn write_to_primary(&self, item: hgpui::ClipboardItem) {
         let mut state = self.0.borrow_mut();
         let (Some(primary_selection_manager), Some(primary_selection)) = (
             state.globals.primary_selection_manager.clone(),
@@ -1124,7 +1124,7 @@ impl LinuxClient for WaylandClient {
         }
     }
 
-    fn write_to_clipboard(&self, item: gpui::ClipboardItem) {
+    fn write_to_clipboard(&self, item: hgpui::ClipboardItem) {
         let mut state = self.0.borrow_mut();
         let (Some(data_device_manager), Some(data_device)) = (
             state.globals.data_device_manager.clone(),
@@ -1149,11 +1149,11 @@ impl LinuxClient for WaylandClient {
         }
     }
 
-    fn read_from_primary(&self) -> Option<gpui::ClipboardItem> {
+    fn read_from_primary(&self) -> Option<hgpui::ClipboardItem> {
         self.0.borrow_mut().clipboard.read_primary()
     }
 
-    fn read_from_clipboard(&self) -> Option<gpui::ClipboardItem> {
+    fn read_from_clipboard(&self) -> Option<hgpui::ClipboardItem> {
         self.0.borrow_mut().clipboard.read()
     }
 
@@ -2392,7 +2392,7 @@ impl Dispatch<zwp_pointer_gesture_pinch_v1::ZwpPointerGesturePinchV1, ()>
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        use gpui::PinchEvent;
+        use hgpui::PinchEvent;
 
         let client = this.get_client();
         let mut state = client.borrow_mut();
@@ -2619,7 +2619,7 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
 
                             let input = PlatformInput::FileDrop(FileDropEvent::Entered {
                                 position,
-                                paths: gpui::ExternalPaths(paths),
+                                paths: hgpui::ExternalPaths(paths),
                             });
 
                             let client = this.get_client();

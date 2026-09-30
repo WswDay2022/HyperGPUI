@@ -1,7 +1,7 @@
 #[cfg(not(target_family = "wasm"))]
 use anyhow::Context as _;
 #[cfg(not(target_family = "wasm"))]
-use gpui::ResultExt;
+use hgpui::ResultExt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use wgpu::TextureFormat;
@@ -23,11 +23,11 @@ pub struct CompositorGpuHint {
 }
 
 /// Extra wgpu features and limits that an application can request on top of
-/// gpui's baseline.  Pass an instance to the platform via
-/// [`gpui::App::set_gpu_requirements`] *before* opening any windows.
+/// hgpui's baseline.  Pass an instance to the platform via
+/// [`hgpui::App::set_gpu_requirements`] *before* opening any windows.
 #[derive(Clone, Debug, Default)]
 pub struct WgpuDeviceRequirements {
-    /// Additional [`wgpu::Features`] to enable.  These are OR-ed with gpui's
+    /// Additional [`wgpu::Features`] to enable.  These are OR-ed with hgpui's
     /// own required features.
     pub features: wgpu::Features,
     /// Additional [`wgpu::Limits`] to request.  Each field is merged by taking
@@ -80,7 +80,7 @@ impl WgpuContext {
         // Select an adapter by actually testing surface configuration with the real device.
         // This is the only reliable way to determine compatibility on hybrid GPU systems.
         let (adapter, device, queue, dual_source_blending, color_texture_format) =
-            gpui::block_on(Self::select_adapter_and_device(
+            hgpui::block_on(Self::select_adapter_and_device(
                 &instance,
                 device_id_filter,
                 surface,

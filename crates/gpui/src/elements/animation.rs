@@ -361,7 +361,7 @@ mod tests {
             );
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_repeating_animation_schedules_animation_frames(cx: &mut TestAppContext) {
         let (rendered_deltas, window) = open_test_window(cx);
 
@@ -373,7 +373,7 @@ mod tests {
         }
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_reduce_motion_renders_single_static_frame(cx: &mut TestAppContext) {
         cx.update(|cx| cx.set_reduce_motion(true));
         let (rendered_deltas, window) = open_test_window(cx);

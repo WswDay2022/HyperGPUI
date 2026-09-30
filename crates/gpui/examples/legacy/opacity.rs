@@ -1,7 +1,7 @@
 use std::{fs, path::PathBuf};
 
 use anyhow::Result;
-use gpui::{
+use hgpui::{
     App, AssetSource, Bounds, BoxShadow, ClickEvent, Context, SharedString, Task, Window,
     WindowBounds, WindowOptions, div, hsla, img, prelude::*, px, rgb, size, svg,
 };
@@ -80,7 +80,7 @@ impl Render for HelloWorld {
                     .justify_center()
                     .items_center()
                     .border_1()
-                    .text_color(gpui::blue())
+                    .text_color(hgpui::blue())
                     .child(div().child("This is background text.")),
             )
             .child(
@@ -96,10 +96,10 @@ impl Render for HelloWorld {
                     .flex()
                     .justify_center()
                     .items_center()
-                    .background(gpui::white())
+                    .background(hgpui::white())
                     .border_3()
-                    .border_color(gpui::red())
-                    .text_color(gpui::yellow())
+                    .border_color(hgpui::red())
+                    .text_color(hgpui::yellow())
                     .child(
                         div()
                             .flex()
@@ -108,9 +108,9 @@ impl Render for HelloWorld {
                             .justify_center()
                             .items_center()
                             .size(px(300.))
-                            .background(gpui::blue())
+                            .background(hgpui::blue())
                             .border_3()
-                            .border_color(gpui::black())
+                            .border_color(hgpui::black())
                             .shadow(vec![
                                 BoxShadow::new(px(10.0), px(10.0), hsla(0.0, 0.0, 0.0, 0.5))
                                     .blur_radius(px(1.0))
@@ -125,17 +125,17 @@ impl Render for HelloWorld {
                                     .justify_center()
                                     .items_center()
                                     .p_4()
-                                    .background(gpui::black())
-                                    .text_color(gpui::white())
+                                    .background(hgpui::black())
+                                    .text_color(hgpui::white())
                                     .text_decoration_2()
                                     .text_decoration_wavy()
-                                    .text_decoration_color(gpui::red())
+                                    .text_decoration_color(hgpui::red())
                                     .child(format!("opacity: {:.1}", self.opacity)),
                             )
                             .child(
                                 svg()
                                     .path("image/arrow_circle.svg")
-                                    .text_color(gpui::black())
+                                    .text_color(hgpui::black())
                                     .text_2xl()
                                     .size_8(),
                             )
@@ -155,7 +155,7 @@ impl Render for HelloWorld {
 }
 
 fn main() {
-    gpui_platform::application()
+    hgpui_platform::application()
         .with_assets(Assets {
             base: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples"),
         })

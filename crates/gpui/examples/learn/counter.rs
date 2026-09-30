@@ -20,7 +20,7 @@ mod example_prelude;
 
 use std::f32::consts::TAU;
 
-use gpui::{
+use hgpui::{
     App, Bounds, Context, Element, ElementId, FocusHandle, FontWeight, GlobalElementId,
     InteractiveElement, IntoElement, KeyBinding, LayoutId, ParentElement, PathBuilder, Point,
     Render, SharedString, Size, Style, Styled, TitlebarOptions, Window, WindowBounds,
@@ -57,7 +57,7 @@ impl Element for RippleElement {
     fn request_layout(
         &mut self,
         _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&gpui::InspectorElementId>,
+        _inspector_id: Option<&hgpui::InspectorElementId>,
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
@@ -73,8 +73,8 @@ impl Element for RippleElement {
     fn prepaint(
         &mut self,
         _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&gpui::InspectorElementId>,
-        _bounds: gpui::Bounds<gpui::Pixels>,
+        _inspector_id: Option<&hgpui::InspectorElementId>,
+        _bounds: hgpui::Bounds<hgpui::Pixels>,
         _state: &mut Self::RequestLayoutState,
         _window: &mut Window,
         _cx: &mut App,
@@ -84,8 +84,8 @@ impl Element for RippleElement {
     fn paint(
         &mut self,
         _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&gpui::InspectorElementId>,
-        bounds: gpui::Bounds<gpui::Pixels>,
+        _inspector_id: Option<&hgpui::InspectorElementId>,
+        bounds: hgpui::Bounds<hgpui::Pixels>,
         _request_layout: &mut Self::RequestLayoutState,
         _prepaint: &mut Self::PrepaintState,
         window: &mut Window,
@@ -99,7 +99,7 @@ impl Element for RippleElement {
         let scale = 1.0 - (1.0 - t).powi(3);
         let alpha = (1.0 - t).powf(1.8);
 
-        let center: Point<gpui::Pixels> = bounds.center();
+        let center: Point<hgpui::Pixels> = bounds.center();
         let max_r = bounds.size.width.min(bounds.size.height) / 2.0;
         let radius = max_r * scale;
         let stroke_width = px(max_r.as_f32() * 0.28 * (1.0 - t * 0.7));
@@ -327,7 +327,7 @@ fn kbd_hint(key: &'static str, label: &'static str) -> impl IntoElement {
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 fn main() {
-    gpui_platform::application().run(|cx: &mut App| {
+    hgpui_platform::application().run(|cx: &mut App| {
         cx.bind_keys([
             KeyBinding::new("space", Increment, Some("Counter")),
             KeyBinding::new("q", example_prelude::Quit, Some("Counter")),
@@ -344,7 +344,7 @@ fn main() {
                     appears_transparent: false,
                     ..Default::default()
                 }),
-                window_background: gpui::WindowBackgroundAppearance::Opaque,
+                window_background: hgpui::WindowBackgroundAppearance::Opaque,
                 is_resizable: false,
                 window_decorations: Some(WindowDecorations::Client),
                 ..Default::default()

@@ -192,8 +192,8 @@ pub trait ColorExt {
     ///
     /// Example:
     /// ```
-    /// use gpui::ColorExt;
-    /// let color = gpui::red();
+    /// use hgpui::ColorExt;
+    /// let color = hgpui::red();
     /// let faded_color = color.opacity(0.5);
     /// assert_eq!(faded_color.alpha, 0.5);
     /// ```
@@ -202,7 +202,7 @@ pub trait ColorExt {
     ///
     /// Example:
     /// ```
-    /// use gpui::{hsla, ColorExt};
+    /// use hgpui::{hsla, ColorExt};
     /// let color = hsla(0.7, 1.0, 0.5, 0.7); // A saturated blue
     /// let faded_color = color.opacity(0.16);
     /// assert!((faded_color.alpha - 0.112).abs() < 1e-6);

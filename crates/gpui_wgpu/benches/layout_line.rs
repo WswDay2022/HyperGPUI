@@ -1,6 +1,6 @@
 use criterion::{Criterion, criterion_group, criterion_main};
-use gpui::{FontFallbacks, FontRun, PlatformTextSystem, font, px};
-use gpui_ce_wgpu::CosmicTextSystem;
+use hgpui::{FontFallbacks, FontRun, PlatformTextSystem, font, px};
+use hgpui_wgpu::CosmicTextSystem;
 use std::borrow::Cow;
 
 const LILEX: &[u8] = include_bytes!("../../../assets/fonts/lilex/Lilex-Regular.ttf");

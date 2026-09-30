@@ -1712,21 +1712,21 @@ impl sum_tree::SeekTarget<'_, ListItemSummary, ListItemSummary> for Height {
 #[cfg(test)]
 mod test {
 
-    use gpui::{ScrollDelta, ScrollWheelEvent};
+    use hgpui::{ScrollDelta, ScrollWheelEvent};
     use std::cell::Cell;
     use std::rc::Rc;
 
     use crate::{
-        self as gpui, AppContext, Bounds, Context, Element, FollowMode, IntoElement, ListState,
+        self as hgpui, AppContext, Bounds, Context, Element, FollowMode, IntoElement, ListState,
         Render, Styled, TestAppContext, Window, canvas, div, list, point, px, size,
     };
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_autoscroll_above_item_top_renders_items_above(cx: &mut TestAppContext) {
         let cx = cx.add_empty_window();
 
         let state = ListState::new(5, crate::ListAlignment::Top, px(10.));
-        state.scroll_to(gpui::ListOffset {
+        state.scroll_to(hgpui::ListOffset {
             item_ix: 2,
             offset_in_item: px(0.),
         });
@@ -1774,14 +1774,14 @@ mod test {
         assert_eq!(scroll_top.offset_in_item, px(10.));
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_reset_after_paint_before_scroll(cx: &mut TestAppContext) {
         let cx = cx.add_empty_window();
 
         let state = ListState::new(5, crate::ListAlignment::Top, px(10.));
 
         // Ensure that the list is scrolled to the top
-        state.scroll_to(gpui::ListOffset {
+        state.scroll_to(hgpui::ListOffset {
             item_ix: 0,
             offset_in_item: px(0.0),
         });
@@ -1817,7 +1817,7 @@ mod test {
         assert_eq!(state.logical_scroll_top().offset_in_item, px(0.));
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_scroll_by_positive_and_negative_distance(cx: &mut TestAppContext) {
         let cx = cx.add_empty_window();
 
@@ -1873,7 +1873,7 @@ mod test {
         }
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_item_viewport_queries_return_none_before_layout(_cx: &mut TestAppContext) {
         let state = ListState::new(5, crate::ListAlignment::Top, px(10.)).measure_all();
 
@@ -1881,13 +1881,13 @@ mod test {
         assert_eq!(state.item_is_below_viewport(0), None);
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_item_viewport_queries_before_logical_scroll_top(cx: &mut TestAppContext) {
         let cx = cx.add_empty_window();
 
         let state = ListState::new(5, crate::ListAlignment::Top, px(10.)).measure_all();
 
-        state.scroll_to(gpui::ListOffset {
+        state.scroll_to(hgpui::ListOffset {
             item_ix: 2,
             offset_in_item: px(0.),
         });
@@ -1899,13 +1899,13 @@ mod test {
         assert_eq!(state.item_is_below_viewport(1), Some(false));
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_item_viewport_queries_measured_item_inside_viewport(cx: &mut TestAppContext) {
         let cx = cx.add_empty_window();
 
         let state = ListState::new(5, crate::ListAlignment::Top, px(10.)).measure_all();
 
-        state.scroll_to(gpui::ListOffset {
+        state.scroll_to(hgpui::ListOffset {
             item_ix: 2,
             offset_in_item: px(0.),
         });
@@ -1917,13 +1917,13 @@ mod test {
         assert_eq!(state.item_is_below_viewport(2), Some(false));
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_item_viewport_queries_measured_item_above_viewport(cx: &mut TestAppContext) {
         let cx = cx.add_empty_window();
 
         let state = ListState::new(5, crate::ListAlignment::Top, px(10.)).measure_all();
 
-        state.scroll_to(gpui::ListOffset {
+        state.scroll_to(hgpui::ListOffset {
             item_ix: 2,
             offset_in_item: px(20.),
         });
@@ -1935,13 +1935,13 @@ mod test {
         assert_eq!(state.item_is_below_viewport(2), Some(false));
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_item_viewport_queries_measured_item_below_viewport(cx: &mut TestAppContext) {
         let cx = cx.add_empty_window();
 
         let state = ListState::new(5, crate::ListAlignment::Top, px(10.)).measure_all();
 
-        state.scroll_to(gpui::ListOffset {
+        state.scroll_to(hgpui::ListOffset {
             item_ix: 2,
             offset_in_item: px(0.),
         });
@@ -1953,13 +1953,13 @@ mod test {
         assert_eq!(state.item_is_below_viewport(3), Some(true));
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_item_viewport_queries_remain_stable_with_zero_height_viewport(cx: &mut TestAppContext) {
         let cx = cx.add_empty_window();
 
         let state = ListState::new(5, crate::ListAlignment::Top, px(10.)).measure_all();
 
-        state.scroll_to(gpui::ListOffset {
+        state.scroll_to(hgpui::ListOffset {
             item_ix: 2,
             offset_in_item: px(0.),
         });
@@ -1984,7 +1984,7 @@ mod test {
         assert_eq!(state.item_is_below_viewport(3), Some(true));
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_item_viewport_queries_after_scroll_to_end_before_layout(cx: &mut TestAppContext) {
         let cx = cx.add_empty_window();
 
@@ -2001,7 +2001,7 @@ mod test {
         assert_eq!(state.item_is_below_viewport(0), Some(false));
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_measure_all_after_width_change(cx: &mut TestAppContext) {
         let cx = cx.add_empty_window();
 
@@ -2036,7 +2036,7 @@ mod test {
         assert_eq!(state.max_offset_for_scrollbar().y, px(300.));
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_remeasure(cx: &mut TestAppContext) {
         let cx = cx.add_empty_window();
 
@@ -2073,7 +2073,7 @@ mod test {
 
         // Simulate scrolling 40px inside the element with index 2. Since the
         // original item height is 100px, this equates to 40% inside the item.
-        state.scroll_to(gpui::ListOffset {
+        state.scroll_to(hgpui::ListOffset {
             item_ix: 2,
             offset_in_item: px(40.),
         });
@@ -2102,7 +2102,7 @@ mod test {
         assert_eq!(offset.offset_in_item, px(20.));
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_remeasure_item_preserves_scroll_offset(cx: &mut TestAppContext) {
         let cx = cx.add_empty_window();
 
@@ -2135,7 +2135,7 @@ mod test {
             })
         });
 
-        state.scroll_to(gpui::ListOffset {
+        state.scroll_to(hgpui::ListOffset {
             item_ix: 5,
             offset_in_item: px(40.),
         });
@@ -2156,7 +2156,7 @@ mod test {
         assert_eq!(offset.offset_in_item, px(40.));
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_remeasure_then_scroll_does_not_revert_scroll_position(cx: &mut TestAppContext) {
         let cx = cx.add_empty_window();
 
@@ -2178,7 +2178,7 @@ mod test {
             cx.update(|_, cx| cx.new(|_| TestView(state)))
         };
 
-        state.scroll_to(gpui::ListOffset {
+        state.scroll_to(hgpui::ListOffset {
             item_ix: 5,
             offset_in_item: px(40.),
         });
@@ -2212,7 +2212,7 @@ mod test {
         );
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_scroll_after_remeasure_clamps_to_shrunk_item_height(cx: &mut TestAppContext) {
         let cx = cx.add_empty_window();
 
@@ -2242,7 +2242,7 @@ mod test {
             cx.update(|_, cx| cx.new(|_| TestView { state, item_height }))
         };
 
-        state.scroll_to(gpui::ListOffset {
+        state.scroll_to(hgpui::ListOffset {
             item_ix: 5,
             offset_in_item: px(40.),
         });
@@ -2274,7 +2274,7 @@ mod test {
         assert_eq!(offset.offset_in_item, px(50.));
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_follow_tail_stays_at_bottom_as_items_grow(cx: &mut TestAppContext) {
         let cx = cx.add_empty_window();
 
@@ -2343,7 +2343,7 @@ mod test {
         assert!(state.is_following_tail());
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_follow_tail_disengages_on_user_scroll(cx: &mut TestAppContext) {
         let cx = cx.add_empty_window();
 
@@ -2383,7 +2383,7 @@ mod test {
         );
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_follow_tail_disengages_on_scrollbar_reposition(cx: &mut TestAppContext) {
         let cx = cx.add_empty_window();
 
@@ -2433,7 +2433,7 @@ mod test {
         assert_eq!(offset.offset_in_item, px(0.));
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_scrollbar_drag_with_growing_content(cx: &mut TestAppContext) {
         let cx = cx.add_empty_window();
 
@@ -2498,7 +2498,7 @@ mod test {
         assert_eq!(offset.offset_in_item, px(0.));
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_set_follow_tail_snaps_to_bottom(cx: &mut TestAppContext) {
         let cx = cx.add_empty_window();
 
@@ -2519,7 +2519,7 @@ mod test {
         let view = cx.update(|_, cx| cx.new(|_| TestView(state.clone())));
 
         // Scroll to the middle of the list (item 3).
-        state.scroll_to(gpui::ListOffset {
+        state.scroll_to(hgpui::ListOffset {
             item_ix: 3,
             offset_in_item: px(0.),
         });
@@ -2549,7 +2549,7 @@ mod test {
         assert!(state.is_following_tail());
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_bottom_aligned_scrollbar_offset_at_end(cx: &mut TestAppContext) {
         let cx = cx.add_empty_window();
 
@@ -2594,7 +2594,7 @@ mod test {
     /// When the user scrolls away from the bottom during follow_tail,
     /// follow_tail suspends. If they scroll back to the bottom, the
     /// next paint should re-engage follow_tail using fresh measurements.
-    #[gpui::test]
+    #[hgpui::test]
     fn test_follow_tail_reengages_when_scrolled_back_to_bottom(cx: &mut TestAppContext) {
         let cx = cx.add_empty_window();
 
@@ -2649,7 +2649,7 @@ mod test {
 
     /// When an item is spliced to unmeasured (0px) while follow_tail
     /// is suspended, the re-engagement check should still work correctly
-    #[gpui::test]
+    #[hgpui::test]
     fn test_follow_tail_reengagement_not_fooled_by_unmeasured_items(cx: &mut TestAppContext) {
         let cx = cx.add_empty_window();
 
@@ -2708,7 +2708,7 @@ mod test {
         );
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_follow_tail_reengages_after_scrollbar_disengagement(cx: &mut TestAppContext) {
         let cx = cx.add_empty_window();
 
@@ -2750,7 +2750,7 @@ mod test {
         );
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_follow_tail_reengages_after_scrollbar_drag_to_bottom_while_growing(
         cx: &mut TestAppContext,
     ) {

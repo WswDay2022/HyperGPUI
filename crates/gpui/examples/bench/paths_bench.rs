@@ -1,4 +1,4 @@
-use gpui::{
+use hgpui::{
     Background, Bounds, ColorSpace, Context, Path, PathBuilder, Pixels, Render, TitlebarOptions,
     Window, WindowBounds, WindowOptions, canvas, div, linear_color_stop, linear_gradient, point,
     prelude::*, px, rgb, size,
@@ -69,7 +69,7 @@ impl Render for PaintingViewer {
 }
 
 fn main() {
-    gpui_platform::application().run(|cx| {
+    hgpui_platform::application().run(|cx| {
         cx.open_window(
             WindowOptions {
                 titlebar: Some(TitlebarOptions {

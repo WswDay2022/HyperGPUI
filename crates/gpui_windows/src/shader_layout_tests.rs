@@ -143,18 +143,18 @@ fn rust_scene_layout_matches_shaders() {
     use std::mem::{offset_of, size_of};
 
     assert_eq!(
-        size_of::<gpui::Background>() % 8,
+        size_of::<hgpui::Background>() % 8,
         0,
         "Background must stay a multiple of 8 bytes so `Quad::transformation` keeps its alignment"
     );
-    assert_eq!(size_of::<gpui::Background>(), 80);
-    assert_eq!(size_of::<gpui::Quad>(), 208);
-    assert_eq!(offset_of!(gpui::Quad, background), 56);
-    assert_eq!(offset_of!(gpui::Quad, transformation), 184);
+    assert_eq!(size_of::<hgpui::Background>(), 80);
+    assert_eq!(size_of::<hgpui::Quad>(), 208);
+    assert_eq!(offset_of!(hgpui::Quad, background), 56);
+    assert_eq!(offset_of!(hgpui::Quad, transformation), 184);
     assert_eq!(
-        offset_of!(gpui::Quad, transformation) % 8,
+        offset_of!(hgpui::Quad, transformation) % 8,
         0,
         "WGSL aligns `mat2x2` to 8; repr(C) and FXC use 4"
     );
-    assert_eq!(offset_of!(gpui::TransformationMatrix, translation), 16);
+    assert_eq!(offset_of!(hgpui::TransformationMatrix, translation), 16);
 }

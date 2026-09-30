@@ -30,31 +30,31 @@ use crate::{SharedString, TasksIncluded, WindowId};
 
 #[cfg(feature = "profiler")]
 #[doc(hidden)]
-pub fn get_all_timings(included: gpui::TasksIncluded) -> Vec<gpui::ThreadTaskTimings> {
+pub fn get_all_timings(included: hgpui::TasksIncluded) -> Vec<hgpui::ThreadTaskTimings> {
     ThreadTaskTimings::collect(upgraded_thread_timings(), included)
 }
 
 #[cfg(feature = "profiler")]
 #[doc(hidden)]
-pub fn get_current_thread_timings(included: TasksIncluded) -> gpui::ThreadTaskTimings {
-    gpui::profiler::get_current_thread_task_timings(included)
+pub fn get_current_thread_timings(included: TasksIncluded) -> hgpui::ThreadTaskTimings {
+    hgpui::profiler::get_current_thread_task_timings(included)
 }
 
 #[cfg(feature = "profiler")]
 #[doc(hidden)]
-pub fn take_all_stats(included: TasksIncluded) -> Vec<gpui::ThreadTaskStatistics> {
+pub fn take_all_stats(included: TasksIncluded) -> Vec<hgpui::ThreadTaskStatistics> {
     ThreadTaskStatistics::collect_and_reset(upgraded_thread_timings(), included)
 }
 
 #[cfg(not(feature = "profiler"))]
 #[doc(hidden)]
-pub fn get_all_timings(_included: gpui::TasksIncluded) -> Vec<gpui::ThreadTaskTimings> {
+pub fn get_all_timings(_included: hgpui::TasksIncluded) -> Vec<hgpui::ThreadTaskTimings> {
     Vec::new()
 }
 #[cfg(not(feature = "profiler"))]
 #[doc(hidden)]
-pub fn get_current_thread_timings(_included: TasksIncluded) -> gpui::ThreadTaskTimings {
-    gpui::ThreadTaskTimings {
+pub fn get_current_thread_timings(_included: TasksIncluded) -> hgpui::ThreadTaskTimings {
+    hgpui::ThreadTaskTimings {
         thread_name: None,
         thread_id: std::thread::current().id(),
         timings: Vec::new(),
@@ -64,7 +64,7 @@ pub fn get_current_thread_timings(_included: TasksIncluded) -> gpui::ThreadTaskT
 }
 #[cfg(not(feature = "profiler"))]
 #[doc(hidden)]
-pub fn take_all_stats(_included: TasksIncluded) -> Vec<gpui::ThreadTaskStatistics> {
+pub fn take_all_stats(_included: TasksIncluded) -> Vec<hgpui::ThreadTaskStatistics> {
     Vec::new()
 }
 

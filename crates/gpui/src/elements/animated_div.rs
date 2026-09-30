@@ -1,6 +1,6 @@
 use crate::smallvec::SmallVec;
 use crate::{accesskit, point, AnyElement, App, Bounds, Display, DivFrameState, Element, ElementId, GlobalElementId, Hitbox, ImageCacheProvider, InspectorElementId, InteractiveElement, Interactivity, IntoElement, LayoutId, ParentElement, Pixels, Point, Stateful, StatefulInteractiveElement, StyleRefinement, Styled, Window};
-use gpui::linear;
+use hgpui::linear;
 use stacksafe::{StackSafe, stacksafe};
 use std::rc::Rc;
 use std::time::Duration;

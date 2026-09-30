@@ -2,7 +2,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use anyhow::Result;
-use gpui::{
+use hgpui::{
     App, AssetSource, Bounds, Context, SharedString, Window, WindowBounds, WindowOptions, div,
     prelude::*, px, rgb, size, svg,
 };
@@ -68,7 +68,7 @@ impl Render for SvgExample {
 }
 
 fn main() {
-    gpui_platform::application()
+    hgpui_platform::application()
         .with_assets(Assets {
             base: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/legacy"),
         })

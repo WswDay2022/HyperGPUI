@@ -1,4 +1,4 @@
-use gpui::{
+use hgpui::{
     App, Bounds, Context, KeyBinding, PromptButton, PromptLevel, Window, WindowBounds, WindowKind,
     WindowOptions, actions, div, prelude::*, px, rgb, size,
 };
@@ -36,8 +36,8 @@ impl Render for SubWindow {
                         .flex()
                         .h(px(32.))
                         .px_4()
-                        .background(gpui::blue())
-                        .text_color(gpui::white())
+                        .background(hgpui::blue())
+                        .text_color(hgpui::white())
                         .w_full()
                         .child(
                             div()
@@ -241,7 +241,7 @@ impl Render for WindowDemo {
 actions!(window, [Quit]);
 
 fn main() {
-    gpui_platform::application().run(|cx: &mut App| {
+    hgpui_platform::application().run(|cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(800.0), px(600.0)), cx);
 
         cx.open_window(

@@ -1,4 +1,4 @@
-use gpui_macros::Render;
+use hgpui_macros::Render;
 
 #[derive(Render)]
 struct Element;

@@ -1,10 +1,10 @@
 [package]
-name = "gpui_ce_collections"
+name = "hgpui_collections"
 version = "0.2.2"
 edition = "2024"
 license = "Apache-2.0"
 publish = true
-description = "Blessed hash collections used by gpui-ce (vendored from Zed)."
+description = "Blessed hash collections used by hgpui (vendored from Zed)."
 repository = "https://github.com/gpui-ce/gpui-ce"
 
 [lib]

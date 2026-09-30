@@ -3,7 +3,7 @@ use palette::rgb::Rgba;
 use std::ops::Deref;
 use std::sync::Arc;
 
-/// The default set of colors for gpui.
+/// The default set of colors for hgpui.
 ///
 /// These are used for styling base components, examples and more.
 #[derive(Clone, Debug)]

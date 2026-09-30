@@ -13,8 +13,8 @@ mod example_prelude;
 use std::time::Duration;
 
 use anyhow::Result;
-use gpui::colors::Colors;
-use gpui::{
+use hgpui::colors::Colors;
+use hgpui::{
     Animation, AnimationExt as _, App, AssetSource, Bounds, ColorExt, Context, Hsla, SharedString,
     Transformation, Window, WindowBounds, WindowOptions, bounce, div, ease_in_out, linear,
     percentage, prelude::*, px, rgb, size as gpui_size, svg,
@@ -73,7 +73,7 @@ impl Render for AnimationExample {
                             .child(
                                 div()
                                     .text_xl()
-                                    .font_weight(gpui::FontWeight::BOLD)
+                                    .font_weight(hgpui::FontWeight::BOLD)
                                     .text_color(colors.text)
                                     .child("Animation Patterns"),
                             )
@@ -254,7 +254,7 @@ fn section(colors: &Colors, title: &'static str, content: impl IntoElement) -> i
         .child(
             div()
                 .text_sm()
-                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .font_weight(hgpui::FontWeight::SEMIBOLD)
                 .text_color(colors.text)
                 .child(title),
         )
@@ -262,7 +262,7 @@ fn section(colors: &Colors, title: &'static str, content: impl IntoElement) -> i
 }
 
 fn main() {
-    gpui_platform::application()
+    hgpui_platform::application()
         .with_assets(Assets {})
         .run(|cx: &mut App| {
             let bounds = Bounds::centered(None, gpui_size(px(500.), px(650.)), cx);

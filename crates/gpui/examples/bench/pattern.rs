@@ -1,4 +1,4 @@
-use gpui::{
+use hgpui::{
     App, AppContext, Bounds, Context, Window, WindowBounds, WindowOptions, div, linear_color_stop,
     linear_gradient, pattern_slash, prelude::*, px, rgb, size,
 };
@@ -25,24 +25,24 @@ impl Render for PatternExample {
                     .flex()
                     .flex_col()
                     .border_1()
-                    .border_color(gpui::blue())
+                    .border_color(hgpui::blue())
                     .child(div().w(px(54.0)).h(px(18.0)).background(pattern_slash(
-                        gpui::red(),
+                        hgpui::red(),
                         18.0 / 4.0,
                         18.0 / 4.0,
                     )))
                     .child(div().w(px(54.0)).h(px(18.0)).background(pattern_slash(
-                        gpui::red(),
+                        hgpui::red(),
                         18.0 / 4.0,
                         18.0 / 4.0,
                     )))
                     .child(div().w(px(54.0)).h(px(18.0)).background(pattern_slash(
-                        gpui::red(),
+                        hgpui::red(),
                         18.0 / 4.0,
                         18.0 / 4.0,
                     )))
                     .child(div().w(px(54.0)).h(px(18.0)).background(pattern_slash(
-                        gpui::red(),
+                        hgpui::red(),
                         18.0 / 4.0,
                         18.0 / 2.0,
                     ))),
@@ -52,26 +52,26 @@ impl Render for PatternExample {
                     .flex()
                     .flex_col()
                     .border_1()
-                    .border_color(gpui::blue())
-                    .background(gpui::green().with_alpha(0.16))
+                    .border_color(hgpui::blue())
+                    .background(hgpui::green().with_alpha(0.16))
                     .child("Elements the same height should align")
                     .child(div().w(px(256.0)).h(px(56.0)).background(pattern_slash(
-                        gpui::red(),
+                        hgpui::red(),
                         56.0 / 6.0,
                         56.0 / 6.0,
                     )))
                     .child(div().w(px(256.0)).h(px(56.0)).background(pattern_slash(
-                        gpui::green(),
+                        hgpui::green(),
                         56.0 / 6.0,
                         56.0 / 6.0,
                     )))
                     .child(div().w(px(256.0)).h(px(56.0)).background(pattern_slash(
-                        gpui::blue(),
+                        hgpui::blue(),
                         56.0 / 6.0,
                         56.0 / 6.0,
                     )))
                     .child(div().w(px(256.0)).h(px(26.0)).background(pattern_slash(
-                        gpui::yellow(),
+                        hgpui::yellow(),
                         56.0 / 6.0,
                         56.0 / 6.0,
                     ))),
@@ -79,28 +79,28 @@ impl Render for PatternExample {
             .child(
                 div()
                     .border_1()
-                    .border_color(gpui::blue())
+                    .border_color(hgpui::blue())
                     .w(px(240.0))
                     .h(px(40.0))
-                    .background(gpui::red()),
+                    .background(hgpui::red()),
             )
             .child(
                 div()
                     .border_1()
-                    .border_color(gpui::blue())
+                    .border_color(hgpui::blue())
                     .w(px(240.0))
                     .h(px(40.0))
                     .background(linear_gradient(
                         45.,
-                        linear_color_stop(gpui::red(), 0.),
-                        linear_color_stop(gpui::blue(), 1.),
+                        linear_color_stop(hgpui::red(), 0.),
+                        linear_color_stop(hgpui::blue(), 1.),
                     )),
             )
     }
 }
 
 fn main() {
-    gpui_platform::application().run(|cx: &mut App| {
+    hgpui_platform::application().run(|cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(600.0), px(600.0)), cx);
         cx.open_window(
             WindowOptions {

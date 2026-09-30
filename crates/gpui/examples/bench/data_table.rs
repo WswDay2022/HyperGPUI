@@ -1,6 +1,6 @@
 use std::{ops::Range, rc::Rc, time::Duration};
 
-use gpui::{
+use hgpui::{
     App, Bounds, Context, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Render,
     SharedString, UniformListScrollHandle, Window, WindowBounds, WindowOptions, canvas, div, point,
     prelude::*, px, rgb, size, uniform_list,
@@ -121,11 +121,11 @@ impl Quote {
         (self.last_done - self.prev_close) / self.prev_close * 100.0
     }
 
-    fn change_color(&self) -> gpui::Hsla {
+    fn change_color(&self) -> hgpui::Hsla {
         if self.change() > 0.0 {
-            gpui::green()
+            hgpui::green()
         } else {
-            gpui::red()
+            hgpui::red()
         }
     }
 
@@ -144,7 +144,7 @@ impl TableRow {
         Self { ix, quote }
     }
 
-    fn render_cell(&self, key: &str, width: Pixels, color: gpui::Hsla) -> impl IntoElement {
+    fn render_cell(&self, key: &str, width: Pixels, color: hgpui::Hsla) -> impl IntoElement {
         div()
             .whitespace_nowrap()
             .truncate()
@@ -374,7 +374,7 @@ impl DataTable {
 impl Render for DataTable {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
-            .background(gpui::white())
+            .background(hgpui::white())
             .text_sm()
             .size_full()
             .p_4()
@@ -447,7 +447,7 @@ impl Render for DataTable {
 }
 
 fn main() {
-    gpui_platform::application().run(|cx: &mut App| {
+    hgpui_platform::application().run(|cx: &mut App| {
         cx.open_window(
             WindowOptions {
                 focus: true,

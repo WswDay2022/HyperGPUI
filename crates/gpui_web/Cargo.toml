@@ -1,5 +1,5 @@
 [package]
-name = "gpui_ce_web"
+name = "hgpui_web"
 version = "0.1.0"
 description.workspace = true
 publish.workspace = true
@@ -18,9 +18,9 @@ multithreaded = ["dep:wasm_thread"]
 path = "src/gpui_web.rs"
 
 [target.'cfg(target_family = "wasm")'.dependencies]
-gpui.workspace = true
+hgpui.workspace = true
 parking_lot = { workspace = true, features = ["nightly"] }
-gpui_wgpu.workspace = true
+hgpui_wgpu.workspace = true
 http.workspace = true
 anyhow.workspace = true
 futures.workspace = true

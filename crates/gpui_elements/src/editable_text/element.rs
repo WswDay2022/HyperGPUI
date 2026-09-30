@@ -3,7 +3,7 @@ use crate::editable_text::{
     actions::{DEFAULT_INPUT_CONTEXT, EditableTextActionElement, EditableTextActionHandler},
     layout::{EditableTextLayoutResult, EditableTextLayoutState, TextLineSegment},
 };
-use gpui::{
+use hgpui::{
     App, Bounds, CursorStyle, DispatchPhase, Display, Element, ElementId, ElementInputHandler,
     Entity, FocusHandle, Focusable, Hitbox, HitboxBehavior, Hsla, InteractiveElement,
     Interactivity, IntoElement, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent,
@@ -90,7 +90,7 @@ impl Default for EditableTextColors {
         Self {
             placeholder: WHITE_50PC,
             selection: LIGHT_NAVY_BLUE_50PC,
-            caret: gpui::white(),
+            caret: hgpui::white(),
             ime_underline: WHITE_70PC,
         }
     }
@@ -141,7 +141,7 @@ impl EditableTextElement {
 
     /// Sets the color of the placeholder text which is rendered when the element's stored text is empty.
     ///
-    /// Cannot be refined via [`StyleRefinement`](gpui::StyleRefinement) due to limitations in the fields of [`Style`](gpui::Style).
+    /// Cannot be refined via [`StyleRefinement`](hgpui::StyleRefinement) due to limitations in the fields of [`Style`](hgpui::Style).
     pub fn placeholder_color(mut self, color: Hsla) -> Self {
         self.colors.placeholder = color;
         self
@@ -149,7 +149,7 @@ impl EditableTextElement {
 
     /// Sets the color of the box highlighting selected text.
     ///
-    /// Cannot be refined via [`StyleRefinement`](gpui::StyleRefinement) due to limitations in the fields of [`Style`](gpui::Style).
+    /// Cannot be refined via [`StyleRefinement`](hgpui::StyleRefinement) due to limitations in the fields of [`Style`](hgpui::Style).
     pub fn selection_color(mut self, color: Hsla) -> Self {
         self.colors.selection = color;
         self
@@ -157,7 +157,7 @@ impl EditableTextElement {
 
     /// Sets the color of the caret / text-cursor.
     ///
-    /// Cannot be refined via [`StyleRefinement`](gpui::StyleRefinement) due to limitations in the fields of [`Style`](gpui::Style).
+    /// Cannot be refined via [`StyleRefinement`](hgpui::StyleRefinement) due to limitations in the fields of [`Style`](hgpui::Style).
     pub fn caret_color(mut self, color: Hsla) -> Self {
         self.colors.caret = color;
         self
@@ -166,7 +166,7 @@ impl EditableTextElement {
     /// Sets the color of the underlines rendered underneath text being editted/marked by InputMethodEditors
     /// (for writing Chinese, Japanese, and Korean utf-16).
     ///
-    /// Cannot be refined via [`StyleRefinement`](gpui::StyleRefinement) due to limitations in the fields of [`Style`](gpui::Style).
+    /// Cannot be refined via [`StyleRefinement`](hgpui::StyleRefinement) due to limitations in the fields of [`Style`](hgpui::Style).
     pub fn marked_color(mut self, color: Hsla) -> Self {
         self.colors.ime_underline = color;
         self
@@ -247,11 +247,11 @@ impl Element for EditableTextElement {
 
     fn request_layout(
         &mut self,
-        global_id: Option<&gpui::GlobalElementId>,
-        inspector_id: Option<&gpui::InspectorElementId>,
+        global_id: Option<&hgpui::GlobalElementId>,
+        inspector_id: Option<&hgpui::InspectorElementId>,
         window: &mut Window,
         cx: &mut App,
-    ) -> (gpui::LayoutId, Self::RequestLayoutState) {
+    ) -> (hgpui::LayoutId, Self::RequestLayoutState) {
         let entity = self.find_or_create_state(window, cx);
         let caret = self.find_or_create_caret(&entity, window, cx);
 
@@ -320,8 +320,8 @@ impl Element for EditableTextElement {
 
     fn prepaint(
         &mut self,
-        global_id: Option<&gpui::GlobalElementId>,
-        inspector_id: Option<&gpui::InspectorElementId>,
+        global_id: Option<&hgpui::GlobalElementId>,
+        inspector_id: Option<&hgpui::InspectorElementId>,
         bounds: Bounds<Pixels>,
         request_layout: &mut Self::RequestLayoutState,
         window: &mut Window,
@@ -364,7 +364,7 @@ impl Element for EditableTextElement {
                     bounds
                 };
                 request_layout.state.update(cx, |state, _cx| {
-                    // while gpui tracks scroll_offset with negative values,
+                    // while hgpui tracks scroll_offset with negative values,
                     // this is converted into positive for usage with bounds
                     state.layout_data.scroll_bounds =
                         Bounds::new(-scroll_offset, inner_bounds.size);
@@ -390,8 +390,8 @@ impl Element for EditableTextElement {
 
     fn paint(
         &mut self,
-        global_id: Option<&gpui::GlobalElementId>,
-        inspector_id: Option<&gpui::InspectorElementId>,
+        global_id: Option<&hgpui::GlobalElementId>,
+        inspector_id: Option<&hgpui::InspectorElementId>,
         bounds: Bounds<Pixels>,
         request_layout: &mut Self::RequestLayoutState,
         prepaint: &mut Self::PrepaintState,
@@ -564,7 +564,7 @@ impl PrelayoutState {
             // This is invoked sometime in the near future (before prepaint but not immediately),
             // so we avoid doing any pre-emptive work until the layout engine is ready.
             move |known_dimensions, available_space, window, cx| {
-                let runs = vec![gpui::TextRun {
+                let runs = vec![hgpui::TextRun {
                     len: text.len(),
                     font: text_style.font(),
                     color,
@@ -812,7 +812,7 @@ impl PrepaintElements {
             let quad = fill(
                 Bounds::new(
                     inner_bounds.origin + carent_point,
-                    size(gpui::px(CARET_RENDER_WIDTH), line_height),
+                    size(hgpui::px(CARET_RENDER_WIDTH), line_height),
                 ),
                 colors.caret,
             );

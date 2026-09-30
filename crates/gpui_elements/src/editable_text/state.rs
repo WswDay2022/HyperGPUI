@@ -5,13 +5,13 @@ use crate::editable_text::{
     history::EditableTextHistory,
     layout::{EditableTextLayoutResult, TextLineSegment},
 };
-use gpui::{
+use hgpui::{
     App, Bounds, ClipboardItem, Context, ElementId, Entity, EntityInputHandler, EventEmitter,
     FocusHandle, Focusable, NavigationDirection, Pixels, Point, UTF16Selection, Window, point,
 };
 use std::{borrow::Cow, ops::Range};
 
-const CARET_PIXELS_EPSILON: Pixels = gpui::px(4.);
+const CARET_PIXELS_EPSILON: Pixels = hgpui::px(4.);
 
 /// The utf-8 character range that is currently selected by the user.
 /// Valid both when start < end and start > end (which dictates the direction of the selection).
@@ -122,8 +122,8 @@ impl EditableTextState {
     /// If the state does not yet exist, a new one is created calling `init` to create a [`UnicodeTextStorage`] medium.
     ///
     /// ```
-    /// # use gpui::{RenderOnce, Window, App, IntoElement, ElementId};
-    /// # use gpui_ce_elements::editable_text::{EditableTextState, StringStorage, editable_text};
+    /// # use hgpui::{RenderOnce, Window, App, IntoElement, ElementId};
+    /// # use hgpui_elements::editable_text::{EditableTextState, StringStorage, editable_text};
     /// pub struct Form;
     /// impl RenderOnce for Form {
     ///     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
@@ -154,8 +154,8 @@ impl EditableTextState {
     ///
     /// Expected to be called via [`AppContext::new`] such as:
     /// ```
-    /// # use gpui::{AppContext, Window, App, Entity};
-    /// # use gpui_ce_elements::editable_text::{StringStorage, EditableTextState};
+    /// # use hgpui::{AppContext, Window, App, Entity};
+    /// # use hgpui_elements::editable_text::{StringStorage, EditableTextState};
     /// # fn new(_window: &mut Window, cx: &mut App) -> Entity<EditableTextState> {
     /// cx.new(|cx| EditableTextState::new(StringStorage::default(), cx))
     /// # }
@@ -324,7 +324,7 @@ impl EditableTextState {
         };
 
         // the screen position of the caret relative to the text segment
-        let relative_point = point - gpui::point(Pixels::ZERO, segment.pos_y * line_height);
+        let relative_point = point - hgpui::point(Pixels::ZERO, segment.pos_y * line_height);
 
         return segment.character_index_at_point(relative_point, line_height);
     }
@@ -345,7 +345,7 @@ impl EditableTextState {
         // calculate the screen space position of the row we are navigating to,
         // relative to the y-position of the segment.
         let row_index = (target_line_index - preceding_row_count) as f32;
-        let relative_point = gpui::point(caret_point.x, row_index * line_height);
+        let relative_point = hgpui::point(caret_point.x, row_index * line_height);
 
         Some(segment.character_index_at_point(relative_point, line_height))
     }
@@ -399,7 +399,7 @@ impl EditableTextState {
         // point will be relative to content_size, and may or may not be within the current scroll_bounds
         let point = self.find_point_for_character_position(self.caret_pos());
 
-        // this scroll_offset diverges from the rest of gpui, as it is stored in the
+        // this scroll_offset diverges from the rest of hgpui, as it is stored in the
         // positive real number space (interactivity stores it in the negatives)
         let mut scroll_offset = Cow::Borrowed(&self.layout_data.scroll_bounds.origin);
 
@@ -1100,7 +1100,7 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
 
     fn on_mouse_down(
         &mut self,
-        event: &gpui::MouseDownEvent,
+        event: &hgpui::MouseDownEvent,
         text_position: Point<Pixels>,
         window: &mut Window,
         cx: &mut Context<'app, Self>,
@@ -1123,7 +1123,7 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
 
     fn on_mouse_up(
         &mut self,
-        _event: &gpui::MouseUpEvent,
+        _event: &hgpui::MouseUpEvent,
         _w: &mut Window,
         _cx: &mut Context<'app, Self>,
     ) {
@@ -1132,7 +1132,7 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
 
     fn on_mouse_move(
         &mut self,
-        _event: &gpui::MouseMoveEvent,
+        _event: &hgpui::MouseMoveEvent,
         text_position: Point<Pixels>,
         window: &mut Window,
         cx: &mut Context<'app, Self>,
@@ -1153,7 +1153,7 @@ mod tests {
 
     use super::*;
     use crate::editable_text::StringStorage;
-    use gpui::{AppContext, Entity, IntoElement, Render, TestAppContext, WindowHandle, div};
+    use hgpui::{AppContext, Entity, IntoElement, Render, TestAppContext, WindowHandle, div};
 
     struct TestView {
         input: Entity<EditableTextState>,
@@ -1204,7 +1204,7 @@ mod tests {
     // BASIC MOVEMENT
     // ============================================================
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_left_at_start_of_content(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello", 0);
         view.update(cx, |view, window, cx| {
@@ -1216,7 +1216,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_left_moves_by_grapheme(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello", 3);
         view.update(cx, |view, window, cx| {
@@ -1228,7 +1228,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_left_collapses_selection_to_start(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello", (1, 4));
         view.update(cx, |view, window, cx| {
@@ -1240,7 +1240,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_left_stops_at_end_of_line(cx: &mut TestAppContext) {
         // "ab\ncd" - cursor at position 3 (start of "cd", after newline)
         // Pressing left should move to position 2 (end of "ab", before newline)
@@ -1254,7 +1254,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_right_at_end_of_content(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello", 5);
         view.update(cx, |view, window, cx| {
@@ -1266,7 +1266,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_right_moves_by_grapheme(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello", 2);
         view.update(cx, |view, window, cx| {
@@ -1278,7 +1278,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_right_collapses_selection_to_end(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello", (1, 4));
         view.update(cx, |view, window, cx| {
@@ -1290,7 +1290,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_right_stops_at_end_of_line(cx: &mut TestAppContext) {
         // "ab\ncd" - cursor at position 1 (after 'a')
         // Pressing right should move to position 2 (end of "ab", before newline)
@@ -1304,7 +1304,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_right_crosses_newline(cx: &mut TestAppContext) {
         // "ab\ncd" - cursor at position 2 (end of "ab", before newline)
         // Pressing right should move to position 3 (after newline, start of "cd")
@@ -1318,7 +1318,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_left_crosses_newline(cx: &mut TestAppContext) {
         // "ab\ncd" - cursor at position 2 (end of "ab", before newline)
         // Pressing left should move to position 1 (after 'a')
@@ -1332,7 +1332,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_home_moves_to_line_start(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "first\nsecond", 9);
         view.update(cx, |view, window, cx| {
@@ -1344,7 +1344,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_end_moves_to_line_end(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "first\nsecond", 8);
         view.update(cx, |view, window, cx| {
@@ -1356,7 +1356,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_move_to_beginning(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "first\nsecond\nthird", 9);
         view.update(cx, |view, window, cx| {
@@ -1368,7 +1368,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_move_to_end(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "first\nsecond\nthird", 0);
         view.update(cx, |view, window, cx| {
@@ -1384,7 +1384,7 @@ mod tests {
     // WORD MOVEMENT
     // ============================================================
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_word_left_at_start(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello world", 0);
         view.update(cx, |view, window, cx| {
@@ -1396,7 +1396,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_word_left_stops_at_boundary(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello world test", 11);
         view.update(cx, |view, window, cx| {
@@ -1408,7 +1408,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_word_right_at_end(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello world", 11);
         view.update(cx, |view, window, cx| {
@@ -1420,7 +1420,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_word_right_stops_at_boundary(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello world test", 0);
         view.update(cx, |view, window, cx| {
@@ -1436,7 +1436,7 @@ mod tests {
     // SELECTION
     // ============================================================
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_select_left_extends_selection(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello", 3);
         view.update(cx, |view, window, cx| {
@@ -1448,7 +1448,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_select_right_extends_selection(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello", 2..2);
         view.update(cx, |view, window, cx| {
@@ -1460,7 +1460,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_select_all(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello\nworld", 3);
         view.update(cx, |view, window, cx| {
@@ -1472,7 +1472,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_select_to_beginning(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello world", 6);
         view.update(cx, |view, window, cx| {
@@ -1484,7 +1484,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_select_to_end(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello world", 6);
         view.update(cx, |view, window, cx| {
@@ -1500,7 +1500,7 @@ mod tests {
     // EDITING - BACKSPACE
     // ============================================================
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_backspace_deletes_selection(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello world", (6, 11));
         view.update(cx, |view, window, cx| {
@@ -1513,7 +1513,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_backspace_deletes_previous_grapheme(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello", 5);
         view.update(cx, |view, window, cx| {
@@ -1526,7 +1526,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_backspace_at_start_does_nothing(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello", 0);
         view.update(cx, |view, window, cx| {
@@ -1539,7 +1539,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_backspace_deletes_entire_emoji(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "Hi 👋", 7);
         view.update(cx, |view, window, cx| {
@@ -1556,7 +1556,7 @@ mod tests {
     // EDITING - DELETE
     // ============================================================
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_delete_deletes_selection(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello world", (0, 5));
         view.update(cx, |view, window, cx| {
@@ -1569,7 +1569,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_delete_deletes_next_grapheme(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello", 0);
         view.update(cx, |view, window, cx| {
@@ -1582,7 +1582,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_delete_at_end_does_nothing(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello", 5);
         view.update(cx, |view, window, cx| {
@@ -1599,7 +1599,7 @@ mod tests {
     // EDITING - ENTER
     // ============================================================
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_enter_inserts_newline(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello world", 5);
         view.update(cx, |view, window, cx| {
@@ -1613,7 +1613,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_enter_replaces_selection(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello world", (5, 6));
         view.update(cx, |view, window, cx| {
@@ -1631,7 +1631,7 @@ mod tests {
     // CLIPBOARD
     // ============================================================
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_copy_with_selection(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello world", (6, 11));
         view.update(cx, |view, window, cx| {
@@ -1646,7 +1646,7 @@ mod tests {
         assert_eq!(clipboard.unwrap().text().as_deref(), Some("world"));
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_cut_with_selection(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello world", (0, 5));
         view.update(cx, |view, window, cx| {
@@ -1662,7 +1662,7 @@ mod tests {
         assert_eq!(clipboard.unwrap().text().as_deref(), Some("hello"));
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_paste_inserts_text(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello world", 5);
         cx.write_to_clipboard(ClipboardItem::new_string(" there".to_string()));
@@ -1680,7 +1680,7 @@ mod tests {
     // UNICODE / GRAPHEME HANDLING
     // ============================================================
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_movement_with_multibyte_utf8(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "café", 0);
         view.update(cx, |view, window, cx| {
@@ -1698,7 +1698,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_movement_with_emoji(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "a👋b", 0);
         view.update(cx, |view, window, cx| {
@@ -1714,7 +1714,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_selection_with_multibyte_characters(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "日本語", 0);
         view.update(cx, |view, window, cx| {
@@ -1734,7 +1734,7 @@ mod tests {
     // NEWLINE HANDLING
     // ============================================================
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_find_line_start_and_end(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "first\nsecond\nthird", 0);
         view.update(cx, |view, _window, cx| {
@@ -1760,7 +1760,7 @@ mod tests {
     // EDGE CASES
     // ============================================================
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_operations_on_empty_content(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "", 0);
         view.update(cx, |view, window, cx| {
@@ -1784,7 +1784,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_set_content_resets_selection(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello world", (3, 8));
         view.update(cx, |view, window, cx| {
@@ -1799,7 +1799,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_cursor_clamped_to_content_length(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello", 100);
         view.update(cx, |view, _window, cx| {
@@ -1815,7 +1815,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_previous_boundary_at_start(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello", 0);
         view.update(cx, |view, _window, cx| {
@@ -1828,7 +1828,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_next_boundary_at_end(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello", 0);
         view.update(cx, |view, _window, cx| {
@@ -1843,7 +1843,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_word_range_at_boundary(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello world", 0);
         view.update(cx, |view, _window, cx| {
@@ -1864,7 +1864,7 @@ mod tests {
     // EMOJI & GRAPHEME CLUSTERS
     // ============================================================
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_simple_emoji_navigation(cx: &mut TestAppContext) {
         // 😀 is 4 bytes in UTF-8
         let view = create_test_input(cx, "a😀b", 0);
@@ -1891,7 +1891,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_emoji_with_skin_tone_modifier(cx: &mut TestAppContext) {
         // 👋🏽 = 👋 (U+1F44B, 4 bytes) + 🏽 (U+1F3FD, 4 bytes) = 8 bytes total
         let emoji = "👋🏽";
@@ -1913,7 +1913,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_zwj_family_emoji(cx: &mut TestAppContext) {
         // 👨‍👩‍👧 = man + ZWJ + woman + ZWJ + girl
         // Each person emoji is 4 bytes, ZWJ is 3 bytes
@@ -1937,7 +1937,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_backspace_deletes_emoji_between_ascii(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "a😀b", 5); // cursor after emoji
         view.update(cx, |view, window, cx| {
@@ -1950,7 +1950,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_backspace_deletes_zwj_sequence(cx: &mut TestAppContext) {
         let family = "👨‍👩‍👧";
         let content = format!("a{}b", family);
@@ -1967,7 +1967,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_delete_removes_entire_emoji(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "a😀b", 1); // cursor before emoji
         view.update(cx, |view, window, cx| {
@@ -1980,7 +1980,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_flag_emoji_navigation(cx: &mut TestAppContext) {
         // 🇯🇵 = Regional Indicator J (4 bytes) + Regional Indicator P (4 bytes)
         let flag = "🇯🇵";
@@ -1997,7 +1997,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_combining_diacritical_marks(cx: &mut TestAppContext) {
         // é as e + combining acute accent (U+0301)
         let combining = "e\u{0301}"; // 1 + 2 = 3 bytes
@@ -2019,7 +2019,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_multiple_combining_marks(cx: &mut TestAppContext) {
         // ë́ = e + combining diaeresis (U+0308) + combining acute (U+0301)
         let multi_combining = "e\u{0308}\u{0301}"; // 1 + 2 + 2 = 5 bytes
@@ -2036,7 +2036,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_select_emoji_with_shift(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "a😀b", 1); // cursor before emoji
         view.update(cx, |view, window, cx| {
@@ -2048,7 +2048,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_cjk_characters(cx: &mut TestAppContext) {
         // 你好 - each character is 3 bytes in UTF-8
         let view = create_test_input(cx, "a你好b", 0);
@@ -2070,7 +2070,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_mixed_script_text(cx: &mut TestAppContext) {
         // Mix of ASCII, CJK, and emoji
         let view = create_test_input(cx, "Hi你😀", 0);
@@ -2099,7 +2099,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_variation_selector_emoji(cx: &mut TestAppContext) {
         // ☺️ = ☺ (U+263A, 3 bytes) + variation selector-16 (U+FE0F, 3 bytes)
         let emoji_presentation = "☺\u{FE0F}";
@@ -2116,7 +2116,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_keycap_emoji(cx: &mut TestAppContext) {
         // 1️⃣ = 1 + variation selector + combining enclosing keycap
         let keycap = "1\u{FE0F}\u{20E3}";
@@ -2150,7 +2150,7 @@ mod tests {
         })
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_single_line_enter_does_nothing(cx: &mut TestAppContext) {
         let view = create_single_line_input(cx, "hello", 5);
         view.update(cx, |view, window, cx| {
@@ -2163,7 +2163,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_single_line_up_moves_to_start(cx: &mut TestAppContext) {
         let view = create_single_line_input(cx, "hello world", 5);
         view.update(cx, |view, window, cx| {
@@ -2175,7 +2175,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_single_line_down_moves_to_end(cx: &mut TestAppContext) {
         let view = create_single_line_input(cx, "hello world", 5);
         view.update(cx, |view, window, cx| {
@@ -2187,7 +2187,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_single_line_select_up_selects_to_start(cx: &mut TestAppContext) {
         let view = create_single_line_input(cx, "hello world", 5);
         view.update(cx, |view, window, cx| {
@@ -2199,7 +2199,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_single_line_select_down_selects_to_end(cx: &mut TestAppContext) {
         let view = create_single_line_input(cx, "hello world", 5);
         view.update(cx, |view, window, cx| {
@@ -2215,7 +2215,7 @@ mod tests {
     // UNDO / REDO
     // ============================================================
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_undo_restores_content(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello", 5);
         view.update(cx, |view, window, cx| {
@@ -2234,7 +2234,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_redo_restores_undone_content(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello", 5);
         view.update(cx, |view, window, cx| {
@@ -2254,7 +2254,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_undo_with_no_history_does_nothing(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello", 0);
         view.update(cx, |view, window, cx| {
@@ -2267,7 +2267,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_redo_with_no_history_does_nothing(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello", 0);
         view.update(cx, |view, window, cx| {
@@ -2280,7 +2280,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_undo_restores_selection(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello world", (0, 5));
         view.update(cx, |view, window, cx| {
@@ -2301,7 +2301,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_multiple_undo_redo(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "", 0);
         view.update(cx, |view, window, cx| {
@@ -2335,7 +2335,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_new_edit_clears_redo_stack(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello", 5);
         view.update(cx, |view, window, cx| {
@@ -2358,7 +2358,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_can_undo_can_redo(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello", 5);
         view.update(cx, |view, window, cx| {
@@ -2384,7 +2384,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_backspace_is_undoable(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello", 5);
         view.update(cx, |view, window, cx| {
@@ -2401,7 +2401,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_delete_is_undoable(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello", 0);
         view.update(cx, |view, window, cx| {
@@ -2418,7 +2418,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_cut_is_undoable(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello world", (0, 5));
         view.update(cx, |view, window, cx| {
@@ -2435,7 +2435,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_cut_line_with_no_selection(cx: &mut TestAppContext) {
         // Cursor in middle line, no selection - should cut entire line including newline
         let view = create_test_input(cx, "line1\nline2\nline3", 8); // cursor in "line2"
@@ -2451,7 +2451,7 @@ mod tests {
         assert_eq!(clipboard.unwrap().text().as_deref(), Some("line2\n"));
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_cut_first_line_with_no_selection(cx: &mut TestAppContext) {
         // Cursor on first line, no selection
         let view = create_test_input(cx, "line1\nline2\nline3", 2); // cursor in "line1"
@@ -2467,7 +2467,7 @@ mod tests {
         assert_eq!(clipboard.unwrap().text().as_deref(), Some("line1\n"));
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_cut_last_line_with_no_selection(cx: &mut TestAppContext) {
         // Cursor on last line, no selection - should include preceding newline
         let view = create_test_input(cx, "line1\nline2\nline3", 14); // cursor in "line3"
@@ -2483,7 +2483,7 @@ mod tests {
         assert_eq!(clipboard.unwrap().text().as_deref(), Some("\nline3"));
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_cut_empty_line(cx: &mut TestAppContext) {
         // Cursor on empty line - should remove that line
         let view = create_test_input(cx, "line1\n\nline3", 6); // cursor on empty line
@@ -2499,7 +2499,7 @@ mod tests {
         assert_eq!(clipboard.unwrap().text().as_deref(), Some("\n"));
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_cut_only_line_with_no_selection(cx: &mut TestAppContext) {
         // Single line content, no selection - should cut entire content
         let view = create_test_input(cx, "hello", 2);
@@ -2515,7 +2515,7 @@ mod tests {
         assert_eq!(clipboard.unwrap().text().as_deref(), Some("hello"));
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_cut_line_is_undoable(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "line1\nline2\nline3", 8);
         view.update(cx, |view, window, cx| {
@@ -2532,7 +2532,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_paste_is_undoable(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello", 5);
         cx.write_to_clipboard(ClipboardItem::new_string(" world".to_string()));
@@ -2550,7 +2550,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_enter_is_undoable(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello world", 5);
         view.update(cx, |view, window, cx| {
@@ -2568,7 +2568,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_delete_word_left(cx: &mut TestAppContext) {
         // Cursor at end of "hello" in "hello world"
         let view = create_test_input(cx, "hello world", 5);
@@ -2582,7 +2582,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_delete_word_left_with_selection(cx: &mut TestAppContext) {
         // Selection from 0 to 5 ("hello")
         let view = create_test_input(cx, "hello world", (0, 5));
@@ -2595,7 +2595,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_delete_word_left_at_start(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello world", 0);
         view.update(cx, |view, window, cx| {
@@ -2607,7 +2607,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_delete_word_right(cx: &mut TestAppContext) {
         // Cursor at start
         let view = create_test_input(cx, "hello world", 0);
@@ -2621,7 +2621,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_delete_word_right_with_selection(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello world", (0, 5));
         view.update(cx, |view, window, cx| {
@@ -2633,7 +2633,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_delete_word_right_at_end(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello world", 11);
         view.update(cx, |view, window, cx| {
@@ -2645,7 +2645,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_delete_to_beginning_of_line(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello world", 5);
         view.update(cx, |view, window, cx| {
@@ -2658,7 +2658,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_delete_to_beginning_of_line_multiline(cx: &mut TestAppContext) {
         // Cursor at position 8 (middle of "line2")
         let view = create_test_input(cx, "line1\nline2\nline3", 8);
@@ -2671,7 +2671,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_delete_to_beginning_of_line_at_start(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello world", 0);
         view.update(cx, |view, window, cx| {
@@ -2683,7 +2683,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_delete_to_end_of_line(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello world", 5);
         view.update(cx, |view, window, cx| {
@@ -2696,7 +2696,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_delete_to_end_of_line_multiline(cx: &mut TestAppContext) {
         // Cursor at position 8 (middle of "line2")
         let view = create_test_input(cx, "line1\nline2\nline3", 8);
@@ -2709,7 +2709,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_delete_to_end_of_line_at_end(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello world", 11);
         view.update(cx, |view, window, cx| {
@@ -2721,7 +2721,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_delete_word_left_is_undoable(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello world", 5);
         view.update(cx, |view, window, cx| {
@@ -2738,7 +2738,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_delete_word_right_is_undoable(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello world", 6);
         view.update(cx, |view, window, cx| {
@@ -2755,7 +2755,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_delete_to_beginning_of_line_is_undoable(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello world", 5);
         view.update(cx, |view, window, cx| {
@@ -2772,7 +2772,7 @@ mod tests {
         .unwrap();
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn test_delete_to_end_of_line_is_undoable(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello world", 5);
         view.update(cx, |view, window, cx| {

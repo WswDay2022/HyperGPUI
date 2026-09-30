@@ -12,8 +12,8 @@ mod example_prelude;
 
 use std::time::Duration;
 
-use gpui::colors::Colors;
-use gpui::{
+use hgpui::colors::Colors;
+use hgpui::{
     App, Bounds, Context, Entity, Render, Task, Window, WindowBounds, WindowOptions, div,
     prelude::*, px, rgb, size,
 };
@@ -266,7 +266,7 @@ impl Render for AsyncTasksExample {
                             .child(
                                 div()
                                     .text_xl()
-                                    .font_weight(gpui::FontWeight::BOLD)
+                                    .font_weight(hgpui::FontWeight::BOLD)
                                     .text_color(colors.text)
                                     .child("Async Tasks"),
                             )
@@ -342,7 +342,7 @@ impl Render for AsyncTasksExample {
                             .child(
                                 div()
                                     .text_2xl()
-                                    .font_weight(gpui::FontWeight::BOLD)
+                                    .font_weight(hgpui::FontWeight::BOLD)
                                     .text_color(colors.text)
                                     .child(format!("{}", cancellable.counter)),
                             )
@@ -458,7 +458,7 @@ fn demo_section(
                 .child(
                     div()
                         .text_sm()
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .font_weight(hgpui::FontWeight::SEMIBOLD)
                         .text_color(colors.text)
                         .child(title),
                 )
@@ -474,10 +474,10 @@ fn demo_section(
 
 fn button(
     colors: &Colors,
-    id: impl Into<gpui::ElementId>,
+    id: impl Into<hgpui::ElementId>,
     label: &'static str,
     disabled: bool,
-) -> gpui::Stateful<gpui::Div> {
+) -> hgpui::Stateful<hgpui::Div> {
     let disabled_bg = colors.selected;
     let bg = colors.selected;
     let bg_hover = colors.selected;
@@ -505,9 +505,9 @@ fn button(
 
 fn secondary_button(
     colors: &Colors,
-    id: impl Into<gpui::ElementId>,
+    id: impl Into<hgpui::ElementId>,
     label: &'static str,
-) -> gpui::Stateful<gpui::Div> {
+) -> hgpui::Stateful<hgpui::Div> {
     let bg = colors.selected;
     let bg_hover = colors.border;
     let text = colors.text;
@@ -541,12 +541,12 @@ fn progress_bar(colors: &Colors, progress: u32) -> impl IntoElement {
                 .h_full()
                 .rounded_full()
                 .background(bar_fill)
-                .w(gpui::relative(clamped as f32 / 100.0)),
+                .w(hgpui::relative(clamped as f32 / 100.0)),
         )
 }
 
 fn main() {
-    gpui_platform::application().run(|cx: &mut App| {
+    hgpui_platform::application().run(|cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(550.), px(850.)), cx);
         cx.open_window(
             WindowOptions {

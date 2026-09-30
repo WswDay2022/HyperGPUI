@@ -39,8 +39,8 @@ use unicase::UniCase;
 
 pub use collections::{TypeIdHashBuilder, TypeIdHasher};
 #[cfg(target_os = "windows")]
-pub use gpui::get_windows_system_shell;
-pub use gpui::{
+pub use hgpui::get_windows_system_shell;
+pub use hgpui::{
     Deferred, LogErrorFuture, LogErrorWithBacktraceFuture, ResultExt, TryFutureExt,
     TryFutureExtBacktrace, UnwrapFuture, arc_cow, debug_panic, defer, log_err, maybe, measure,
     new_std_command, post_inc, some_or_debug_panic, truncate_to_bottom_n_sorted_by,

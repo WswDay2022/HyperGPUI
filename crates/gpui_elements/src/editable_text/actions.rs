@@ -1,11 +1,11 @@
 //! Module containing user-input actions that are bound by EditableText elements
-use gpui::{InteractiveElement, WeakEntity, Window};
+use hgpui::{InteractiveElement, WeakEntity, Window};
 use std::{cell::RefCell, rc::Rc};
 
 /// The key context used for EditableText element keybindings.
 pub const DEFAULT_INPUT_CONTEXT: &str = "EditableText";
 
-gpui::actions!(
+hgpui::actions!(
     actions,
     [
         /// Blur focus from the input.
@@ -80,7 +80,7 @@ gpui::actions!(
 );
 
 /// Creates a collection of default keystroke bindings for EditableText actions.
-/// See [`ActionBindingCollection`](gpui::ActionBindingCollection) docs on how to override these bindings.
+/// See [`ActionBindingCollection`](hgpui::ActionBindingCollection) docs on how to override these bindings.
 ///
 /// Apple keyboards dont have Home or End keys, so there are common bindings that replace those keys.
 /// | Action                | All         | Linux & Windows           | MacOS           |
@@ -121,8 +121,8 @@ gpui::actions!(
 /// | ShowCharacterPalette  |             | ctrl + space              | cmd + space      |
 ///
 /// TODO: Collection does not supply a way to unbind a default keystroke
-pub fn default_bindings() -> gpui::ActionBindingCollection {
-    let mut bindings = gpui::ActionBindingCollection::default()
+pub fn default_bindings() -> hgpui::ActionBindingCollection {
+    let mut bindings = hgpui::ActionBindingCollection::default()
         .with::<DeleteLeft>("backspace")
         .with::<DeleteRight>("delete")
         .with::<Tab>("tab")
@@ -273,17 +273,17 @@ pub trait EditableTextActionHandler<Context>: Sized {
 
     fn on_mouse_down(
         &mut self,
-        _event: &gpui::MouseDownEvent,
-        _text_position: gpui::Point<gpui::Pixels>,
+        _event: &hgpui::MouseDownEvent,
+        _text_position: hgpui::Point<hgpui::Pixels>,
         _w: &mut Window,
         _cx: &mut Context,
     ) {
     }
-    fn on_mouse_up(&mut self, _event: &gpui::MouseUpEvent, _w: &mut Window, _cx: &mut Context) {}
+    fn on_mouse_up(&mut self, _event: &hgpui::MouseUpEvent, _w: &mut Window, _cx: &mut Context) {}
     fn on_mouse_move(
         &mut self,
-        _event: &gpui::MouseMoveEvent,
-        _text_position: gpui::Point<gpui::Pixels>,
+        _event: &hgpui::MouseMoveEvent,
+        _text_position: hgpui::Point<hgpui::Pixels>,
         _w: &mut Window,
         _cx: &mut Context,
     ) {
@@ -315,7 +315,7 @@ pub(super) trait EditableTextActionElement<State> {
     fn register_actions(&mut self)
     where
         Self: InteractiveElement,
-        State: for<'app> EditableTextActionHandler<gpui::Context<'app, State>>,
+        State: for<'app> EditableTextActionHandler<hgpui::Context<'app, State>>,
         State: 'static,
     {
         register_action!(self, escape);

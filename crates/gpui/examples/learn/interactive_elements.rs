@@ -11,8 +11,8 @@
 mod example_prelude;
 
 use example_prelude::init_example;
-use gpui::colors::Colors;
-use gpui::{
+use hgpui::colors::Colors;
+use hgpui::{
     App, Bounds, ClickEvent, ColorExt, Context, Entity, Half, Hsla, IntoElement, MouseButton,
     MouseMoveEvent, Pixels, Point, Render, Window, WindowBounds, WindowOptions, div, prelude::*,
     px, rgb, size,
@@ -56,7 +56,7 @@ impl Render for ClickDemo {
             .child(
                 div()
                     .text_sm()
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .font_weight(hgpui::FontWeight::SEMIBOLD)
                     .text_color(colors.text)
                     .child("Click Events"),
             )
@@ -150,7 +150,7 @@ impl Render for HoverDemo {
             .child(
                 div()
                     .text_sm()
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .font_weight(hgpui::FontWeight::SEMIBOLD)
                     .text_color(colors.text)
                     .child("Hover Events"),
             )
@@ -259,7 +259,7 @@ impl Render for MouseEventsDemo {
             .child(
                 div()
                     .text_sm()
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .font_weight(hgpui::FontWeight::SEMIBOLD)
                     .text_color(colors.text)
                     .child("Mouse Events"),
             )
@@ -362,7 +362,7 @@ impl DragData {
 // Render trait for DragData allows it to be rendered as drag feedback
 impl Render for DragData {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        let size = gpui::size(px(80.), px(40.));
+        let size = hgpui::size(px(80.), px(40.));
 
         // Position the drag preview at the cursor
         div()
@@ -376,7 +376,7 @@ impl Render for DragData {
                     .w(size.width)
                     .h(size.height)
                     .background(self.color.opacity(0.8))
-                    .text_color(gpui::white())
+                    .text_color(hgpui::white())
                     .text_xs()
                     .rounded_md()
                     .shadow_lg()
@@ -410,7 +410,7 @@ impl Render for DragDropDemo {
             .child(
                 div()
                     .text_sm()
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .font_weight(hgpui::FontWeight::SEMIBOLD)
                     .text_color(colors.text)
                     .child("Drag and Drop"),
             )
@@ -527,7 +527,7 @@ impl Render for InteractiveElementsExample {
                             .child(
                                 div()
                                     .text_xl()
-                                    .font_weight(gpui::FontWeight::BOLD)
+                                    .font_weight(hgpui::FontWeight::BOLD)
                                     .text_color(colors.text)
                                     .child("Interactive Elements"),
                             )
@@ -553,7 +553,7 @@ impl Render for InteractiveElementsExample {
 }
 
 fn main() {
-    gpui_platform::application().run(|cx: &mut App| {
+    hgpui_platform::application().run(|cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(700.), px(650.)), cx);
         cx.open_window(
             WindowOptions {

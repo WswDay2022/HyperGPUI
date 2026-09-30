@@ -1,5 +1,5 @@
 [package]
-name = "gpui-ce"
+name = "hgpui"
 version = "0.2.3"
 edition.workspace = true
 authors = ["Nathan Sobo <nathan@zed.dev>"]
@@ -25,7 +25,7 @@ test-support = [
   "proptest",
 ]
 bench = ["test-support", "dep:criterion", "dep:hdrhistogram"]
-inspector = ["gpui_macros/inspector"]
+inspector = ["hgpui_macros/inspector"]
 leak-detection = ["backtrace"]
 wayland = []
 x11 = ["scap?/x11"]
@@ -36,10 +36,10 @@ profiler = []
 # Route the example/test platform backend through wgpu (WGSL) instead of the native
 # (HLSL/Metal) renderer. Windows defaults to the DirectX/HLSL backend; enabling this
 # feature is how examples and tests exercise the wgpu/WGSL path on Windows.
-wgpu = ["gpui_platform/wgpu"]
+wgpu = ["hgpui_platform/wgpu"]
 
 [lib]
-name = "gpui"
+name = "hgpui"
 path = "src/gpui.rs"
 doctest = false
 
@@ -57,8 +57,8 @@ derive_more.workspace = true
 etagere.workspace = true
 futures.workspace = true
 futures-concurrency.workspace = true
-gpui_macros.workspace = true
-gpui_shared_string.workspace = true
+hgpui_macros.workspace = true
+hgpui_shared_string.workspace = true
 http.workspace = true
 image.workspace = true
 inventory.workspace = true
@@ -154,7 +154,7 @@ backtrace.workspace = true
 smol.workspace = true
 collections = { workspace = true, features = ["test-support"] }
 env_logger.workspace = true
-gpui_platform = { workspace = true, features = ["font-kit", "wayland", "x11"] }
+hgpui_platform = { workspace = true, features = ["font-kit", "wayland", "x11"] }
 lyon = { version = "1.0", features = ["extra"] }
 rand.workspace = true
 scheduler = { workspace = true, features = ["test-support"] }
@@ -164,7 +164,7 @@ proptest = { workspace = true }
 
 [target.'cfg(target_family = "wasm")'.dev-dependencies]
 wasm-bindgen = { workspace = true }
-gpui_web.workspace = true
+hgpui_web.workspace = true
 
 [build-dependencies]
 embed-resource = { version = "3.0", optional = true }

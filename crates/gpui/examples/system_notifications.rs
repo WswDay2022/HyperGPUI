@@ -2,14 +2,14 @@
 
 //! Demonstrates posting, replacing, dismissing, and responding to system notifications.
 
-use gpui::{
+use hgpui::{
     App, Bounds, Context, Div, SharedString, Stateful, SystemNotification,
     SystemNotificationAction, SystemNotificationResponse, Window, WindowBounds, WindowOptions, div,
     prelude::*, px, rgb, size,
 };
-use gpui_platform::application;
+use hgpui_platform::application;
 
-const NOTIFICATION_TAG: &str = "gpui-system-notification-example";
+const NOTIFICATION_TAG: &str = "hgpui-system-notification-example";
 
 struct SystemNotificationExample {
     revision: usize,
@@ -97,7 +97,7 @@ fn button(id: &'static str, label: &'static str) -> Stateful<Div> {
 
 fn run_example() {
     application().run(|cx: &mut App| {
-        cx.set_app_identity("dev.zed.gpui.system-notifications", "GPUI Notifications");
+        cx.set_app_identity("dev.zed.hgpui.system-notifications", "GPUI Notifications");
 
         let view = cx.new(|_| SystemNotificationExample {
             revision: 0,
@@ -123,7 +123,7 @@ fn run_example() {
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
-                titlebar: Some(gpui::TitlebarOptions {
+                titlebar: Some(hgpui::TitlebarOptions {
                     title: Some("System Notifications Example".into()),
                     ..Default::default()
                 }),
@@ -144,6 +144,6 @@ fn main() {
 #[cfg(target_family = "wasm")]
 #[wasm_bindgen::prelude::wasm_bindgen(start)]
 pub fn start() {
-    gpui_platform::web_init();
+    hgpui_platform::web_init();
     run_example();
 }

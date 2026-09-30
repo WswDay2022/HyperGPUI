@@ -1,6 +1,6 @@
 ## Repository context
 
-`gpui-ce` is a standalone community fork of Zed's GPUI. It vendors crates from the upstream Zed
+`hgpui` is a standalone community fork of Zed's GPUI. It vendors crates from the upstream Zed
 monorepo (`zed-industries/zed`). Two groups:
 
 **Same relative path** (upstream dir == fork dir): `crates/gpui`, `crates/gpui_linux`,
@@ -15,12 +15,12 @@ deps but now vendored in-tree by the fork:
 The sync remaps upstream's
 content into these fork dirs, so a conflict here is upstream's version of the crate vs. the fork's
 vendored+adapted version. Preserve the fork's adaptations (see rule 4) while taking upstream's real
-changes. (`util_macros` is no longer used by the fork; `gpui_elements` and `tooling/perf` are
+changes. (`util_macros` is no longer used by the fork; `hgpui_elements` and `tooling/perf` are
 fork-only and never synced.)
 
 A 3-way `git merge` of the upstream delta produced conflicts, and the raw merge — with conflict
 markers committed in — is already its own commit. Your job is to resolve **every** marker in the
-listed files so the result is correct gpui-ce code that incorporates the upstream changes. Your
+listed files so the result is correct hgpui code that incorporates the upstream changes. Your
 edits land as a **separate, reviewable resolution commit** diffed against that raw merge.
 
 ## Rules
@@ -28,19 +28,19 @@ edits land as a **separate, reviewable resolution commit** diffed against that r
 1. **Resolve every conflict marker** (`<<<<<<<`, `=======`, `>>>>>>>`, `|||||||`) in the listed
    files. Leave no markers behind. Do not touch files that aren't conflicted.
 
-2. **gpui-ce keeps its own patches.** gpui-ce carries features/fixes not yet upstream (e.g. blur
+2. **hgpui keeps its own patches.** hgpui carries features/fixes not yet upstream (e.g. blur
    filters, kinetic scrolling on Wayland, the wgpu device-loss API). When a conflict pits an
-   upstream change against a gpui-ce patch, **keep both behaviours** — integrate the upstream
-   change around gpui-ce's additions rather than dropping either. Only drop a gpui-ce line if the
+   upstream change against a hgpui patch, **keep both behaviours** — integrate the upstream
+   change around hgpui's additions rather than dropping either. Only drop a hgpui line if the
    upstream change genuinely supersedes it.
 
-3. **Already-present (cherry-picked) changes.** gpui-ce frequently contributes to and cherry-picks
+3. **Already-present (cherry-picked) changes.** hgpui frequently contributes to and cherry-picks
    from upstream, so an upstream commit may already be present here under a different hash. If a
-   conflict exists *only* because the change is **already applied** in gpui-ce (semantically
-   equivalent, even if worded differently), keep gpui-ce's version and do **not** duplicate the code.
+   conflict exists *only* because the change is **already applied** in hgpui (semantically
+   equivalent, even if worded differently), keep hgpui's version and do **not** duplicate the code.
 
 4. **Vendored crate adaptations — preserve them.** The vendored+renamed crates carry mechanical
-   gpui-ce adaptations on top of upstream. When a conflict pits upstream against one of these, KEEP
+   hgpui adaptations on top of upstream. When a conflict pits upstream against one of these, KEEP
    the adaptation and take upstream's real code change around it:
    - **Package rename:** the package name is the fork's `gpui_*` name (e.g. `gpui_collections`, not
      `collections`), with the fork's `publish`/version/workspace metadata. Do **not** revert to
@@ -53,7 +53,7 @@ edits land as a **separate, reviewable resolution commit** diffed against that r
      these substitutions; don't reintroduce `ztracing`/`zlog`.
 
 5. **`Cargo.toml` (per-crate and root):**
-   - KEEP gpui-ce packaging (names, `publish`, `edition`, workspace metadata) and the fork's dep
+   - KEEP hgpui packaging (names, `publish`, `edition`, workspace metadata) and the fork's dep
      *sources* (path deps for the vendored crates; `zed-font-kit` for font-kit).
    - **ADOPT upstream's real changes: newly added/removed dependencies, new features, new
      `[target.'cfg(...)']` blocks, and — importantly — dependency VERSION BUMPS.** If upstream bumped
@@ -61,18 +61,18 @@ edits land as a **separate, reviewable resolution commit** diffed against that r
      dep is often paired with a regression test that only passes on the new version. Wire any newly
      required workspace dependency through the fork's convention.
 
-6. **Removed Zed-app / AGPL code.** gpui-ce stripped Zed-application-specific and non-Apache code.
-   If an upstream change references a crate or module that doesn't exist in gpui-ce (e.g.
+6. **Removed Zed-app / AGPL code.** hgpui stripped Zed-application-specific and non-Apache code.
+   If an upstream change references a crate or module that doesn't exist in hgpui (e.g.
    `http_client`, `reqwest_client`, `util_macros`), drop that reference rather than reintroducing the
    removed code.
 
 7. **Add/delete conflicts are handled for you** — the script settles `modify/delete` cases
-   (files gpui-ce deleted that upstream changed are kept deleted) before calling you, so you
+   (files hgpui deleted that upstream changed are kept deleted) before calling you, so you
    only ever see content conflicts. Don't recreate a deleted file.
 
 8. **Relocated files.** When upstream MOVES a file to another crate, the prompt lists it above as
    `old path → new path`. The script has already deleted the old path and the merge has already
-   brought in the new one, so the code is not lost — but any **gpui-ce adaptation that lived in the
+   brought in the new one, so the code is not lost — but any **hgpui adaptation that lived in the
    old file is**. For each listed move: diff what the fork had at the old path against what arrived
    at the new one, re-apply the fork's adaptations (rule 4) at the NEW location, and update every
    `use`/`mod`/path reference to point there. Never leave the old copy behind alongside the new one —

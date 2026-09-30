@@ -28,11 +28,11 @@ use std::{future::Future, rc::Rc, sync::Arc, time::Duration};
 /// # Usage
 ///
 /// ```ignore
-/// let text_system = Arc::new(gpui_wgpu::CosmicTextSystem::new("fallback"));
+/// let text_system = Arc::new(hgpui_wgpu::CosmicTextSystem::new("fallback"));
 /// let mut cx = HeadlessAppContext::with_platform(
 ///     text_system,
 ///     Arc::new(Assets),
-///     || gpui_platform::current_headless_renderer(),
+///     || hgpui_platform::current_headless_renderer(),
 /// );
 /// ```
 pub struct HeadlessAppContext {

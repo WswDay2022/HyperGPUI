@@ -2,17 +2,17 @@ use anyhow::{Context as _, anyhow};
 use x11rb::connection::RequestConnection;
 
 use crate::linux::X11ClientStatePtr;
-use gpui::{
+use hgpui::{
     AnyWindowHandle, Bounds, Decorations, DevicePixels, ForegroundExecutor, GpuSpecs, Modifiers,
     Pixels, PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow,
     Point, PromptButton, PromptLevel, RequestFrameOptions, ResizeEdge, ScaledPixels, Scene, Size,
     Tiling, WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControlArea,
     WindowDecorations, WindowKind, WindowParams, popup::PopupNotSupportedError, px,
 };
-use gpui_wgpu::{CompositorGpuHint, WgpuRenderer, WgpuSurfaceConfig};
+use hgpui_wgpu::{CompositorGpuHint, WgpuRenderer, WgpuSurfaceConfig};
 
 use collections::FxHashSet;
-use gpui::{ResultExt, maybe};
+use hgpui::{ResultExt, maybe};
 use raw_window_handle as rwh;
 use x11rb::{
     connection::Connection,
@@ -243,7 +243,7 @@ unsafe impl Sync for RawWindow {}
 #[derive(Default)]
 pub struct Callbacks {
     request_frame: Option<Box<dyn FnMut(RequestFrameOptions)>>,
-    input: Option<Box<dyn FnMut(PlatformInput) -> gpui::DispatchEventResult>>,
+    input: Option<Box<dyn FnMut(PlatformInput) -> hgpui::DispatchEventResult>>,
     active_status_change: Option<Box<dyn FnMut(bool)>>,
     hovered_status_change: Option<Box<dyn FnMut(bool)>>,
     resize: Option<Box<dyn FnMut(Size<Pixels>, f32)>>,
@@ -414,9 +414,9 @@ impl X11WindowState {
         handle: AnyWindowHandle,
         client: X11ClientStatePtr,
         executor: ForegroundExecutor,
-        gpu_context: gpui_wgpu::GpuContext,
+        gpu_context: hgpui_wgpu::GpuContext,
         compositor_gpu: Option<CompositorGpuHint>,
-        gpu_requirements: Option<gpui_wgpu::WgpuDeviceRequirements>,
+        gpu_requirements: Option<hgpui_wgpu::WgpuDeviceRequirements>,
         params: WindowParams,
         xcb: &Rc<XCBConnection>,
         client_side_decorations_supported: bool,
@@ -430,7 +430,7 @@ impl X11WindowState {
         is_bgr: bool,
     ) -> anyhow::Result<Self> {
         // Native popups are not implemented on X11 yet. Rejecting lets callers fall back to
-        // gpui's in-window popovers.
+        // hgpui's in-window popovers.
         if let WindowKind::AnchoredPopup(_) = params.kind {
             return Err(PopupNotSupportedError.into());
         }
@@ -889,9 +889,9 @@ impl X11Window {
         handle: AnyWindowHandle,
         client: X11ClientStatePtr,
         executor: ForegroundExecutor,
-        gpu_context: gpui_wgpu::GpuContext,
+        gpu_context: hgpui_wgpu::GpuContext,
         compositor_gpu: Option<CompositorGpuHint>,
-        gpu_requirements: Option<gpui_wgpu::WgpuDeviceRequirements>,
+        gpu_requirements: Option<hgpui_wgpu::WgpuDeviceRequirements>,
         params: WindowParams,
         xcb: &Rc<XCBConnection>,
         client_side_decorations_supported: bool,
@@ -1444,7 +1444,7 @@ impl PlatformWindow for X11Window {
             .unwrap_or_default()
     }
 
-    fn capslock(&self) -> gpui::Capslock {
+    fn capslock(&self) -> hgpui::Capslock {
         self.0
             .state
             .borrow()
@@ -1670,7 +1670,7 @@ impl PlatformWindow for X11Window {
         self.0.callbacks.borrow_mut().request_frame = Some(callback);
     }
 
-    fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> gpui::DispatchEventResult>) {
+    fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> hgpui::DispatchEventResult>) {
         self.0.callbacks.borrow_mut().input = Some(callback);
     }
 
@@ -1790,7 +1790,7 @@ impl PlatformWindow for X11Window {
             .log_err();
     }
 
-    fn window_decorations(&self) -> gpui::Decorations {
+    fn window_decorations(&self) -> hgpui::Decorations {
         let state = self.0.state.borrow();
 
         // Client window decorations require compositor support
@@ -1866,16 +1866,16 @@ impl PlatformWindow for X11Window {
         }
     }
 
-    fn request_decorations(&self, mut decorations: gpui::WindowDecorations) {
+    fn request_decorations(&self, mut decorations: hgpui::WindowDecorations) {
         let mut state = self.0.state.borrow_mut();
 
-        if matches!(decorations, gpui::WindowDecorations::Client)
+        if matches!(decorations, hgpui::WindowDecorations::Client)
             && !state.client_side_decorations_supported
         {
             log::info!(
                 "x11: no compositor present, falling back to server-side window decorations"
             );
-            decorations = gpui::WindowDecorations::Server;
+            decorations = hgpui::WindowDecorations::Server;
         }
 
         // https://github.com/rust-windowing/winit/blob/master/src/platform_impl/linux/x11/util/hint.rs#L53-L87
@@ -1949,7 +1949,7 @@ impl PlatformWindow for X11Window {
         let _ = self.0.xcb.bell(0);
     }
 
-    fn a11y_init(&self, callbacks: gpui::A11yCallbacks) {
+    fn a11y_init(&self, callbacks: hgpui::A11yCallbacks) {
         let activation_handler = TrivialActivationHandler {
             callback: callbacks.activation,
         };

@@ -238,12 +238,12 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-dev libxcb-shape0-dev libxcb-xfixes0-dev libfontconfig-dev
-      - name: Check gpui-ce's public API against the PR base
+      - name: Check hgpui's public API against the PR base
         uses: obi1kenobi/cargo-semver-checks-action@v2
         with:
-          package: gpui-ce
+          package: hgpui
           baseline-rev: ${{ github.event.pull_request.base.sha }}
-          # gpui-ce is being released as 0.2.3. A patch release must not
+          # hgpui is being released as 0.2.3. A patch release must not
           # contain breaking API changes, so previously advisory diagnostics
           # are CI failures for this release.
           release-type: patch

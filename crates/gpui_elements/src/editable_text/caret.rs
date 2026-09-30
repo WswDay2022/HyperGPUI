@@ -1,4 +1,4 @@
-use gpui::{Context, Entity, EventEmitter, Subscription};
+use hgpui::{Context, Entity, EventEmitter, Subscription};
 use smallvec::SmallVec;
 use std::time::Duration;
 

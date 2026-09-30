@@ -23,8 +23,8 @@
 //! Run it on either backend:
 //!
 //! ```sh
-//! cargo run -p gpui-ce --example css-transform
-//! cargo run -p gpui-ce --example css-transform --features wgpu
+//! cargo run -p hgpui --example css-transform
+//! cargo run -p hgpui --example css-transform --features wgpu
 //! ```
 
 #[path = "../shared/prelude.rs"]
@@ -32,7 +32,7 @@ mod example_prelude;
 
 use std::f32::consts::FRAC_PI_8;
 
-use gpui::{
+use hgpui::{
     App, AppContext, Bounds, Context, Div, InteractiveElement, IntoElement, ParentElement, Render,
     Styled, Window, WindowBounds, WindowOptions, div, px, radians, rgb, size,
 };
@@ -88,7 +88,7 @@ impl Render for CssTransformExample {
 /// the inner transform composes with the outer one.
 fn subtree_row(
     label: &'static str,
-    color: gpui::Rgba,
+    color: hgpui::Rgba,
     apply: impl FnOnce(Div) -> Div + 'static,
 ) -> impl IntoElement {
     div()
@@ -115,7 +115,7 @@ type CardTransform = Box<dyn FnOnce(Div) -> Div>;
 /// A content card: colored background + border, a text line mixing CJK glyphs and an
 /// emoji, an underlined / struck-through word line, and a nested child element that
 /// carries its own transform. Pass `None` for the plain reference card.
-fn content_card(color: gpui::Rgba, apply: Option<CardTransform>) -> impl IntoElement {
+fn content_card(color: hgpui::Rgba, apply: Option<CardTransform>) -> impl IntoElement {
     let card = div()
         .w(px(190.0))
         .h(px(96.0))
@@ -170,7 +170,7 @@ fn content_card(color: gpui::Rgba, apply: Option<CardTransform>) -> impl IntoEle
 /// A row: an untransformed reference card, an arrow label, and the transformed card.
 fn transform_row(
     label: &'static str,
-    color: gpui::Rgba,
+    color: hgpui::Rgba,
     apply: impl FnOnce(Div) -> Div,
 ) -> impl IntoElement {
     div()
@@ -191,7 +191,7 @@ fn transform_row(
 }
 
 /// An untransformed card of the standard size and shape.
-fn reference_card(color: gpui::Rgba) -> impl IntoElement {
+fn reference_card(color: hgpui::Rgba) -> impl IntoElement {
     div()
         .w(px(140.0))
         .h(px(70.0))
@@ -202,7 +202,7 @@ fn reference_card(color: gpui::Rgba) -> impl IntoElement {
 }
 
 /// The same card with a CSS-style transform applied through one of the `Styled` shortcuts.
-fn transformed_card(color: gpui::Rgba, apply: impl FnOnce(Div) -> Div) -> impl IntoElement {
+fn transformed_card(color: hgpui::Rgba, apply: impl FnOnce(Div) -> Div) -> impl IntoElement {
     apply(
         div()
             .w(px(140.0))
@@ -211,12 +211,12 @@ fn transformed_card(color: gpui::Rgba, apply: impl FnOnce(Div) -> Div) -> impl I
             .background(color)
             .border_1()
             .border_color(rgb(0xffffff33))
-            .cursor(gpui::CursorStyle::PointingHand),
+            .cursor(hgpui::CursorStyle::PointingHand),
     )
 }
 
 fn main() {
-    gpui_platform::application().run(|cx: &mut App| {
+    hgpui_platform::application().run(|cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(720.0), px(1020.0)), cx);
 
         let _ = cx.open_window(

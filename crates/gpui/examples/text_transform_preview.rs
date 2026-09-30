@@ -1,4 +1,4 @@
-use gpui::{
+use hgpui::{
     App, Bounds, Context, FontWeight, Render, TextTransform, Window, WindowBounds, WindowOptions,
     div, prelude::*, px, rgb, size,
 };
@@ -67,7 +67,7 @@ impl Render for TextTransformPreview {
 }
 
 fn main() {
-    gpui_platform::application().run(|cx: &mut App| {
+    hgpui_platform::application().run(|cx: &mut App| {
         cx.activate(true);
         let bounds = Bounds::centered(None, size(px(720.), px(480.)), cx);
         if let Err(error) = cx.open_window(

@@ -1,5 +1,5 @@
 use cocoa::base::id;
-use gpui::HapticFeedbackStyle;
+use hgpui::HapticFeedbackStyle;
 use objc::{class, msg_send, sel, sel_impl};
 
 /// macOS haptic feedback using [`NSHapticFeedbackManager`].

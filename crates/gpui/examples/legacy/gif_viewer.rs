@@ -1,4 +1,4 @@
-use gpui::{App, Context, Render, Window, WindowOptions, div, img, prelude::*};
+use hgpui::{App, Context, Render, Window, WindowOptions, div, img, prelude::*};
 use std::path::PathBuf;
 
 struct GifViewer {
@@ -16,7 +16,7 @@ impl Render for GifViewer {
         div().size_full().child(
             img(self.gif_path.clone())
                 .size_full()
-                .object_fit(gpui::ObjectFit::Contain)
+                .object_fit(hgpui::ObjectFit::Contain)
                 .id("gif"),
         )
     }
@@ -24,7 +24,7 @@ impl Render for GifViewer {
 
 fn main() {
     env_logger::init();
-    gpui_platform::application().run(|cx: &mut App| {
+    hgpui_platform::application().run(|cx: &mut App| {
         let gif_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("examples/legacy/image/black-cat-typing.gif");
 

@@ -206,7 +206,7 @@ impl BackgroundExecutor {
             .allow_parking();
 
         if std::env::var("GPUI_RUN_UNTIL_PARKED_LOG").ok().as_deref() == Some("1") {
-            log::warn!("[gpui::executor] allow_parking: enabled");
+            log::warn!("[hgpui::executor] allow_parking: enabled");
         }
     }
 

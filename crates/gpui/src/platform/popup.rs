@@ -126,7 +126,7 @@ bitflags! {
 
 /// Returned when the current platform has no native popup implementation yet.
 ///
-/// Native popups are separate from gpui's in-window popovers, which are drawn as elements inside
+/// Native popups are separate from hgpui's in-window popovers, which are drawn as elements inside
 /// an existing window. A caller that wants a popup on every platform should treat this error as
 /// a cue to fall back to that in-window rendering.
 #[derive(Debug, Error)]

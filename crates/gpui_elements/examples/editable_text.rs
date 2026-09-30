@@ -13,15 +13,15 @@
 //! work through the key bindings installed in `main` (`default_bindings`).
 //!
 //! ```sh
-//! cargo run -p gpui_ce_elements --example editable_text
+//! cargo run -p hgpui_elements --example editable_text
 //! ```
 
-use gpui::{
+use hgpui::{
     App, AppContext as _, Bounds, Context, Entity, EntityInputHandler as _, Focusable as _,
     InteractiveElement as _, IntoElement, ParentElement as _, Render, StatefulInteractiveElement as _,
     Styled as _, Window, WindowBounds, WindowOptions, div, px, rgb, size,
 };
-use gpui_ce_elements::editable_text::{
+use hgpui_elements::editable_text::{
     EditableTextState, StringStorage, TextChanged,
     actions::{DEFAULT_INPUT_CONTEXT, default_bindings},
     text_area, text_input,
@@ -74,9 +74,9 @@ impl Render for Example {
                     .placeholder("Name")
                     .caret_blink_interval_500ms()
                     // The colour hooks take `Hsla`; the hex values are in the comments.
-                    .placeholder_color(gpui::hsla(0.0, 0.0, 0.42, 1.0)) // #6b6b6b
-                    .caret_color(gpui::hsla(0.133, 0.845, 0.531, 1.0)) // #facc15
-                    .selection_color(gpui::hsla(0.13, 0.9, 0.6, 0.35))
+                    .placeholder_color(hgpui::hsla(0.0, 0.0, 0.42, 1.0)) // #6b6b6b
+                    .caret_color(hgpui::hsla(0.133, 0.845, 0.531, 1.0)) // #facc15
+                    .selection_color(hgpui::hsla(0.13, 0.9, 0.6, 0.35))
                     .border_1()
                     .border_color(rgb(0x3a3a40))
                     .rounded_lg()
@@ -173,7 +173,7 @@ impl Render for Example {
 }
 
 fn main() {
-    gpui_platform::application().run(|cx: &mut App| {
+    hgpui_platform::application().run(|cx: &mut App| {
         // Installs the keystroke bindings the fields listen for (navigation, delete,
         // cut/copy/paste, undo/redo) under the `EditableText` key context.
         cx.bind_keys(default_bindings().as_keybindings(Some(DEFAULT_INPUT_CONTEXT)));

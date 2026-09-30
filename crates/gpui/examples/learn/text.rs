@@ -13,7 +13,7 @@
 mod example_prelude;
 
 use example_prelude::init_example;
-use gpui::{
+use hgpui::{
     App, Bounds, ColorExt, Context, FontStyle, FontWeight, Hsla, Render, StyledText, TextOverflow,
     Window, WindowBounds, WindowOptions, colors::Colors, div, prelude::*, px, relative, rgb, size,
 };
@@ -567,7 +567,7 @@ fn section(colors: &Colors, title: &'static str, content: impl IntoElement) -> i
 }
 
 fn main() {
-    gpui_platform::application().run(|cx: &mut App| {
+    hgpui_platform::application().run(|cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(650.), px(900.)), cx);
         cx.open_window(
             WindowOptions {

@@ -1,12 +1,12 @@
 //! Tests for the input composition. Require the `test-support` feature:
 //!
 //! ```sh
-//! cargo test -p gpui --example view_example --features test-support
+//! cargo test -p hgpui --example view_example --features test-support
 //! ```
 
 #[cfg(test)]
 mod tests {
-    use gpui::{Context, Entity, KeyBinding, TestAppContext, Window, prelude::*};
+    use hgpui::{Context, Entity, KeyBinding, TestAppContext, Window, prelude::*};
 
     use crate::example_editor::Editor;
     use crate::example_input::Input;
@@ -22,7 +22,7 @@ mod tests {
 
     impl Render for Harness {
         fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-            gpui::div()
+            hgpui::div()
                 .child(Input::editor(self.a.clone()))
                 .child(Input::editor(self.b.clone()))
         }
@@ -47,7 +47,7 @@ mod tests {
         Entity<Editor>,
         Entity<String>,
         Entity<String>,
-        &mut gpui::VisualTestContext,
+        &mut hgpui::VisualTestContext,
     ) {
         bind_keys(cx);
 
@@ -73,7 +73,7 @@ mod tests {
         (a, a_value, b_value, cx)
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn typing_updates_the_shared_string(cx: &mut TestAppContext) {
         let (editor, a_value, _b_value, cx) = setup(cx);
 
@@ -83,7 +83,7 @@ mod tests {
         cx.read_entity(&editor, |editor, _| assert_eq!(editor.cursor, 5));
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn sibling_inputs_are_isolated(cx: &mut TestAppContext) {
         let (_editor, a_value, b_value, cx) = setup(cx);
 
@@ -95,7 +95,7 @@ mod tests {
         });
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn external_writes_clamp_the_cursor(cx: &mut TestAppContext) {
         let (editor, a_value, _b_value, cx) = setup(cx);
 
@@ -118,7 +118,7 @@ mod tests {
         });
     }
 
-    #[gpui::test]
+    #[hgpui::test]
     fn arrows_move_the_cursor(cx: &mut TestAppContext) {
         let (editor, _a_value, _b_value, cx) = setup(cx);
 

@@ -1,4 +1,4 @@
-use gpui::{
+use hgpui::{
     App, Bounds, BoxShadow, Context, Div, SharedString, Window, WindowBounds, WindowOptions, div,
     hsla, prelude::*, px, relative, rgb, size,
 };
@@ -585,7 +585,7 @@ impl Render for Shadow {
 }
 
 fn main() {
-    gpui_platform::application().run(|cx: &mut App| {
+    hgpui_platform::application().run(|cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(1000.0), px(800.0)), cx);
         cx.open_window(
             WindowOptions {

@@ -1,5 +1,5 @@
 [package]
-name = "gpui_ce_tokio"
+name = "hgpui_tokio"
 version = "0.1.0"
 description.workspace = true
 edition.workspace = true
@@ -15,5 +15,5 @@ doctest = false
 
 [dependencies]
 anyhow.workspace = true
-gpui.workspace = true
+hgpui.workspace = true
 tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }

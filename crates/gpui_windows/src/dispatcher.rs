@@ -7,7 +7,7 @@ use std::{
 };
 
 use anyhow::Context;
-use gpui::ResultExt;
+use hgpui::ResultExt;
 use windows::Win32::{
     Foundation::{FILETIME, LPARAM, WPARAM},
     Media::{timeBeginPeriod, timeEndPeriod},
@@ -21,7 +21,7 @@ use windows::Win32::{
 };
 
 use crate::{HWND, SafeHwnd, WM_GPUI_TASK_DISPATCHED_ON_MAIN_THREAD};
-use gpui::{
+use hgpui::{
     PlatformDispatcher, Priority, PriorityQueueSender, RunnableVariant, TimerResolutionGuard,
 };
 
@@ -92,9 +92,9 @@ impl WindowsDispatcher {
     pub(crate) fn execute_runnable(runnable: RunnableVariant) {
         let location = runnable.metadata().location;
         let spawned = runnable.metadata().spawned;
-        gpui::profiler::update_running_task(spawned, location);
+        hgpui::profiler::update_running_task(spawned, location);
         runnable.run();
-        gpui::profiler::save_task_timing();
+        hgpui::profiler::save_task_timing();
     }
 }
 
@@ -166,7 +166,7 @@ impl PlatformDispatcher for WindowsDispatcher {
         unsafe {
             timeBeginPeriod(1);
         }
-        gpui::defer(Box::new(|| unsafe {
+        hgpui::defer(Box::new(|| unsafe {
             timeEndPeriod(1);
         }))
     }
