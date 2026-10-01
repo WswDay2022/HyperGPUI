@@ -272,6 +272,7 @@ impl A11y {
         self.focus_ids.clear();
         self.node_bounds.clear();
         self.action_listeners.clear();
+        #[cfg(debug_assertions)]
         self.view_type_names.clear();
         self.nodes.begin_frame(self.window_title.as_ref());
     }
@@ -330,7 +331,7 @@ impl<'a> A11ySubtreeBuilder<'a> {
     /// [`Element::a11y_synthetic_children`] call, but may be duplicated across
     /// different calls.
     pub fn synthetic_node_id(&self, key: impl Hash) -> NodeId {
-        let mut hasher = std::hash::DefaultHasher::default();
+        let mut hasher = collections::FxHasher::default();
         self.parent_id.0.hash(&mut hasher);
         key.hash(&mut hasher);
         NodeId(hasher.finish())

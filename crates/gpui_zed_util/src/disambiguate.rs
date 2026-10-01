@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use collections::HashMap;
 use std::hash::Hash;
 
 /// Computes the minimum detail level needed for each item so that no two items

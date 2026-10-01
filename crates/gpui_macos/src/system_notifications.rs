@@ -6,7 +6,7 @@
 //! registers a response callback.
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use collections::HashMap;
 use std::rc::Rc;
 
 use block2::RcBlock;

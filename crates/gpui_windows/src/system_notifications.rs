@@ -1,7 +1,7 @@
 //! System notifications as Windows toast notifications.
 
 use std::cell::RefCell;
-use std::collections::{HashMap, hash_map::DefaultHasher};
+use collections::{FxHasher, HashMap};
 use std::hash::{Hash as _, Hasher as _};
 use std::rc::Rc;
 
@@ -33,7 +33,7 @@ impl SystemNotificationState {
         let (response_sender, response_receiver) = mpsc::unbounded();
         Self {
             notifier: None,
-            active_toasts: HashMap::new(),
+            active_toasts: HashMap::default(),
             response_sender,
             response_receiver: Some(response_receiver),
             callback: Rc::new(RefCell::new(None)),
@@ -56,7 +56,7 @@ impl SystemNotificationState {
         // Windows caps toast tags at 64 characters (post-Creators Update),
         // so hash the arbitrary GPUI tag down to a fixed-width value.
         let tag = {
-            let mut hasher = DefaultHasher::new();
+            let mut hasher = FxHasher::default();
             notification.tag.hash(&mut hasher);
             format!("{:016x}", hasher.finish())
         };

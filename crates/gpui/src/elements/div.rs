@@ -44,7 +44,7 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use std::ops::{Deref, DerefMut};
+
 use super::ImageCacheProvider;
 
 const DRAG_THRESHOLD: f64 = 2.;
@@ -4191,7 +4191,7 @@ pub(crate) struct ScrollHandleState {
 }
 
 #[derive(Default, Debug, Clone, Copy)]
-struct ScrollActiveItem {
+pub(crate) struct ScrollActiveItem {
     index: usize,
     strategy: ScrollStrategy,
 }

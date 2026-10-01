@@ -1,9 +1,10 @@
 use itertools::Itertools;
 use scheduler::{Instant, SpawnTime};
+use collections::{FxHasher, HashMap};
 use std::{
     cell::LazyCell,
-    collections::{HashMap, VecDeque},
-    hash::{DefaultHasher, Hash, Hasher},
+    collections::VecDeque,
+    hash::{Hash, Hasher},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -309,7 +310,7 @@ impl SerializedThreadTaskTimings {
     pub fn convert(anchor: Instant, timings: ThreadTaskTimings) -> SerializedThreadTaskTimings {
         let serialized_timings = SerializedTaskTiming::convert(anchor, &timings.timings);
 
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = FxHasher::default();
         timings.thread_id.hash(&mut hasher);
         let thread_id = hasher.finish();
 
@@ -359,7 +360,7 @@ impl ProfilingCollector {
         let mut deltas = Vec::with_capacity(all_timings.len());
 
         for thread in all_timings {
-            let mut hasher = DefaultHasher::new();
+            let mut hasher = FxHasher::default();
             thread.thread_id.hash(&mut hasher);
             let hashed_id = hasher.finish();
 

@@ -3,7 +3,7 @@
 
 use heck::ToSnakeCase as _;
 use proc_macro::TokenStream;
-use proc_macro2::{Span, TokenStream as TokenStream2};
+use proc_macro2::{TokenStream as TokenStream2};
 use quote::quote;
 use syn::{
     Attribute, Expr, FnArg, Ident, Item, ItemTrait, Lit, Meta, Path, ReturnType, TraitItem, Type,
@@ -41,8 +41,6 @@ fn generate_reflected_trait(trait_item: ItemTrait) -> TokenStream {
     let trait_name = &trait_item.ident;
     let vis = &trait_item.vis;
 
-    // Determine if we're being called from within the hgpui crate
-    let call_site = Span::call_site();
     // Always through the library path. `hgpui`'s own crate root has `extern crate self as hgpui;`,
     // so this resolves inside the crate and from consumers alike — unlike `crate::`, which broke
     // when the macro was expanded in an integration test (same package, different crate).

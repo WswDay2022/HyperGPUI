@@ -260,6 +260,15 @@ mod easing {
         move |delta| 1.0 - (1.0 - delta).powi(5)
     }
 
+    /// The cubic ease-out function: fast at first, settling gently.
+    ///
+    /// This is the default easing of the animated lists. It is the same shape as CSS
+    /// `ease-out`, just cheap to evaluate.
+    pub fn ease_out_cubic(delta: f32) -> f32 {
+        let n = delta - 1.0;
+        n * n * n + 1.0
+    }
+
     /// Apply the given easing function, first in the forward direction and then in the reverse direction
     pub fn bounce(easing: impl Fn(f32) -> f32) -> impl Fn(f32) -> f32 {
         move |delta| {
@@ -268,6 +277,81 @@ mod easing {
             } else {
                 easing((1.0 - delta) * 2.0)
             }
+        }
+    }
+
+    /// A cubic Bézier easing curve, exactly like CSS `cubic-bezier(x1, y1, x2, y2)`.
+    ///
+    /// The curve runs from `(0, 0)` to `(1, 1)` through the two given control points. As in CSS,
+    /// `x1` and `x2` are clamped to `0..=1` (the time axis has to keep moving forward), while
+    /// `y1` and `y2` are free — going above `1` is how an overshooting "back" curve is written:
+    ///
+    /// ```
+    /// # use hgpui::cubic_bezier;
+    /// // `ease-out-back`: overshoots past the target, then settles back onto it.
+    /// let ease_out_back = cubic_bezier(0.34, 1.56, 0.64, 1.0);
+    /// assert!(ease_out_back(0.7) > 1.0);
+    /// assert!((ease_out_back(1.0) - 1.0).abs() < 1e-6);
+    ///
+    /// // The diagonal is the linear curve.
+    /// let linear = cubic_bezier(0.0, 0.0, 1.0, 1.0);
+    /// assert!((linear(0.4) - 0.4).abs() < 1e-5);
+    /// ```
+    pub fn cubic_bezier(x1: f32, y1: f32, x2: f32, y2: f32) -> impl Fn(f32) -> f32 {
+        let x1 = x1.clamp(0.0, 1.0);
+        let x2 = x2.clamp(0.0, 1.0);
+
+        // Each axis as a polynomial, as in WebKit's `UnitBezier`.
+        let cx = 3.0 * x1;
+        let bx = 3.0 * (x2 - x1) - cx;
+        let ax = 1.0 - cx - bx;
+        let cy = 3.0 * y1;
+        let by = 3.0 * (y2 - y1) - cy;
+        let ay = 1.0 - cy - by;
+
+        let sample = |a: f32, b: f32, c: f32, t: f32| ((a * t + b) * t + c) * t;
+
+        move |delta: f32| {
+            let target = delta.clamp(0.0, 1.0);
+            if target <= 0.0 {
+                return 0.0;
+            } else if target >= 1.0 {
+                return 1.0;
+            }
+
+            // The curve is parameterized by `t`, not by time: find the `t` whose x is the time
+            // we were asked about. Newton-Raphson first, since it converges in a few steps...
+            let error_at = |t: f32| sample(ax, bx, cx, t) - target;
+            let mut t = target;
+            for _ in 0..8 {
+                let error = error_at(t);
+                if error.abs() < 1e-6 {
+                    return sample(ay, by, cy, t);
+                }
+                let slope = (3.0 * ax * t + 2.0 * bx) * t + cx;
+                if slope.abs() < 1e-6 {
+                    break;
+                }
+                t -= error / slope;
+            }
+
+            // ...and bisection as the fallback, which cannot diverge.
+            let (mut low, mut high) = (0.0f32, 1.0f32);
+            let mut t = target;
+            for _ in 0..40 {
+                let x_at_t = sample(ax, bx, cx, t);
+                if (x_at_t - target).abs() < 1e-6 {
+                    break;
+                }
+                if x_at_t < target {
+                    low = t;
+                } else {
+                    high = t;
+                }
+                t = (low + high) / 2.0;
+            }
+
+            sample(ay, by, cy, t)
         }
     }
 
@@ -285,6 +369,77 @@ mod easing {
 
             min + (normalized_alpha * range)
         }
+    }
+}
+
+#[cfg(test)]
+mod easing_tests {
+    use super::easing::*;
+
+    #[test]
+    fn cubic_bezier_matches_the_css_keywords() {
+        // The diagonal is linear.
+        let linear = cubic_bezier(0.0, 0.0, 1.0, 1.0);
+        for step in 0..=10 {
+            let t = step as f32 / 10.0;
+            assert!(
+                (linear(t) - t).abs() < 1e-5,
+                "linear at {t}: {}",
+                linear(t)
+            );
+        }
+
+        // `ease` is cubic-bezier(0.25, 0.1, 0.25, 1), and its midpoint is a well-known value.
+        let ease = cubic_bezier(0.25, 0.1, 0.25, 1.0);
+        assert!((ease(0.5) - 0.8024).abs() < 1e-3, "ease(0.5) = {}", ease(0.5));
+    }
+
+    #[test]
+    fn cubic_bezier_hits_both_ends() {
+        let curve = cubic_bezier(0.42, 0.0, 0.58, 1.0);
+
+        assert_eq!(curve(0.0), 0.0);
+        assert_eq!(curve(1.0), 1.0);
+        // Out-of-range times are clamped, like CSS.
+        assert_eq!(curve(-1.0), 0.0);
+        assert_eq!(curve(2.0), 1.0);
+    }
+
+    #[test]
+    fn cubic_bezier_can_overshoot() {
+        // `ease-out-back`, which is the reason `y` is not clamped.
+        let ease_out_back = cubic_bezier(0.34, 1.56, 0.64, 1.0);
+
+        assert!(ease_out_back(0.7) > 1.0, "overshoots: {}", ease_out_back(0.7));
+        // It is a "fast out" curve: well ahead of linear before it overshoots. (0.703 here,
+        // which matches the standard `easeOutBack` polynomial to within a thousandth.)
+        assert!(ease_out_back(0.2) > 0.7, "starts fast: {}", ease_out_back(0.2));
+    }
+
+    #[test]
+    fn cubic_bezier_is_monotonic_when_it_should_be() {
+        let ease_in_out = cubic_bezier(0.42, 0.0, 0.58, 1.0);
+        let mut previous = 0.0;
+
+        for step in 0..=100 {
+            let value = ease_in_out(step as f32 / 100.0);
+            assert!(value >= previous, "not monotonic at {step}: {value} < {previous}");
+            previous = value;
+        }
+
+        assert!((previous - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn cubic_bezier_clamps_the_control_points_on_the_time_axis() {
+        // CSS requires x1 and x2 to be in 0..=1; out-of-range ones are clamped rather than
+        // rejected, and a curve with them is still a usable (if odd) easing.
+        let curve = cubic_bezier(-2.0, 0.0, 3.0, 1.0);
+
+        assert_eq!(curve(0.0), 0.0);
+        assert_eq!(curve(1.0), 1.0);
+        let mid = curve(0.5);
+        assert!(mid.is_finite() && (0.0..=1.0).contains(&mid), "{mid}");
     }
 }
 

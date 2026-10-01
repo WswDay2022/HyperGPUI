@@ -1,5 +1,6 @@
 use crate::{Action, DummyKeyboardMapper, KeyBinding, KeyBindingContextPredicate, SharedString};
-use std::{any::TypeId, collections::HashMap};
+use collections::HashMap;
+use std::any::TypeId;
 
 /// A generic collection of `Action` -> keystrokes which can be bound under a shared key-context.
 /// Use `as_keybindings` to create an iterator of `KeyBinding` to provide to `App::bind_keys`.

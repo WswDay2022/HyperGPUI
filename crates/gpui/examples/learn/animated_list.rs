@@ -32,7 +32,7 @@ use hgpui::{
 };
 
 /// How long a row takes to glide.
-const SLIDE: Duration = Duration::from_millis(220);
+const SLIDE: Duration = Duration::from_millis(180);
 /// How many rows to start with.
 const INITIAL_ROWS: usize = 12;
 
@@ -197,17 +197,17 @@ impl Render for AnimatedListExample {
                     .duration(SLIDE)
                     .smooth_scroll(true)
                     .leaving(&self.leaving)
-                    .leave(|row, t| {
+                    .leave(|row, delta, _time| {
                         div()
-                            .opacity(1. - t)
-                            .translate_y(px(-6.) * t)
+                            .opacity(1. - delta)
+                            .translate_y(px(-6.) * delta)
                             .child(row)
                             .into_any_element()
                     })
-                    .enter(|row, t| {
+                    .enter(|row, delta, _time| {
                         div()
-                            .opacity(t)
-                            .translate_y(px(6.) * (1. - t))
+                            .opacity(delta)
+                            .translate_y(px(6.) * (1. - delta))
                             .child(row)
                             .into_any_element()
                     })

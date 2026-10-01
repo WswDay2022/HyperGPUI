@@ -2824,7 +2824,7 @@ mod image_tests {
 #[cfg(all(test, any(target_os = "linux", target_os = "freebsd")))]
 mod tests {
     use super::*;
-    use std::collections::HashSet;
+    use collections::HashSet;
 
     #[test]
     fn test_window_button_layout_parse_standard() {

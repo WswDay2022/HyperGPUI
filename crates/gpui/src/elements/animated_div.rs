@@ -1,17 +1,24 @@
 use crate::smallvec::SmallVec;
-use crate::{accesskit, point, AnyElement, App, Bounds, Display, DivFrameState, Element, ElementId, GlobalElementId, Hitbox, ImageCacheProvider, InspectorElementId, InteractiveElement, Interactivity, IntoElement, LayoutId, ParentElement, Pixels, Point, Stateful, StatefulInteractiveElement, StyleRefinement, Styled, Window};
+use crate::{accesskit, point, AnyElement, App, Bounds, Display, DivFrameState, Element, ElementId, GlobalElementId, Hitbox, ImageCacheProvider, InspectorElementId, InteractiveElement, Interactivity, IntoElement, LayoutId, ParentElement, Pixels, Point, Stateful, StyleRefinement, Styled, Window};
 use hgpui::linear;
 use stacksafe::{StackSafe, stacksafe};
 use std::rc::Rc;
 use std::time::Duration;
 
+/// How an [`AnimatedDiv`] animates, and which parts of its bounds take part.
 pub struct AnimatedDivProps {
+    /// Animate changes to the width.
     pub animating_width: bool,
+    /// Animate changes to the height.
     pub animating_height: bool,
+    /// Animate changes to the horizontal position.
     pub animating_x: bool,
+    /// Animate changes to the vertical position.
     pub animating_y: bool,
+    /// Easing applied to the animation's progress.
     pub easing: Rc<dyn Fn(f32) -> f32 + 'static>,
-    pub duration: Duration
+    /// How long each animation takes.
+    pub duration: Duration,
 }
 
 impl Default for AnimatedDivProps {
@@ -42,8 +49,15 @@ impl From<Duration> for AnimatedDivProps {
     }
 }
 
+/// Creates an [`AnimatedDiv`], keyed by `id`.
+///
+/// The animation state lives in a keyed transition, so the element must keep the same `id`
+/// across frames (and unique among its siblings) for the animation to be continuous.
 #[track_caller]
-pub fn animated_div(id: impl Into<ElementId>, props: impl Into<AnimatedDivProps>) -> Stateful<AnimatedDiv> {
+pub fn animated_div(
+    id: impl Into<ElementId>,
+    props: impl Into<AnimatedDivProps>,
+) -> Stateful<AnimatedDiv> {
     let id = id.into();
     Stateful {
         element: AnimatedDiv {
@@ -62,6 +76,9 @@ pub fn animated_div(id: impl Into<ElementId>, props: impl Into<AnimatedDivProps>
     }
 }
 
+/// A container that animates its bounds when its layout changes.
+///
+/// See [`animated_div`] and [`AnimatedDivProps`].
 pub struct AnimatedDiv {
     interactivity: Interactivity,
     children: SmallVec<[StackSafe<AnyElement>; 2]>,

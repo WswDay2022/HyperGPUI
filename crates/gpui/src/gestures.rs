@@ -480,6 +480,15 @@ impl SmoothScroll {
     }
 }
 
+/// Elapsed fraction of an animation, before easing: monotone, and clamped to `0.0 -> 1.0`.
+pub(crate) fn progress(started: Instant, now: Instant, duration: Duration) -> f32 {
+    let duration = duration.as_secs_f32();
+    if duration <= 0.0 {
+        return 1.0;
+    }
+    ((now - started).as_secs_f32() / duration).clamp(0.0, 1.0)
+}
+
 /// The offset a scroll container is heading for: the same as the rendered offset when
 /// smoothing is off, and the glide's destination when it is on.
 pub(crate) fn scroll_target(
@@ -589,6 +598,9 @@ impl SmoothScrollState {
         }
     }
 
+    /// Whether the rendered offset is still moving. (The lists drive their frames from the
+    /// value [`step`](Self::step) returns; this is here for tests.)
+    #[cfg(test)]
     pub(crate) fn is_animating(&self) -> bool {
         self.animating
     }

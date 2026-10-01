@@ -8,6 +8,9 @@ pub type TypeIdHashSet = std::collections::HashSet<std::any::TypeId, TypeIdHashB
 pub use indexmap::*;
 pub use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet, FxHasher};
 pub use std::collections::*;
+// `indexmap` and `std::collections` both export this one; naming it explicitly keeps the two
+// glob re-exports above unambiguous.
+pub use std::collections::TryReserveError;
 
 #[derive(Default, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct TypeIdHashBuilder;
