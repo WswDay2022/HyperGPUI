@@ -115,7 +115,6 @@ struct DirectXResources {
 /// (indexed by isolation depth), up to [`MAX_FILTER_DEPTH`], so nested content blurs isolate
 /// correctly; deeper nests render inline.
 struct BlurResources {
-    #[expect(dead_code)]
     scene_color: ID3D11Texture2D,
     scene_color_rtv: Option<ID3D11RenderTargetView>,
     scene_color_srv: Option<ID3D11ShaderResourceView>,
@@ -1087,6 +1086,9 @@ impl DirectXRenderer {
             source_srv,
             BlurParams {
                 downsample: 1.0,
+                // The element's box: this pass mirrors the taps that leave it back inside,
+                // rather than letting them read the transparent surround (see `mirror_into_rect`).
+                bounds,
                 ..Default::default()
             },
             &half_vp,
@@ -1456,31 +1458,35 @@ impl DirectXGlobalElements {
             output
         };
 
-        let blur_sampler = unsafe {
-            let desc = D3D11_SAMPLER_DESC {
-                Filter: D3D11_FILTER_MIN_MAG_MIP_LINEAR,
-                // Gaussian taps may leave the texture at the window edges; clamp them so the
-                // blur fades out like CSS instead of wrapping around to the far edge.
-                AddressU: D3D11_TEXTURE_ADDRESS_CLAMP,
-                AddressV: D3D11_TEXTURE_ADDRESS_CLAMP,
-                AddressW: D3D11_TEXTURE_ADDRESS_CLAMP,
-                MipLODBias: 0.0,
-                MaxAnisotropy: 1,
-                ComparisonFunc: D3D11_COMPARISON_ALWAYS,
-                BorderColor: [0.0; 4],
-                MinLOD: 0.0,
-                MaxLOD: D3D11_FLOAT32_MAX,
-            };
-            let mut output = None;
-            device.CreateSamplerState(&desc, Some(&mut output))?;
-            output
-        };
+        let blur_sampler = create_blur_sampler(device)?;
 
         Ok(Self {
             global_params_buffer,
             sampler,
             blur_sampler,
         })
+    }
+}
+
+/// The sampler the blur passes share: linear, clamped. Taps may leave the texture at the window
+/// edges, and clamping keeps them from wrapping around to the far side.
+fn create_blur_sampler(device: &ID3D11Device) -> Result<Option<ID3D11SamplerState>> {
+    unsafe {
+        let desc = D3D11_SAMPLER_DESC {
+            Filter: D3D11_FILTER_MIN_MAG_MIP_LINEAR,
+            AddressU: D3D11_TEXTURE_ADDRESS_CLAMP,
+            AddressV: D3D11_TEXTURE_ADDRESS_CLAMP,
+            AddressW: D3D11_TEXTURE_ADDRESS_CLAMP,
+            MipLODBias: 0.0,
+            MaxAnisotropy: 1,
+            ComparisonFunc: D3D11_COMPARISON_ALWAYS,
+            BorderColor: [0.0; 4],
+            MinLOD: 0.0,
+            MaxLOD: D3D11_FLOAT32_MAX,
+        };
+        let mut output = None;
+        device.CreateSamplerState(&desc, Some(&mut output))?;
+        Ok(output)
     }
 }
 
@@ -1500,6 +1506,8 @@ struct GlobalParams {
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct BlurParams {
+    /// The composite quad (composite pass), or the element's box that the source samples are
+    /// mirrored into (downsample pass), in device pixels.
     bounds: Bounds<ScaledPixels>,
     content_mask: Bounds<ScaledPixels>,
     corner_radii: [f32; 4],
@@ -1507,8 +1515,8 @@ struct BlurParams {
     sigma: f32,
     opacity: f32,
     tap_count: f32,
-    /// 1.0 clips the composite to the rounded rect (backdrop); 0.0 lets content blur bleed past
-    /// its bounds like CSS `filter: blur`.
+    /// 1.0 clips the composite to the rounded rect (backdrop); 0.0 lets content blur spread past
+    /// its bounds (the blur itself no longer fades at the edge — see `mirror_into_rect`).
     clip_rounded: f32,
     /// 1.0 = snapped 2:1 box downsample (anchor the half-res grid to a fixed 2px grid at the
     /// origin, so a stationary element blurs identically at every window size); 0.0 = 1:1 copy
@@ -2626,27 +2634,37 @@ mod tests {
     // hgpui_macros::{..., test, ...}`). That glob chain shadows the built-in
     // `#[test]` attribute and blows up `#[test]` expansion with an infinite
     // recursion. Import only what this module needs, explicitly.
-    use super::{create_blend_state, update_buffer, GlobalParams, PipelineState, RENDER_TARGET_FORMAT};
+    use super::{
+        create_blend_state, create_blend_state_for_path_sprite, create_blend_state_no_blend,
+        create_blur_sampler, create_color_target, create_constant_buffer, create_fragment_shader,
+        create_vertex_shader, update_buffer, BlurParams, GlobalParams, PipelineState,
+        RawShaderBytes, ShaderTarget, RENDER_TARGET_FORMAT,
+    };
     use crate::directx_renderer::shader_resources::ShaderModule;
     use anyhow::Result;
     use hgpui::{
         bounds, hsla, linear_color_stop, linear_gradient, point, radial_gradient, rgba, size,
-        Background, ContentMask, Corners, Quad, RadialShape, RadialSize, ScaledPixels,
+        Background, Bounds, ContentMask, Corners, Quad, RadialShape, RadialSize, ScaledPixels,
     };
     use std::slice;
     use windows::core::Interface;
     use windows::Win32::{
         Foundation::HMODULE,
         Graphics::{
-            Direct3D::D3D_DRIVER_TYPE_WARP,
+            Direct3D::{
+                D3D_DRIVER_TYPE_WARP, D3D_PRIMITIVE_TOPOLOGY,
+                D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST, D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP,
+            },
             Direct3D11::{
                 D3D11CreateDevice, D3D11_BIND_CONSTANT_BUFFER, D3D11_BIND_RENDER_TARGET,
-                D3D11_CPU_ACCESS_READ, D3D11_CPU_ACCESS_WRITE,
+                D3D11_BIND_SHADER_RESOURCE, D3D11_CPU_ACCESS_READ, D3D11_CPU_ACCESS_WRITE,
                 D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_CREATE_DEVICE_DEBUG, D3D11_MAP_READ,
                 D3D11_MAPPED_SUBRESOURCE, D3D11_MESSAGE, D3D11_SDK_VERSION,
-                D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, D3D11_USAGE_DYNAMIC,
-                D3D11_USAGE_STAGING, D3D11_VIEWPORT, ID3D11Device, ID3D11DeviceContext,
-                ID3D11InfoQueue, ID3D11RenderTargetView, ID3D11Texture2D,
+                D3D11_SUBRESOURCE_DATA, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
+                D3D11_USAGE_DYNAMIC, D3D11_USAGE_STAGING, D3D11_VIEWPORT, ID3D11BlendState,
+                ID3D11Buffer, ID3D11Device, ID3D11DeviceContext, ID3D11InfoQueue,
+                ID3D11PixelShader, ID3D11RenderTargetView, ID3D11SamplerState,
+                ID3D11ShaderResourceView, ID3D11Texture2D, ID3D11VertexShader,
                 D3D11_BUFFER_DESC,
             },
             Dxgi::Common::DXGI_SAMPLE_DESC,
@@ -2889,6 +2907,346 @@ mod tests {
             [128, 32, 64, 255],
             "corner pixel should be the clear color (B,G,R,A), got {corner:?}"
         );
+        Ok(())
+    }
+
+    /// A `TEST_SIZE`-square texture holding an opaque `color` square on a transparent surround:
+    /// the case of a photo on a page.
+    fn create_source_square(
+        device: &ID3D11Device,
+        square: (u32, u32, u32, u32),
+        color: [u8; 4],
+    ) -> Result<ID3D11Texture2D> {
+        let mut pixels = vec![0u8; (TEST_SIZE * TEST_SIZE * 4) as usize];
+        for y in square.1..square.3 {
+            for x in square.0..square.2 {
+                let i = ((y * TEST_SIZE + x) * 4) as usize;
+                pixels[i..i + 4].copy_from_slice(&color);
+            }
+        }
+        unsafe {
+            let desc = D3D11_TEXTURE2D_DESC {
+                Width: TEST_SIZE,
+                Height: TEST_SIZE,
+                MipLevels: 1,
+                ArraySize: 1,
+                Format: RENDER_TARGET_FORMAT,
+                SampleDesc: DXGI_SAMPLE_DESC {
+                    Count: 1,
+                    Quality: 0,
+                },
+                Usage: D3D11_USAGE_DEFAULT,
+                BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
+                CPUAccessFlags: 0,
+                MiscFlags: 0,
+            };
+            let data = D3D11_SUBRESOURCE_DATA {
+                pSysMem: pixels.as_ptr().cast(),
+                SysMemPitch: TEST_SIZE * 4,
+                SysMemSlicePitch: 0,
+            };
+            let mut texture = None;
+            device.CreateTexture2D(&desc, Some(&data), Some(&mut texture))?;
+            Ok(texture.unwrap())
+        }
+    }
+
+    /// One blur pass: binds everything the pass needs and draws a fullscreen triangle (or the
+    /// composite's quad) with `params` in the b1 constant buffer, exactly as `dx_blur_pass` does.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_blur_pass(
+        context: &ID3D11DeviceContext,
+        device: &ID3D11Device,
+        vertex: &ID3D11VertexShader,
+        fragment: &ID3D11PixelShader,
+        blend: &ID3D11BlendState,
+        target: &ID3D11RenderTargetView,
+        source: &ID3D11ShaderResourceView,
+        sampler: &ID3D11SamplerState,
+        globals: &ID3D11Buffer,
+        params_buffer: &ID3D11Buffer,
+        params: BlurParams,
+        viewport: &D3D11_VIEWPORT,
+        topology: D3D_PRIMITIVE_TOPOLOGY,
+        vertex_count: u32,
+    ) -> Result<()> {
+        let _ = device;
+        update_buffer(context, params_buffer, &[params])?;
+        let srv = Some(source.clone());
+        let rtv = Some(target.clone());
+        let globals = Some(globals.clone());
+        let params_buffer = Some(params_buffer.clone());
+        let sampler = Some(sampler.clone());
+        unsafe {
+            // Unbind slot 0 before setting the target: a texture that is still bound as output
+            // (the target of the previous pass) cannot be bound as input at the same time.
+            let null_srv: [Option<ID3D11ShaderResourceView>; 1] = [None];
+            context.PSSetShaderResources(0, Some(&null_srv));
+            context.OMSetRenderTargets(Some(slice::from_ref(&rtv)), None);
+            context.RSSetViewports(Some(slice::from_ref(viewport)));
+            context.IASetPrimitiveTopology(topology);
+            context.VSSetShader(vertex, None);
+            context.PSSetShader(fragment, None);
+            context.VSSetConstantBuffers(0, Some(slice::from_ref(&globals)));
+            context.PSSetConstantBuffers(0, Some(slice::from_ref(&globals)));
+            context.VSSetConstantBuffers(1, Some(slice::from_ref(&params_buffer)));
+            context.PSSetConstantBuffers(1, Some(slice::from_ref(&params_buffer)));
+            context.PSSetSamplers(0, Some(slice::from_ref(&sampler)));
+            context.OMSetBlendState(blend, None, 0xFFFFFFFF);
+            context.PSSetShaderResources(0, Some(slice::from_ref(&srv)));
+            context.DrawInstanced(vertex_count, 1, 0, 0);
+            context.PSSetShaderResources(0, Some(&null_srv));
+        }
+        Ok(())
+    }
+
+    /// A blurred element must not dissolve at its own border. The downsample reflects taps that
+    /// leave the element's box back inside it, so the blur reads the element's own edge pixels
+    /// instead of the transparent surround; without that reflection the border fades out, and on
+    /// a light page that reads as a white rim.
+    ///
+    /// This runs the real four passes twice — once with the element's box, once with the zero box
+    /// the pass used to be handed — and reads the pixels back.
+    #[test]
+    fn hlsl_blur_edge_offscreen_readback() -> Result<()> {
+        let Some((device, context)) = create_warp_device() else {
+            eprintln!("[blur_edge] WARP device unavailable, skipping");
+            return Ok(());
+        };
+
+        /// The opaque square inside the source texture, and the element's box it stands for.
+        const SQUARE: (u32, u32, u32, u32) = (16, 16, 48, 48);
+        const RADIUS: f32 = 12.0;
+        /// Solid red, fully opaque — B, G, R, A, the order a BGRA target stores.
+        const RED: [u8; 4] = [0, 0, 255, 255];
+
+        let half = TEST_SIZE / 2;
+        // The blur passes sample the source as a shader resource; it is filled from the CPU (an
+        // empty `create_color_target` texture would be transparent everywhere).
+        let source_srv = {
+            let square = create_source_square(&device, SQUARE, RED)?;
+            let mut srv = None;
+            unsafe { device.CreateShaderResourceView(&square, None, Some(&mut srv)) }?;
+            srv.unwrap()
+        };
+        let (ping_texture, ping_rtv, ping_srv) = create_color_target(&device, half, half)?;
+        let (pong_texture, pong_rtv, pong_srv) = create_color_target(&device, half, half)?;
+        let (output, output_rtv, _) = create_color_target(&device, TEST_SIZE, TEST_SIZE)?;
+        let staging = {
+            let desc = D3D11_TEXTURE2D_DESC {
+                Width: TEST_SIZE,
+                Height: TEST_SIZE,
+                MipLevels: 1,
+                ArraySize: 1,
+                Format: RENDER_TARGET_FORMAT,
+                SampleDesc: DXGI_SAMPLE_DESC {
+                    Count: 1,
+                    Quality: 0,
+                },
+                Usage: D3D11_USAGE_STAGING,
+                BindFlags: 0,
+                CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
+                MiscFlags: 0,
+            };
+            let mut staging = None;
+            unsafe { device.CreateTexture2D(&desc, None, Some(&mut staging)) }?;
+            staging.unwrap()
+        };
+        let _ = &ping_texture;
+        let _ = &pong_texture;
+
+        let globals = GlobalParams {
+            gamma_ratios: [1.0, 1.0, 1.0, 1.0],
+            viewport_size: [TEST_SIZE as f32, TEST_SIZE as f32],
+            grayscale_enhanced_contrast: 0.0,
+            subpixel_enhanced_contrast: 0.0,
+            is_bgr: 0,
+            _pad: [0; 3],
+        };
+        let globals_buffer = create_constant_buffer(&device, std::mem::size_of::<GlobalParams>())?;
+        update_buffer(&context, &globals_buffer, &[globals])?;
+        let params_buffer = create_constant_buffer(&device, std::mem::size_of::<BlurParams>())?;
+        let sampler = create_blur_sampler(&device)?.expect("blur sampler");
+        let replace = create_blend_state_no_blend(&device)?;
+        let composite_blend = create_blend_state_for_path_sprite(&device)?;
+        let downsample_vertex = create_vertex_shader(
+            &device,
+            RawShaderBytes::new(ShaderModule::BlurDownsample, ShaderTarget::Vertex)?.as_bytes(),
+        )?;
+        let downsample_fragment = create_fragment_shader(
+            &device,
+            RawShaderBytes::new(ShaderModule::BlurDownsample, ShaderTarget::Fragment)?.as_bytes(),
+        )?;
+        let blur_vertex = create_vertex_shader(
+            &device,
+            RawShaderBytes::new(ShaderModule::Blur, ShaderTarget::Vertex)?.as_bytes(),
+        )?;
+        let blur_fragment = create_fragment_shader(
+            &device,
+            RawShaderBytes::new(ShaderModule::Blur, ShaderTarget::Fragment)?.as_bytes(),
+        )?;
+        let composite_vertex = create_vertex_shader(
+            &device,
+            RawShaderBytes::new(ShaderModule::BlurComposite, ShaderTarget::Vertex)?.as_bytes(),
+        )?;
+        let composite_fragment = create_fragment_shader(
+            &device,
+            RawShaderBytes::new(ShaderModule::BlurComposite, ShaderTarget::Fragment)?.as_bytes(),
+        )?;
+
+        let viewport = |size: u32| D3D11_VIEWPORT {
+            TopLeftX: 0.0,
+            TopLeftY: 0.0,
+            Width: size as f32,
+            Height: size as f32,
+            MinDepth: 0.0,
+            MaxDepth: 1.0,
+        };
+        let half_viewport = viewport(half);
+        let full_viewport = viewport(TEST_SIZE);
+
+        // The same kernel the renderer derives: sigma is halved because the blur runs at half
+        // resolution.
+        let sigma = RADIUS * 0.5;
+        let ideal_taps = (3.0 * sigma).ceil();
+        let tap_count = ideal_taps.clamp(1.0, 32.0);
+        let tap_step = (ideal_taps / tap_count).max(1.0);
+
+        let element_bounds = bounds(
+            point(ScaledPixels(SQUARE.0 as f32), ScaledPixels(SQUARE.1 as f32)),
+            size(
+                ScaledPixels((SQUARE.2 - SQUARE.0) as f32),
+                ScaledPixels((SQUARE.3 - SQUARE.1) as f32),
+            ),
+        );
+
+        let run = |mirror_into: Bounds<ScaledPixels>| -> Result<()> {
+            let rtv = output_rtv.clone().expect("output rtv");
+            let srv = &source_srv;
+            // The composite blends into the target, so each run starts from transparent black.
+            unsafe { context.ClearRenderTargetView(&rtv, &[0.0; 4]) };
+
+            // 1. Downsample the source into the half-res ping, reflecting taps that leave the
+            //    element's box back inside it.
+            draw_blur_pass(
+                &context,
+                &device,
+                &downsample_vertex,
+                &downsample_fragment,
+                &replace,
+                ping_rtv.as_ref().expect("ping rtv"),
+                srv,
+                &sampler,
+                &globals_buffer,
+                &params_buffer,
+                BlurParams {
+                    downsample: 1.0,
+                    bounds: mirror_into,
+                    ..Default::default()
+                },
+                &half_viewport,
+                D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
+                3,
+            )?;
+            // 2./3. One axis each of the separable gaussian, ping -> pong -> ping.
+            for direction in [[1.0 / half as f32, 0.0], [0.0, 1.0 / half as f32]] {
+                let (target, source) = if direction[0] > 0.0 {
+                    (pong_rtv.as_ref(), ping_srv.as_ref())
+                } else {
+                    (ping_rtv.as_ref(), pong_srv.as_ref())
+                };
+                draw_blur_pass(
+                    &context,
+                    &device,
+                    &blur_vertex,
+                    &blur_fragment,
+                    &replace,
+                    target.expect("blur target"),
+                    source.expect("blur source"),
+                    &sampler,
+                    &globals_buffer,
+                    &params_buffer,
+                    BlurParams {
+                        direction,
+                        sigma,
+                        tap_count,
+                        tap_step,
+                        ..Default::default()
+                    },
+                    &half_viewport,
+                    D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
+                    3,
+                )?;
+            }
+            // 4. Composite the blurred result over the target, dilated like the content path.
+            let composite_bounds = element_bounds.dilate(ScaledPixels(3.0 * RADIUS));
+            draw_blur_pass(
+                &context,
+                &device,
+                &composite_vertex,
+                &composite_fragment,
+                &composite_blend,
+                &rtv,
+                ping_srv.as_ref().expect("ping srv"),
+                &sampler,
+                &globals_buffer,
+                &params_buffer,
+                BlurParams {
+                    bounds: composite_bounds,
+                    content_mask: bounds(
+                        point(ScaledPixels(0.0), ScaledPixels(0.0)),
+                        size(
+                            ScaledPixels(TEST_SIZE as f32),
+                            ScaledPixels(TEST_SIZE as f32),
+                        ),
+                    ),
+                    opacity: 1.0,
+                    clip_rounded: 0.0,
+                    ..Default::default()
+                },
+                &full_viewport,
+                D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP,
+                4,
+            )?;
+            Ok(())
+        };
+
+        let close =
+            |px: [u8; 4], expected: [u8; 4]| (0..4).all(|i| px[i].abs_diff(expected[i]) <= 2);
+
+        // With the reflection the blur only ever sees the element's own (opaque) content, so no
+        // tap can fade it out: the whole composite is the element's colour at full alpha.
+        run(element_bounds)?;
+        dump_device_errors(&device);
+        for (x, y, what) in [
+            (32, 32, "the middle"),
+            (17, 32, "just inside the border"),
+            (13, 32, "just outside the border"),
+            (2, 32, "far outside it"),
+        ] {
+            let px = read_pixel(&context, &output, &staging, x, y)?;
+            assert!(
+                close(px, RED),
+                "with the box mirrored, {what} ({x}, {y}) should be the element's own colour at \
+                 full alpha, got {px:?}"
+            );
+        }
+
+        // Without it — the zero box the pass used to be handed — the same taps read the
+        // transparent surround instead, and the border dissolves toward whatever is behind.
+        run(Bounds::default())?;
+        let inside = read_pixel(&context, &output, &staging, 17, 32)?;
+        assert!(
+            (20..=250).contains(&inside[3]),
+            "without the mirror the border is partially faded, got {inside:?}"
+        );
+        // 13.5px out with sigma 12, the gaussian has shed all but ~13% of the coverage.
+        let far = read_pixel(&context, &output, &staging, 2, 32)?;
+        assert!(
+            far[3] < 45 && far[3] < inside[3],
+            "and further out it keeps dissolving (inside {inside:?}, far {far:?})"
+        );
+
         Ok(())
     }
 

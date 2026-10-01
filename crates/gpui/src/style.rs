@@ -409,6 +409,10 @@ impl BoxShadow {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub enum Filter {
     /// A gaussian blur with the given radius, in logical pixels. Maps to CSS `blur(<px>)`.
+    ///
+    /// The edges behave like CSS `backdrop-filter` rather than `filter`: content outside the
+    /// element's box mirrors its edge back in, so a blurred element keeps a crisp, opaque border
+    /// instead of dissolving into whatever is behind it (CSS `filter`'s `edgeMode: none`).
     Blur(Pixels),
 }
 

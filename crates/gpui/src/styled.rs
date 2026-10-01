@@ -41,6 +41,12 @@ pub trait Styled: Sized {
     /// result back. To blur the content *behind* the element instead (frosted glass),
     /// use [`Styled::backdrop_blur`].
     ///
+    /// The element's border stays crisp and opaque: taps that would leave its box mirror its
+    /// edge content back inside, the way CSS `backdrop-filter` behaves (Chrome's edge mode
+    /// `mirror` since 129). `filter: blur`'s own `edgeMode: none` would dissolve the border into
+    /// whatever is behind it instead — on a light page, a white rim as wide as the blur. The
+    /// blurred result still spreads up to 3σ past the box.
+    ///
     /// *Appends* to the element's filter chain, so it composes with other convenience
     /// setters (`.blur(8.).<other_filter>()`). To replace the whole chain, use
     /// [`Styled::filter`].
@@ -63,6 +69,10 @@ pub trait Styled: Sized {
     /// Blur the content rendered behind this element — a frosted-glass effect — like CSS
     /// `backdrop-filter: blur(<radius>)`. Typically paired with a translucent [`Styled::background`]
     /// so the background tints the blurred backdrop.
+    ///
+    /// The backdrop is taken from behind the element's own box: content outside the box mirrors
+    /// its edge back in rather than bleeding across the border (Chrome's `mirror` edge mode since
+    /// 129), so a panel moving over content introduces it smoothly.
     ///
     /// *Appends* to the element's backdrop-filter chain. To replace the whole chain, use
     /// [`Styled::backdrop_filter`].
@@ -869,6 +879,7 @@ pub trait Styled: Sized {
         self
     }
 
+    /// Sets the opacity of this element and everything it paints.
     fn opacity(mut self, opacity: f32) -> Self {
         self.style().opacity = Some(opacity);
         self

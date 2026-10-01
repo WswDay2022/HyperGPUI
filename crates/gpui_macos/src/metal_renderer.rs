@@ -178,6 +178,8 @@ pub(crate) struct MetalRenderer {
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct BlurUniform {
+    /// The composite quad (composite pass), or the element's box the source taps are mirrored
+    /// back into (downsample pass), in device pixels.
     bounds: Bounds<ScaledPixels>,
     content_mask: Bounds<ScaledPixels>,
     corner_radii: Corners<ScaledPixels>,
@@ -185,8 +187,8 @@ struct BlurUniform {
     sigma: f32,
     opacity: f32,
     tap_count: f32,
-    /// 1.0 clips the composite to the rounded rect (backdrop); 0.0 lets content blur bleed past
-    /// its bounds like CSS `filter: blur`.
+    /// 1.0 clips the composite to the rounded rect (backdrop); 0.0 lets content blur spread past
+    /// its bounds (the blur itself no longer fades at the edge — see `mirror_into_rect`).
     clip_rounded: f32,
     /// 1.0 = snapped 2:1 box downsample (anchor the half-res grid to a fixed 2px grid at the
     /// origin, so a stationary element blurs identically at every window size); 0.0 = 1:1 copy
@@ -1335,6 +1337,9 @@ impl MetalRenderer {
             half,
             BlurUniform {
                 downsample: 1.0,
+                // The element's box: this pass mirrors the taps that leave it back inside,
+                // rather than letting them read the transparent surround (see `mirror_into_rect`).
+                bounds,
                 ..Default::default()
             },
             false,

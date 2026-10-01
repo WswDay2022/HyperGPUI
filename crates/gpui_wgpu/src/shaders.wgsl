@@ -1548,11 +1548,33 @@ fn fs_surface(input: SurfaceVarying) -> @location(0) vec4<f32> {
 // Notes (review #5, #7): the scene/blur textures use the swapchain's (typically non-sRGB)
 // format, so the gaussian runs on gamma-encoded values rather than linear light — consistent
 // with the rest of gpui's compositing and close to what browsers do; bright detail darkens
-// slightly. A content-filter group's texture is transparent outside the painted subtree, so
-// the blur bleeds toward transparent at the group's edges (a soft edge ring) before the
-// rounded-rect clip — this matches CSS `filter: blur` edge behaviour.
+// slightly.
+//
+// A content-filter group's texture is transparent outside the painted subtree, so taps that left
+// the element's box would read that surround and dissolve the element's border into whatever is
+// behind it (a soft edge ring, ~3σ wide). The downsample reflects those taps back inside the box
+// instead — see `mirror_into_rect`.
+
+// Reflect a sample back into `rect`. Taps that leave an element's box mirror its edge content
+// rather than reading the transparent surround, which keeps a blurred element's border crisp,
+// opaque and even — CSS `backdrop-filter`'s edge behaviour (Chrome mirrors since 129; `duplicate`
+// smears the edge line instead), and what `filter: blur` has to do to look like it in practice.
+//
+// The fold uses `floor` rather than `%`/`fract`: `mod`/`fmod` disagree about the sign of negative
+// inputs across WGSL, HLSL and MSL, and `floor` does not.
+fn mirror_into_rect(p: vec2<f32>, rect: Bounds) -> vec2<f32> {
+    if (rect.size.x <= 0.0 || rect.size.y <= 0.0) {
+        return p;
+    }
+    let t = (p - rect.origin) / rect.size;
+    // Triangle wave of period 2, folded into [0, 1]: 0.25 -> 0.25, 1.75 -> 0.25, -0.25 -> 0.25.
+    let m = t - 2.0 * floor(t * 0.5);
+    return rect.origin + (1.0 - abs(m - 1.0)) * rect.size;
+}
 
 struct BlurParams {
+    // The composite quad (composite pass), or the element's box the source taps are mirrored back
+    // into (downsample pass), in device pixels.
     bounds: Bounds,
     content_mask: Bounds,
     corner_radii: vec4<f32>,
@@ -1601,7 +1623,11 @@ fn fs_blur_downsample(input: BlurVarying) -> @location(0) vec4<f32> {
         // viewport size, so an element at fixed pixels blurs identically at every window size —
         // otherwise the implicit `floor(W/2)` grid stretches and the halo wobbles by ~1px on resize.
         let dst = floor(input.position.xy);
-        let src_uv = (dst * 2.0 + 1.0) / globals.viewport_size;
+        // The taps that would leave the element's box read its mirrored edge instead of the
+        // transparent surround (`blur_locals.bounds` in this pass is that box, not the composite
+        // rect).
+        let src_px = mirror_into_rect(dst * 2.0 + 1.0, blur_locals.bounds);
+        let src_uv = src_px / globals.viewport_size;
         return textureSampleLevel(t_blur, s_blur, src_uv, 0.0);
     }
     // 1:1 copy at matching resolution (used to blit the offscreen scene into the swapchain).

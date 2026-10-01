@@ -1513,6 +1513,8 @@ float4 polychrome_sprite_fragment(PolychromeSpriteFragmentInput input): SV_Targe
 */
 
 cbuffer BlurParams: register(b1) {
+    // The composite quad (composite pass), or the element's box the source taps are mirrored
+    // back into (downsample pass), in device pixels.
     Bounds blur_bounds;
     Bounds blur_content_mask;
     float4 blur_corner_radii;
@@ -1533,6 +1535,26 @@ struct BlurVertexOutput {
     float4 position: SV_Position;
     float2 uv: TEXCOORD0;
 };
+
+// Reflect a sample back into `rect` (origin/size, in device pixels). Sampling outside an
+// element's box mirrors its edge content instead of reading the transparent surround, which is
+// what keeps a blurred element's own border crisp, opaque and even instead of dissolving into
+// whatever is behind it — CSS `backdrop-filter`'s edge behaviour (Chrome mirrors since 129;
+// `duplicate` smears the edge line instead), and what `filter: blur` needs to look like it in
+// practice. Blurring with the surround would otherwise reach ~3 sigma *into* the element as well.
+//
+// The fold uses `floor`, whose behaviour is identical in HLSL, WGSL and MSL, unlike the
+// `fmod`/`mod` pair: `fmod` keeps the sign of its dividend in HLSL/MSL, WGSL's `mod` does not.
+float2 mirror_into_rect(float2 p, Bounds rect) {
+    if (rect.size.x <= 0.0 || rect.size.y <= 0.0) {
+        return p;
+    }
+    float2 t = (p - rect.origin) / rect.size;
+    // Triangle wave of period 2, then fold into [0, 1]: t = 0.25 -> 0.25, t = 1.75 -> 0.25,
+    // t = -0.25 -> 0.25.
+    float2 m = t - 2.0 * floor(t * 0.5);
+    return rect.origin + (1.0 - abs(m - 1.0)) * rect.size;
+}
 
 BlurVertexOutput blur_fullscreen(uint vertex_id) {
     float2 uv = float2(float((vertex_id << 1u) & 2u), float(vertex_id & 2u));
@@ -1555,7 +1577,10 @@ float4 blur_downsample_fragment(BlurVertexOutput input): SV_Target {
         // implicit floor(W/2) grid stretches and the halo wobbles by ~1px on resize.
         uint sw, sh;
         t_sprite.GetDimensions(sw, sh);
-        float2 src_uv = (floor(input.position.xy) * 2.0 + 1.0) / float2(sw, sh);
+        // The taps that would leave the element's box read its mirrored edge instead of the
+        // transparent surround (`blur_bounds` in this pass is that box, not the composite rect).
+        float2 src_px = mirror_into_rect(floor(input.position.xy) * 2.0 + 1.0, blur_bounds);
+        float2 src_uv = src_px / float2(sw, sh);
         return t_sprite.SampleLevel(s_sprite, src_uv, 0.0);
     }
     // 1:1 copy at matching resolution (used to blit the offscreen scene into the swapchain).

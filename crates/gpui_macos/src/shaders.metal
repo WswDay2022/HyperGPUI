@@ -1518,11 +1518,37 @@ float4 fill_color(Background background,
 // samples the blurred texture into a rounded rectangle. `BlurParams` is supplied via
 // `setFragmentBytes`/`setVertexBytes` and mirrors the Rust `BlurUniform` struct exactly.
 //
+// A content-filter group's texture is transparent outside the painted subtree, so taps that left
+// the element's box would read that surround and dissolve the element's border into whatever is
+// behind it (a soft edge ring, ~3σ wide). The downsample reflects those taps back inside the box
+// instead — see `mirror_into_rect`.
+//
 // Buffer/texture indices (raw, matching gpui_macos::metal_renderer::BlurInputIndex):
 //   buffer(0) = unit vertices, buffer(1) = BlurParams, buffer(2) = viewport size
 //   texture(0) = source
 
+// Reflect a sample back into `rect`. Taps that leave an element's box mirror its edge content
+// rather than reading the transparent surround, which keeps a blurred element's border crisp,
+// opaque and even — CSS `backdrop-filter`'s edge behaviour (Chrome mirrors since 129; `duplicate`
+// smears the edge line instead), and what `filter: blur` has to do to look like it in practice.
+//
+// The fold uses `floor` rather than `fmod`/`mod`: their sign behaviour for negative inputs
+// differs between MSL, HLSL and WGSL, and `floor` does not.
+float2 mirror_into_rect(float2 p, Bounds_ScaledPixels rect) {
+  float2 span = float2(rect.size.width, rect.size.height);
+  if (span.x <= 0. || span.y <= 0.) {
+    return p;
+  }
+  float2 origin = float2(rect.origin.x, rect.origin.y);
+  // Triangle wave of period 2, folded into [0, 1]: 0.25 -> 0.25, 1.75 -> 0.25, -0.25 -> 0.25.
+  float2 t = (p - origin) / span;
+  float2 m = t - 2. * floor(t * 0.5);
+  return origin + (1. - abs(m - 1.)) * span;
+}
+
 struct BlurParams {
+  // The composite quad (composite pass), or the element's box the source taps are mirrored back
+  // into (downsample pass), in device pixels.
   Bounds_ScaledPixels bounds;
   Bounds_ScaledPixels content_mask;
   Corners_ScaledPixels corner_radii;
@@ -1568,7 +1594,10 @@ fragment float4 blur_downsample_fragment(
     // because this pass binds the half-res target size as the viewport.
     float2 dst = floor(input.position.xy);
     float2 src_size = float2(float(source.get_width()), float(source.get_height()));
-    float2 src_uv = (dst * 2.0 + 1.0) / src_size;
+    // The taps that would leave the element's box read its mirrored edge instead of the
+    // transparent surround (`params.bounds` in this pass is that box, not the composite rect).
+    float2 src_px = mirror_into_rect(dst * 2.0 + 1.0, params.bounds);
+    float2 src_uv = src_px / src_size;
     return source.sample(s, src_uv);
   }
   // 1:1 copy at matching resolution (used to blit the offscreen scene into the drawable).

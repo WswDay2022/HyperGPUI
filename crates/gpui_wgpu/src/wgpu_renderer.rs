@@ -62,7 +62,8 @@ struct SurfaceParams {
 #[repr(C)]
 #[derive(Clone, Copy, Default, Pod, Zeroable)]
 struct BlurParams {
-    /// Composite target rectangle, in device pixels (composite pass only).
+    /// The composite quad (composite pass), or the element's box the source taps are mirrored
+    /// back into (downsample pass), in device pixels.
     bounds: PodBounds,
     /// Clip rectangle, in device pixels (composite pass only).
     content_mask: PodBounds,
@@ -80,8 +81,9 @@ struct BlurParams {
     /// truncating the gaussian (see #6 in review).
     tap_step: f32,
     /// 1.0 to clip the composite to the rounded rect (backdrop — the panel has a defined shape),
-    /// 0.0 to let the blurred result fade out on its own (content `filter` — it bleeds past the
-    /// element bounds like CSS, so the fade isn't sharply truncated at the box edge).
+    /// 0.0 to let the blurred result spread past the element bounds (content `filter`) instead of
+    /// being clipped to the box. The edge does not fade: the downsample mirrors the element's own
+    /// edge content back inside the box (`mirror_into_rect`), so the spill is its continuation.
     clip_rounded: f32,
     /// 1.0 = snapped 2:1 box downsample (anchor the half-res grid to a fixed 2px grid at the
     /// origin, so a stationary element blurs identically at every window size); 0.0 = 1:1 copy
@@ -2073,6 +2075,9 @@ impl WgpuRenderer {
             source,
             BlurParams {
                 downsample: 1.0,
+                // The element's box: this pass mirrors the taps that leave it back inside,
+                // rather than letting them read the transparent surround (see `mirror_into_rect`).
+                bounds: bounds.into(),
                 ..Default::default()
             },
             scissor,
@@ -2109,9 +2114,9 @@ impl WgpuRenderer {
         );
 
         // Composite the blurred result into the target (loads existing content). For content blur
-        // the quad covers the dilated region so the blur can fade out past the element box (no
-        // sharp clip); for backdrop the quad is the element bounds and the shader clips to the
-        // rounded rect.
+        // the quad covers the dilated region, so the element's edge content (mirrored by the
+        // downsample) spreads past the box without a sharp clip; for backdrop the quad is the
+        // element bounds and the shader clips to the rounded rect.
         let composite_bounds = if clip_rounded {
             bounds
         } else {
