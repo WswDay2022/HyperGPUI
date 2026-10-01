@@ -124,12 +124,6 @@ float4 distance_from_clip_rect(float2 unit_vertex, Bounds bounds, Bounds clip_bo
     return distance_from_clip_rect_impl(position, clip_bounds);
 }
 
-float4 distance_from_clip_rect_transformed(float2 unit_vertex, Bounds bounds, Bounds clip_bounds, TransformationMatrix transformation) {
-    float2 position = unit_vertex * bounds.size + bounds.origin;
-    float2 transformed = mul(position, transformation.rotation_scale) + transformation.translation;
-    return distance_from_clip_rect_impl(transformed, clip_bounds);
-}
-
 // Encode a linear RGB color as non-linear (gamma-encoded) sRGB — the IEC 61966-2-1 transfer
 // function, spelled the same way as in `shaders.wgsl` and `shaders.metal` so gradients render
 // identically on every backend. A plain `pow(color, 2.2)` would be cheaper but drifts ~2% from
@@ -166,26 +160,20 @@ float4 hsla_to_rgba(Hsla hsla) {
     if (h >= 0.0 && h < 1.0) {
         r = c;
         g = x;
-        b = 0.0;
     } else if (h >= 1.0 && h < 2.0) {
         r = x;
         g = c;
-        b = 0.0;
     } else if (h >= 2.0 && h < 3.0) {
-        r = 0.0;
         g = c;
         b = x;
     } else if (h >= 3.0 && h < 4.0) {
-        r = 0.0;
         g = x;
         b = c;
     } else if (h >= 4.0 && h < 5.0) {
         r = x;
-        g = 0.0;
         b = c;
     } else {
         r = c;
-        g = 0.0;
         b = x;
     }
 
@@ -244,8 +232,8 @@ float2 erf(float2 x) {
     float2 s = sign(x);
     float2 a = abs(x);
     x = 1. + (0.278393 + (0.230389 + 0.078108 * (a * a)) * a) * a;
-    x *= x;
-    return s - s / (x * x);
+    float2 x2 = x * x;
+    return s - s / (x2 * x2);
 }
 
 float blur_along_x(float x, float y, float sigma, float corner, float2 half_size) {
@@ -289,14 +277,6 @@ float pick_corner_radius(float2 center_to_point, Corners corner_radii) {
             return corner_radii.bottom_right;
         }
     }
-}
-
-float4 to_device_position_transformed(float2 unit_vertex, Bounds bounds,
-                                      TransformationMatrix transformation) {
-    float2 position = unit_vertex * bounds.size + bounds.origin;
-    float2 transformed = mul(position, transformation.rotation_scale) + transformation.translation;
-    float2 device_position = transformed / global_viewport_size * float2(2.0, -2.0) + float2(-1.0, 1.0);
-    return float4(device_position, 0.0, 1.0);
 }
 
 // Implementation of quad signed distance field
@@ -472,7 +452,7 @@ float4 gradient_color(Background background,
             float2 relative_position = position - bounds.origin;
             float2 rotated_point = mul(relative_position, rotation);
             float pattern = fmod(rotated_point.x, pattern_period);
-            float distance = min(pattern, pattern_period - pattern) - pattern_period * (pattern_width / pattern_height) /  2.0f;
+            float distance = min(pattern, pattern_period - pattern) - pattern_period * (pattern_width / pattern_height) * 0.5f;
             color = solid_color;
             color.a *= saturate(0.5 - distance);
             break;
@@ -1060,26 +1040,27 @@ float4 shadow_fragment(ShadowFragmentInput input): SV_TARGET {
     float2 center = shadow.bounds.origin + half_size;
     float2 point0 = input.position.xy - center;
     float corner_radius = pick_corner_radius(point0, shadow.corner_radii);
+    float blur_radius = shadow.blur_radius;
 
     float alpha;
-    if (shadow.blur_radius == 0.) {
+    if (blur_radius == 0.) {
         float distance = quad_sdf(input.position.xy, shadow.bounds, shadow.corner_radii);
         alpha = saturate(0.5 - distance);
     } else {
         // The signal is only non-zero in a limited range, so don't waste samples
         float low = point0.y - half_size.y;
         float high = point0.y + half_size.y;
-        float start = clamp(-3. * shadow.blur_radius, low, high);
-        float end = clamp(3. * shadow.blur_radius, low, high);
+        float start = clamp(-3. * blur_radius, low, high);
+        float end = clamp(3. * blur_radius, low, high);
 
         // Accumulate samples (we can get away with surprisingly few samples)
         float step = (end - start) / 4.;
         float y = start + step * 0.5;
         alpha = 0.;
         for (int i = 0; i < 4; i++) {
-            alpha += blur_along_x(point0.x, point0.y - y, shadow.blur_radius,
+            alpha += blur_along_x(point0.x, point0.y - y, blur_radius,
                                 corner_radius, half_size) *
-                    gaussian(y, shadow.blur_radius) * step;
+                    gaussian(y, blur_radius) * step;
             y += step;
         }
     }
@@ -1164,11 +1145,14 @@ float4 path_rasterization_fragment(PathFragmentInput input): SV_Target {
     Background background = sprite.color;
     Bounds bounds = sprite.bounds;
 
+    // The gradient direction's x components: used as a vector for the length test and again
+    // per component below.
+    float2 d_st_x = float2(dx.x, dy.x);
     float alpha;
-    if (length(float2(dx.x, dy.x))) {
+    if (length(d_st_x)) {
         alpha = 1.0;
     } else {
-        float2 gradient = 2.0 * input.st_position.xx * float2(dx.x, dy.x) - float2(dx.y, dy.y);
+        float2 gradient = 2.0 * input.st_position.xx * d_st_x - float2(dx.y, dy.y);
         float f = input.st_position.x * input.st_position.x - input.st_position.y;
         float distance = f / length(gradient);
         alpha = saturate(0.5 - distance);
@@ -1260,10 +1244,10 @@ UnderlineVertexOutput underline_vertex(uint vertex_id: SV_VertexID, uint underli
     float2 unit_vertex = float2(float(vertex_id & 1u), 0.5 * float(vertex_id & 2u));
     Underline underline = underlines[underline_id];
     float2 local_position = unit_vertex * underline.bounds.size + underline.bounds.origin;
-    float4 device_position =
-        to_device_position_transformed(unit_vertex, underline.bounds, underline.transformation);
-    float4 clip_distance = distance_from_clip_rect_transformed(unit_vertex, underline.bounds,
-                                                    underline.content_mask, underline.transformation);
+    float2 transformed_position =
+        mul(local_position, underline.transformation.rotation_scale) + underline.transformation.translation;
+    float4 device_position = to_device_position_impl(transformed_position);
+    float4 clip_distance = distance_from_clip_rect_impl(transformed_position, underline.content_mask);
     float4 color = hsla_to_rgba(underline.color);
 
     UnderlineVertexOutput output;
@@ -1357,9 +1341,10 @@ MonochromeSpriteVertexOutput monochrome_sprite_vertex(uint vertex_id: SV_VertexI
     float2 unit_vertex = float2(float(vertex_id & 1u), 0.5 * float(vertex_id & 2u));
     MonochromeSprite sprite = mono_sprites[sprite_id];
     float2 local_position = unit_vertex * sprite.bounds.size + sprite.bounds.origin;
-    float4 device_position =
-        to_device_position_transformed(unit_vertex, sprite.bounds, sprite.transformation);
-    float4 clip_distance = distance_from_clip_rect_transformed(unit_vertex, sprite.bounds, sprite.content_mask, sprite.transformation);
+    float2 transformed_position =
+        mul(local_position, sprite.transformation.rotation_scale) + sprite.transformation.translation;
+    float4 device_position = to_device_position_impl(transformed_position);
+    float4 clip_distance = distance_from_clip_rect_impl(transformed_position, sprite.content_mask);
     float2 tile_position = to_tile_position(unit_vertex, sprite.tile);
     float4 color = hsla_to_rgba(sprite.color);
 
@@ -1459,10 +1444,10 @@ PolychromeSpriteVertexOutput polychrome_sprite_vertex(uint vertex_id: SV_VertexI
     float2 unit_vertex = float2(float(vertex_id & 1u), 0.5 * float(vertex_id & 2u));
     PolychromeSprite sprite = poly_sprites[sprite_id];
     float2 local_position = unit_vertex * sprite.bounds.size + sprite.bounds.origin;
-    float4 device_position =
-        to_device_position_transformed(unit_vertex, sprite.bounds, sprite.transformation);
-    float4 clip_distance = distance_from_clip_rect_transformed(unit_vertex, sprite.bounds,
-                                                    sprite.content_mask, sprite.transformation);
+    float2 transformed_position =
+        mul(local_position, sprite.transformation.rotation_scale) + sprite.transformation.translation;
+    float4 device_position = to_device_position_impl(transformed_position);
+    float4 clip_distance = distance_from_clip_rect_impl(transformed_position, sprite.content_mask);
     float2 tile_position = to_tile_position(unit_vertex, sprite.tile);
 
     PolychromeSpriteVertexOutput output;

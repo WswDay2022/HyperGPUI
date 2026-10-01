@@ -7,10 +7,13 @@ float color_brightness(float3 color) {
     return dot(color, float3(0.30f, 0.59f, 0.11f));
 }
 
-float light_on_dark_contrast(float enhancedContrast, float3 color) {
-    float brightness = color_brightness(color);
+float light_on_dark_contrast_for_brightness(float enhancedContrast, float brightness) {
     float multiplier = saturate(4.0f * (0.75f - brightness));
     return enhancedContrast * multiplier;
+}
+
+float light_on_dark_contrast(float enhancedContrast, float3 color) {
+    return light_on_dark_contrast_for_brightness(enhancedContrast, color_brightness(color));
 }
 
 float enhance_contrast(float alpha, float k) {
@@ -34,8 +37,9 @@ float3 apply_alpha_correction3(float3 a, float3 b, float4 g) {
 }
 
 float apply_contrast_and_gamma_correction(float sample, float3 color, float enhanced_contrast_factor, float4 gamma_ratios) {
-    float enhanced_contrast = light_on_dark_contrast(enhanced_contrast_factor, color);
+    // One brightness for both uses: the contrast curve and the alpha correction below.
     float brightness = color_brightness(color);
+    float enhanced_contrast = light_on_dark_contrast_for_brightness(enhanced_contrast_factor, brightness);
 
     float contrasted = enhance_contrast(sample, enhanced_contrast);
     return apply_alpha_correction(contrasted, brightness, gamma_ratios);
