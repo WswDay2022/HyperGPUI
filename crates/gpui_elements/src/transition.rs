@@ -2,19 +2,32 @@
 //!
 //! [`transition`] wraps one child and animates it **in** and **out** whenever the key you
 //! give it changes. It is the immediate-mode answer to Vue's `<Transition>`: you supply the
-//! child as a *factory* (a closure that builds an element), and a progress value `t` going
-//! from `0.0` to `1.0` that you use to compose whatever styles you like.
+//! child as a *factory* (a closure that builds an element), and the styles that turn a progress
+//! value into whatever you like.
 //!
 //! ```
-//! # use hgpui::{App, IntoElement, ParentElement as _, Styled as _, Window, div};
+//! # use hgpui::{App, IntoElement, ParentElement as _, Styled as _, Window, div, px};
 //! # use hgpui_elements::transition::{transition, TransitionMode};
 //! # fn render(_window: &mut Window, _cx: &mut App, tab: usize) -> impl IntoElement {
 //! transition("page", tab)
 //!     .duration(std::time::Duration::from_millis(180))
 //!     .mode(TransitionMode::OutIn)
-//!     // `t` is 0 -> 1; during a leave it is the *leave* progress.
-//!     .enter(|child, t| div().opacity(t).child(child).into_any_element())
-//!     .leave(|child, t| div().opacity(1. - t).child(child).into_any_element())
+//!     // `delta` is the eased progress, `time` the plain one, both going 0 -> 1. During a
+//!     // leave they are the *leave* progress.
+//!     .enter(|child, delta, time| {
+//!         div()
+//!             .opacity(delta)
+//!             .translate_y(px(12.) * (1. - time))
+//!             .child(child)
+//!             .into_any_element()
+//!     })
+//!     .leave(|child, delta, time| {
+//!         div()
+//!             .opacity(1. - delta)
+//!             .translate_y(px(-12.) * time)
+//!             .child(child)
+//!             .into_any_element()
+//!     })
 //!     .child(move |_window, _cx| match tab {
 //!         0 => div().child("home").into_any_element(),
 //!         _ => div().child("settings").into_any_element(),
@@ -28,9 +41,12 @@
 //!   that merely re-renders with new data does not animate (same as Vue).
 //! - The outgoing child is rendered from the factory captured on the *previous* frame, so it
 //!   shows the state it had just before the switch — a snapshot, for free.
-//! - Only painting is animated, never layout: during a transition the outgoing child sits in
-//!   an absolutely positioned overlay and the incoming child owns the space, so siblings
-//!   never reflow. (The outgoing child is therefore laid out against the *new* child's size.)
+//! - Only painting is animated, never layout: the incoming child owns the space, and the
+//!   outgoing one sits in an absolutely positioned overlay, so siblings never reflow. (The
+//!   outgoing child is therefore laid out against the *new* child's size.) `OutIn` is the
+//!   exception the ordering forces: the outgoing child leaves **in the flow**, keeping the
+//!   space until it is gone, and only then does the incoming child take it over — so there the
+//!   layout really does change, once the exit is over.
 //! - [`TransitionMode`] picks whether the two animations overlap, are sequenced, or are
 //!   ordered the other way around. If the key changes again mid-flight the newest key wins.
 //! - While the animation runs, frames are requested through
@@ -41,13 +57,14 @@
 //!
 //! - The element's keyed state lives as long as the element keeps rendering: if the element
 //!   itself unmounts mid-transition, the transition goes with it.
-//! - The leaving child can still receive mouse events for the duration of its exit (it is
-//!   painted underneath the incoming child, which usually covers it).
+//! - The leaving child can still receive mouse events for the duration of its exit: in `OutIn`
+//!   it is the only child on screen, and in the other modes it is painted underneath the
+//!   incoming child, which usually covers it.
 
 use hgpui::{
-    AnyElement, App, AppContext as _, Element, ElementId, GlobalElementId, InspectorElementId,
-    InteractiveElement as _, IntoElement, LayoutId, ParentElement as _, Styled as _, Transition,
-    TransitionState, Window, div,
+    AnyElement, App, AppContext as _, Element, ElementId, EnterStyle, GlobalElementId,
+    InspectorElementId, InteractiveElement as _, IntoElement, LayoutId, LeaveStyle,
+    ParentElement as _, Styled as _, Transition, TransitionState, Window, div,
 };
 use std::{rc::Rc, time::Duration};
 
@@ -55,8 +72,10 @@ use std::{rc::Rc, time::Duration};
 /// frame's child and be kept as the snapshot for a future exit.
 pub type ChildFactory = Rc<dyn Fn(&mut Window, &mut App) -> AnyElement>;
 
-/// Wraps a child with the styles for a given progress `t` (`0.0`..=`1.0`).
-pub type TransitionStyle = Rc<dyn Fn(AnyElement, f32) -> AnyElement>;
+/// One half of a transition's progress as a style closure sees it: `(delta, time)`, both running
+/// `0.0 -> 1.0`. See [`EnterStyle`] — the transition hands its styles the same two numbers an
+/// [`animated_list`](hgpui::animated_list) hands its rows.
+type Progress = (f32, f32);
 
 /// How the outgoing and incoming child share the timeline.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -66,6 +85,7 @@ pub enum TransitionMode {
     #[default]
     Simultaneous,
     /// The outgoing child finishes leaving before the incoming one enters (Vue's `out-in`).
+    /// It keeps the space while it leaves, so the new child only shows up once it is gone.
     OutIn,
     /// The incoming child finishes entering before the outgoing one starts leaving
     /// (Vue's `in-out`).
@@ -101,8 +121,8 @@ pub struct TransitionBuilder {
     duration: Duration,
     easing: Option<Rc<dyn Fn(f32) -> f32>>,
     mode: TransitionMode,
-    enter: Option<TransitionStyle>,
-    leave: Option<TransitionStyle>,
+    enter: Option<EnterStyle>,
+    leave: Option<LeaveStyle>,
     appear: bool,
     factory: Option<ChildFactory>,
     /// Assembled during `request_layout` and painted again in `prepaint`/`paint`.
@@ -128,16 +148,21 @@ impl TransitionBuilder {
         self
     }
 
-    /// Styles applied to the incoming child while it enters, with `t` going `0.0 -> 1.0`.
+    /// Styles the incoming child while it enters: `|child, delta, time|`, both numbers going
+    /// `0.0 -> 1.0` — see [`EnterStyle`] for what the two of them are.
     ///
     /// Without one, the child appears instantly (the progress is simply unused).
-    pub fn enter(mut self, style: impl Fn(AnyElement, f32) -> AnyElement + 'static) -> Self {
+    pub fn enter(mut self, style: impl Fn(AnyElement, f32, f32) -> AnyElement + 'static) -> Self {
         self.enter = Some(Rc::new(style));
         self
     }
 
-    /// Styles applied to the outgoing child while it leaves, with `t` going `0.0 -> 1.0`.
-    pub fn leave(mut self, style: impl Fn(AnyElement, f32) -> AnyElement + 'static) -> Self {
+    /// Styles the outgoing child while it leaves: `|child, delta, time|`, both numbers going
+    /// `0.0 -> 1.0` — see [`EnterStyle`].
+    ///
+    /// In [`TransitionMode::OutIn`] this wraps the child where it stands, in the flow; in the
+    /// other modes it wraps it in an overlay painted underneath the incoming child.
+    pub fn leave(mut self, style: impl Fn(AnyElement, f32, f32) -> AnyElement + 'static) -> Self {
         self.leave = Some(Rc::new(style));
         self
     }
@@ -388,11 +413,11 @@ impl TransitionBuilder {
         match phase {
             Phase::Idle => {}
             Phase::Entering { .. } => {
-                let enter_done = enter_t.unwrap_or(1.0) >= 1.0;
+                let enter_done = enter_t.is_none_or(|(delta, _)| delta >= 1.0);
                 match leave_t {
                     // The exit is running alongside the entrance.
-                    Some(leave_t) => {
-                        let leave_done = leave_t >= 1.0;
+                    Some((leave_delta, _)) => {
+                        let leave_done = leave_delta >= 1.0;
                         slot_entity.update(cx, |slot, _| {
                             if leave_done {
                                 slot.leaving = None;
@@ -419,7 +444,7 @@ impl TransitionBuilder {
                 }
             }
             Phase::LeavingInFlow => {
-                let leave_done = leave_t.unwrap_or(1.0) >= 1.0;
+                let leave_done = leave_t.is_none_or(|(delta, _)| delta >= 1.0);
                 if leave_done {
                     let pending = slot_entity.update(cx, |slot, _| slot.pending.take());
                     slot_entity.update(cx, |slot, _| {
@@ -464,10 +489,7 @@ impl TransitionBuilder {
 
         if let Some(leaving) = &leaving {
             let child = leaving(window, cx);
-            let child = match (&self.leave, leave_t) {
-                (Some(style), Some(t)) if t < 1.0 => style(child, t),
-                _ => child,
-            };
+            let child = styled(self.leave.as_ref(), leave_t, child);
             container = container.child(div().absolute().inset_0().child(child));
         }
 
@@ -475,11 +497,26 @@ impl TransitionBuilder {
             Some(in_flow) => in_flow(window, cx),
             None => div().into_any_element(),
         };
-        let child = match (&self.enter, enter_t, phase) {
-            (Some(style), Some(t), Phase::Entering { .. }) if t < 1.0 => style(child, t),
-            _ => child,
+        // Which style owns the child in the flow, and the progress to hand it. The incoming
+        // child is the one in the flow — except in `OutIn`, where the outgoing child keeps the
+        // flow while it leaves, and is styled there rather than in an overlay.
+        let (style, progress) = match phase {
+            Phase::LeavingInFlow => (self.leave.as_ref(), leave_t),
+            Phase::Entering { .. } => (self.enter.as_ref(), enter_t),
+            Phase::Idle => (None, None),
         };
-        container.child(child).into_any_element()
+        container
+            .child(styled(style, progress, child))
+            .into_any_element()
+    }
+}
+
+/// Applies one half's style to `child`, unless that half is missing or already over.
+fn styled(style: Option<&EnterStyle>, progress: Option<Progress>, child: AnyElement) -> AnyElement {
+    match (style, progress) {
+        // `(delta, time)`, both `0.0 -> 1.0`.
+        (Some(style), Some((delta, time))) if delta < 1.0 => style(child, delta, time),
+        _ => child,
     }
 }
 
@@ -490,16 +527,23 @@ fn progress(
     leave: &Transition<f32>,
     window: &mut Window,
     cx: &mut App,
-) -> (Option<f32>, Option<f32>) {
+) -> (Option<Progress>, Option<Progress>) {
     match phase {
         Phase::Idle => (None, None),
         Phase::Entering { leave_armed } => {
-            let enter_t = *enter.evaluate(window, cx);
-            let leave_t = leave_armed.then(|| *leave.evaluate(window, cx));
+            let enter_t = evaluate(enter, window, cx);
+            let leave_t = leave_armed.then(|| evaluate(leave, window, cx));
             (Some(enter_t), leave_t)
         }
-        Phase::LeavingInFlow => (None, Some(*leave.evaluate(window, cx))),
+        Phase::LeavingInFlow => (None, Some(evaluate(leave, window, cx))),
     }
+}
+
+/// One running transition, as its style closure will see it: the eased `delta` it interpolates,
+/// and the plain `time` it took to get there.
+fn evaluate(transition: &Transition<f32>, window: &mut Window, cx: &mut App) -> Progress {
+    let delta = *transition.evaluate(window, cx);
+    (delta, transition.evaluate_time(cx))
 }
 
 /// Restarts a transition from `0.0` and runs it to `1.0`.
@@ -510,3 +554,6 @@ fn start(transition: &Transition<f32>, cx: &mut App) {
     transition.reset(cx);
     transition.update(cx, |goal, _| *goal = 1.0);
 }
+
+#[cfg(test)]
+mod tests;

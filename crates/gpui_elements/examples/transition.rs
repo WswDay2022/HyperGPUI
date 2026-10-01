@@ -53,18 +53,20 @@ impl Example {
                     .duration(DURATION)
                     .mode(mode)
                     .easing(hgpui::ease_in_out)
-                    // `t` goes 0 -> 1. Entering: slide down into place. Leaving: slide up away.
-                    .enter(|child, t| {
+                    // `delta` and `time` both go 0 -> 1: `delta` is the eased one (used for the
+                    // fade), `time` the plain one, so the slide keeps a steady speed.
+                    // Entering: slide down into place. Leaving: slide up away.
+                    .enter(|child, delta, time| {
                         div()
-                            .opacity(t)
-                            .translate_y(px(12.) * (1. - t))
+                            .opacity(delta)
+                            .translate_y(px(12.) * (1. - time))
                             .child(child)
                             .into_any_element()
                     })
-                    .leave(|child, t| {
+                    .leave(|child, delta, time| {
                         div()
-                            .opacity(1. - t)
-                            .translate_y(px(-12.) * t)
+                            .opacity(1. - delta)
+                            .translate_y(px(-12.) * time)
                             .child(child)
                             .into_any_element()
                     })

@@ -166,6 +166,18 @@ impl<T: Lerp + Clone + PartialEq + 'static> Transition<T> {
     /// has progressed, after applying the easing function. A value of 0.0 means
     /// the transition just started, and 1.0 means it has completed.
     pub fn evaluate_delta<'b>(&'b self, cx: &'b App) -> f32 {
+        (self.easing)(self.evaluate_time(cx))
+    }
+
+    /// Evaluates and returns the transition's plain progress: how much of the duration has
+    /// elapsed, with **no** easing applied.
+    ///
+    /// Same shape as [`Transition::evaluate_delta`] — clamped to `0.0..=1.0`, and `1.0` for a
+    /// transition that has not been updated yet — but linear in time: `evaluate_delta` is this
+    /// value put through the transition's easing. This is the `time` in the animated elements'
+    /// style closures (`|element, delta, time|`), for a property that should move on a curve of
+    /// its own rather than the one the transition was given.
+    pub fn evaluate_time(&self, cx: &App) -> f32 {
         let goal_last_updated_at = self
             .state
             .read(cx)
@@ -173,7 +185,7 @@ impl<T: Lerp + Clone + PartialEq + 'static> Transition<T> {
             .unwrap_or_else(|| self.default_goal_updated_at());
 
         let elapsed_secs = goal_last_updated_at.elapsed().as_secs_f32();
-        (self.easing)((elapsed_secs / self.duration_secs).min(1.))
+        (elapsed_secs / self.duration_secs).min(1.)
     }
 
     /// Updates the goal value for the transition.
@@ -547,6 +559,37 @@ mod tests {
                 delta < 0.1,
                 "delta should be small immediately after update"
             );
+        });
+    }
+
+    #[hgpui::test]
+    fn test_evaluate_time_is_linear_and_untapered(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            let transition =
+                create_transition(cx, Duration::from_millis(300), 0.0_f32).with_easing(|_| 0.5);
+
+            transition.update(cx, |val, _cx| {
+                *val = 100.0;
+            });
+
+            // The delta is the easing applied to the elapsed fraction...
+            assert_eq!(transition.evaluate_delta(cx), 0.5);
+            // ...while the time is the elapsed fraction itself.
+            let time = transition.evaluate_time(cx);
+            assert!(
+                (0.0..0.1).contains(&time),
+                "the transition has only just been updated, so time should be near 0, got {time}"
+            );
+        });
+    }
+
+    #[hgpui::test]
+    fn test_evaluate_time_is_complete_without_updates(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            let transition = create_transition(cx, Duration::from_millis(300), 0.0_f32);
+
+            // A transition that has never been updated is already at its goal.
+            assert_eq!(transition.evaluate_time(cx), 1.0);
         });
     }
 
