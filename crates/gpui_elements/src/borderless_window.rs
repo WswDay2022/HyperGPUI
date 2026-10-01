@@ -1,6 +1,10 @@
 //! A reusable chrome for borderless, resizable windows.
 
-use crate::{AnyElement, ElementId, App, Bounds, CursorStyle, InteractiveElement, IntoElement, MouseButton, ParentElement, Pixels, RenderOnce, ResizeEdge, Styled, Window, WindowBackgroundAppearance, WindowBounds, WindowDecorations, WindowOptions, div, px, transparent_black};
+use hgpui::{
+    AnyElement, App, Bounds, CursorStyle, ElementId, InteractiveElement, IntoElement, MouseButton,
+    ParentElement, Pixels, RenderOnce, ResizeEdge, Styled, Window, WindowBackgroundAppearance,
+    WindowBounds, WindowDecorations, WindowOptions, div, px, transparent_black,
+};
 
 /// Default inset reserved around the window content (room for a drop shadow).
 const DEFAULT_INSET: f32 = 12.0;
@@ -34,7 +38,7 @@ const RESIZE_EDGES: [(ResizeEdge, CursorStyle); 8] = [
 /// it fills the inset margin, and add a drag region for moving the window with
 /// `.window_control_area(WindowControlArea::Drag)`.
 ///
-/// See `examples/learn/borderless_resizeable_window.rs` for the full pattern.
+/// See `examples/borderless_window.rs` for the full pattern.
 ///
 /// ```ignore
 /// cx.open_window(
@@ -59,28 +63,17 @@ pub struct BorderlessWindow {
 }
 
 #[track_caller]
-pub fn borderless_window() -> BorderlessWindow {
-    BorderlessWindow::default()
-}
-
-impl Default for BorderlessWindow {
-    fn default() -> Self {
-        Self {
-            id: "borderless-window".into(),
-            inset: px(DEFAULT_INSET),
-            edge_size: px(DEFAULT_EDGE_SIZE),
-            corner_size: px(DEFAULT_CORNER_SIZE),
-            children: Vec::new(),
-        }
+pub fn borderless_window(id: impl Into<ElementId>) -> BorderlessWindow {
+    BorderlessWindow {
+        id: id.into(),
+        inset: px(DEFAULT_INSET),
+        edge_size: px(DEFAULT_EDGE_SIZE),
+        corner_size: px(DEFAULT_CORNER_SIZE),
+        children: Vec::new(),
     }
 }
 
 impl BorderlessWindow {
-    /// Create a new borderless window chrome with default sizing.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Set the element id prefix used for the root and resize hit-boxes.
     pub fn id(mut self, id: impl Into<ElementId>) -> Self {
         self.id = id.into();
@@ -174,29 +167,13 @@ pub fn resize_handle(
             window.start_window_resize(edge);
         });
     match edge {
-        ResizeEdge::Top => {
-            handle.top(px(0.)).left(corner_size).right(corner_size).h(edge_size)
-        }
-        ResizeEdge::TopRight => {
-            handle.top(px(0.)).right(px(0.)).w(corner_size).h(corner_size)
-        }
-        ResizeEdge::Right => {
-            handle.top(corner_size).bottom(corner_size).right(px(0.)).w(edge_size)
-        }
-        ResizeEdge::BottomRight => {
-            handle.bottom(px(0.)).right(px(0.)).w(corner_size).h(corner_size)
-        }
-        ResizeEdge::Bottom => {
-            handle.bottom(px(0.)).left(corner_size).right(corner_size).h(edge_size)
-        }
-        ResizeEdge::BottomLeft => {
-            handle.bottom(px(0.)).left(px(0.)).w(corner_size).h(corner_size)
-        }
-        ResizeEdge::Left => {
-            handle.top(corner_size).bottom(corner_size).left(px(0.)).w(edge_size)
-        }
-        ResizeEdge::TopLeft => {
-            handle.top(px(0.)).left(px(0.)).w(corner_size).h(corner_size)
-        }
+        ResizeEdge::Top => handle.top(px(0.)).left(corner_size).right(corner_size).h(edge_size),
+        ResizeEdge::TopRight => handle.top(px(0.)).right(px(0.)).w(corner_size).h(corner_size),
+        ResizeEdge::Right => handle.top(corner_size).bottom(corner_size).right(px(0.)).w(edge_size),
+        ResizeEdge::BottomRight => handle.bottom(px(0.)).right(px(0.)).w(corner_size).h(corner_size),
+        ResizeEdge::Bottom => handle.bottom(px(0.)).left(corner_size).right(corner_size).h(edge_size),
+        ResizeEdge::BottomLeft => handle.bottom(px(0.)).left(px(0.)).w(corner_size).h(corner_size),
+        ResizeEdge::Left => handle.top(corner_size).bottom(corner_size).left(px(0.)).w(edge_size),
+        ResizeEdge::TopLeft => handle.top(px(0.)).left(px(0.)).w(corner_size).h(corner_size)
     }
 }

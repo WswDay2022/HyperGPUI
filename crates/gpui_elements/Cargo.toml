@@ -25,3 +25,11 @@ hgpui_platform = { workspace = true, features = ["font-kit", "wayland", "x11"] }
 [[example]]
 name = "editable_text"
 path = "examples/editable_text.rs"
+
+[[example]]
+name = "borderless-window"
+path = "examples/borderless_window.rs"
+
+[[example]]
+name = "button-feedback"
+path = "examples/button_feedback.rs"
