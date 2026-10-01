@@ -43,7 +43,7 @@
 //!
 //! ```
 //! # use std::rc::Rc;
-//! # use hgpui::{App, IntoElement, ParentElement as _, Styled as _, UniformListScrollHandle, Window, div, uniform_list};
+//! # use hgpui::{App, IntoElement, Styled as _, UniformListScrollHandle, Window, div, uniform_list};
 //! # use hgpui::animated_uniform_list;
 //! # fn render(window: &mut Window, cx: &mut App, items: Rc<Vec<u64>>, scroll: UniformListScrollHandle) -> impl IntoElement {
 //! animated_uniform_list("items", &scroll)
@@ -60,14 +60,9 @@
 //! # }
 //! ```
 
-use std::{
-    cell::RefCell,
-    collections::HashMap,
-    hash::Hash,
-    ops::Range,
-    rc::Rc,
-    time::Duration,
-};
+use std::{cell::RefCell, hash::Hash, ops::Range, rc::Rc, time::Duration};
+
+use collections::HashMap;
 
 use refineable::Refineable as _;
 use scheduler::Instant;
@@ -75,13 +70,20 @@ use scheduler::Instant;
 use crate::{
     AnyElement, App, Element, ElementId, GlobalElementId, InspectorElementId, IntoElement,
     LayoutId, ParentElement as _, Pixels, StyleRefinement, Styled, UniformListScrollHandle,
-    Window, div, point, px, uniform_list,
+    Window, div, ease_out_cubic, point, progress, px, uniform_list,
 };
 
-/// Wraps a row for the enter animation: `t` goes `0.0 -> 1.0`.
-pub type EnterStyle = Rc<dyn Fn(AnyElement, f32) -> AnyElement>;
+/// Wraps a row for the enter animation.
+///
+/// The two numbers both run `0.0 -> 1.0`:
+///
+/// - `delta` is the value after the list's easing curve, so it is the one to feed straight into
+///   opacity, offsets and the like;
+/// - `time` is the plain, linear time, for when you want a *different* curve for one property
+///   (`delta` for the fade, your own curve over `time` for the movement, say).
+pub type EnterStyle = Rc<dyn Fn(AnyElement, f32, f32) -> AnyElement>;
 
-/// Wraps a row for the leave animation: `t` goes `0.0 -> 1.0`.
+/// Wraps a row for the leave animation. Same two numbers as [`EnterStyle`].
 pub type LeaveStyle = EnterStyle;
 
 /// Builds one row for an item that has been removed and is animating out.
@@ -129,6 +131,11 @@ impl<K> LeavingHandle<K> {
     /// Call this at the point of removal, with the item still in hand — the closure is called
     /// on every frame of the animation, so it must be able to rebuild the row by itself
     /// (a snapshot of the item is the usual way).
+    ///
+    /// `key` must be the value the list's `key_of` returns for that item: it is what ties the
+    /// row to the place it was last painted. (The *type* is checked — the list and the handle
+    /// share it — but a key of the right type that never came from `key_of` will not be found,
+    /// and its row would animate out from the origin instead of from where it was.)
     pub fn push(&self, key: K, row: impl Fn(&mut Window, &mut App) -> AnyElement + 'static) {
         self.entries.borrow_mut().push((key, Rc::new(row)));
     }
@@ -146,8 +153,10 @@ impl<K> LeavingHandle<K> {
     }
 }
 
-/// How long an item takes to slide into its new place. Defaults to 150ms.
-pub const DEFAULT_SLIDE_DURATION: Duration = Duration::from_millis(150);
+/// How long a row takes to glide into its new place. Defaults to 150ms.
+///
+/// Both animated lists share it; [`animated_list`](super::animated_list) re-exports it.
+pub const DEFAULT_ROW_DURATION: Duration = Duration::from_millis(150);
 
 /// How many items beyond the viewport are tracked, so an item that is about to scroll in is
 /// already following the list.
@@ -167,7 +176,7 @@ pub fn animated_uniform_list<K, R>(
         count: 0,
         key_of: None,
         rows: None,
-        duration: DEFAULT_SLIDE_DURATION,
+        duration: DEFAULT_ROW_DURATION,
         easing: Rc::new(ease_out_cubic),
         anchor: true,
         enter: None,
@@ -260,14 +269,16 @@ where
         self
     }
 
-    /// Styles a row as it enters, with `t` going `0.0 -> 1.0`.
+    /// Styles a row as it enters: `|row, delta, time|`, both numbers going `0.0 -> 1.0`.
+    ///
+    /// `delta` has the list's easing applied, `time` is linear — see [`EnterStyle`].
     ///
     /// Only genuinely new items animate in: a row that merely scrolled into view does not.
     /// The wrapped element is the row, so the layout is untouched (`opacity`, transforms and
     /// paint offsets only).
     pub fn enter(
         mut self,
-        enter: impl Fn(AnyElement, f32) -> AnyElement + 'static,
+        enter: impl Fn(AnyElement, f32, f32) -> AnyElement + 'static,
     ) -> Self {
         self.enter = Some(Rc::new(enter));
         self
@@ -282,11 +293,16 @@ where
         self
     }
 
-    /// Styles a row as it leaves, with `t` going `0.0 -> 1.0`.
+    /// Styles a row as it leaves: `|row, delta, time|`, both numbers going `0.0 -> 1.0`.
+    ///
+    /// See [`EnterStyle`] for what the two numbers are.
     ///
     /// The row is painted in an overlay above the list, at the position it was last painted,
-    /// so painting it back into being at `t = 0` looks continuous.
-    pub fn leave(mut self, leave: impl Fn(AnyElement, f32) -> AnyElement + 'static) -> Self {
+    /// so painting it back into being at `delta = 0` looks continuous.
+    pub fn leave(
+        mut self,
+        leave: impl Fn(AnyElement, f32, f32) -> AnyElement + 'static,
+    ) -> Self {
         self.leave = Some(Rc::new(leave));
         self
     }
@@ -351,11 +367,13 @@ where
         });
 
         let (row_height, offset) = read_scroll(&self.scroll, self.count);
+        // An empty list has no content extent left to measure a row from, so it falls back to
+        // the height its rows had. An exit animation is still running then: the row that just
+        // went away is painted where it was, at the height it was.
+        let row_height = row_height.or_else(|| state.read(cx).last_row_height);
 
         // Nothing to do until the list has been laid out once and told us how tall a row is.
-        if let Some(row_height) = row_height.filter(|height| *height > Pixels::ZERO)
-            && self.count > 0
-        {
+        if let Some(row_height) = row_height.filter(|height| *height > Pixels::ZERO) {
             let top_index = top_index_for(offset, row_height, self.count);
             let input = FrameInput {
                 row_height,
@@ -408,7 +426,7 @@ where
         let wrapped_rows = move |range: Range<usize>, window: &mut Window, cx: &mut App| {
             let (row_height, _) = read_scroll(&scroll, count);
             let now = Instant::now();
-            let animating: Vec<(Pixels, Option<f32>)> = match row_height
+            let animating: Vec<(Pixels, Option<(f32, f32)>)> = match row_height
                 .filter(|height| *height > Pixels::ZERO)
             {
                 Some(row_height) => {
@@ -418,9 +436,9 @@ where
                             let key = (key_of)(index);
                             (
                                 state.offset_for(&key, row_height, duration, easing.as_ref(), now),
-                                enter_style.as_ref().and_then(|_| {
-                                    state.enter_progress(&key, duration, easing.as_ref(), now)
-                                }),
+                                enter_style
+                                    .as_ref()
+                                    .and_then(|_| state.enter_progress(&key, duration, easing.as_ref(), now)),
                             )
                         })
                         .collect()
@@ -433,8 +451,8 @@ where
                 .zip(animating)
                 .map(|(row, (offset, enter_t))| {
                     let mut row = row.into_any_element();
-                    if let (Some(style), Some(t)) = (enter_style.as_ref(), enter_t) {
-                        row = style(row, t);
+                    if let (Some(style), Some((delta, time))) = (enter_style.as_ref(), enter_t) {
+                        row = style(row, delta, time);
                     }
                     if offset == Pixels::ZERO {
                         row
@@ -458,28 +476,34 @@ where
         // The scroll-related part of the style belongs to the element that actually scrolls
         // (the container only carries layout).
         list.style().smooth_scroll = self.style.smooth_scroll;
-        container = container.child(list);
+
+        // The list and the exit animations share a content box: the rows are laid out inside the
+        // container's padding, and the positions the exit animations are given are the rows'
+        // positions in that same box. Refining the style onto a wrapper of its own is what keeps
+        // the two in step — insets are otherwise measured from the container's *padding* box, a
+        // padding away from where the rows actually are.
+        let mut content = div().relative().size_full().child(list);
 
         if let Some(leave_style) = self.leave.clone() {
             let now = Instant::now();
             let duration = self.duration;
             let easing = self.easing.clone();
-            let rows: Vec<(LeavingRow, Pixels, f32)> = state.update(cx, |state, _| {
+            let rows: Vec<(LeavingRow, Pixels, f32, f32)> = state.update(cx, |state, _| {
                 state
                     .leaving
                     .iter()
                     .map(|leave| {
-                        let t = easing(progress(leave.started, now, duration).min(1.0));
-                        (leave.row.clone(), leave.painted_y, t)
+                        let time = progress(leave.started, now, duration).min(1.0);
+                        (leave.row.clone(), leave.painted_y, easing(time), time)
                     })
                     .collect()
             });
 
             if !rows.is_empty() {
                 let mut overlay = div().absolute().inset_0();
-                for (row, painted_y, t) in rows {
+                for (row, painted_y, delta, time) in rows {
                     let element = (row)(window, cx);
-                    let element = leave_style(element, t);
+                    let element = leave_style(element, delta, time);
                     overlay = overlay.child(
                         div()
                             .absolute()
@@ -489,9 +513,11 @@ where
                             .child(element),
                     );
                 }
-                container = container.child(overlay);
+                content = content.child(overlay);
             }
         }
+
+        container = container.child(content);
 
         let mut list = container.into_any_element();
         let layout_id = list.request_layout(window, cx);
@@ -614,9 +640,9 @@ struct ListState<K> {
 impl<K> Default for ListState<K> {
     fn default() -> Self {
         Self {
-            tracked: HashMap::new(),
-            sliding: HashMap::new(),
-            entering: HashMap::new(),
+            tracked: HashMap::default(),
+            sliding: HashMap::default(),
+            entering: HashMap::default(),
             leaving: Vec::new(),
             last_offset: None,
             last_row_height: None,
@@ -814,31 +840,24 @@ impl<K: Hash + Eq + Clone> ListState<K> {
         }
     }
 
-    /// The enter progress for an item, if it is currently animating in.
+    /// The enter progress for an item, if it is currently animating in: the eased `delta` and
+    /// the linear `time`.
     fn enter_progress(
         &self,
         key: &K,
         duration: Duration,
         easing: &dyn Fn(f32) -> f32,
         now: Instant,
-    ) -> Option<f32> {
-        self.entering
-            .get(key)
-            .map(|started| easing(progress(*started, now, duration).min(1.0)))
+    ) -> Option<(f32, f32)> {
+        self.entering.get(key).map(|started| {
+            let time = progress(*started, now, duration).min(1.0);
+            (easing(time), time)
+        })
     }
 
     fn is_animating(&self) -> bool {
         !self.sliding.is_empty() || !self.entering.is_empty() || !self.leaving.is_empty()
     }
-}
-
-/// Elapsed fraction of the animation, before easing.
-fn progress(started: Instant, now: Instant, duration: Duration) -> f32 {
-    let duration = duration.as_secs_f32();
-    if duration <= 0.0 {
-        return 1.0;
-    }
-    ((now - started).as_secs_f32() / duration).clamp(0.0, 1.0)
 }
 
 /// The scroll offset and the row height the list measured last time it laid out.
@@ -864,12 +883,6 @@ fn top_index_for(offset: crate::Point<Pixels>, row_height: Pixels, count: usize)
     let rows = (-offset.y / row_height).floor();
     let index = if rows <= 0.0 { 0 } else { rows as usize };
     index.min(count.saturating_sub(1))
-}
-
-/// Eases the slide out: fast at first, settling gently. The default easing.
-pub fn ease_out_cubic(t: f32) -> f32 {
-    let n = t - 1.0;
-    n * n * n + 1.0
 }
 
 #[cfg(test)]
@@ -1292,7 +1305,9 @@ mod tests {
 #[cfg(test)]
 mod rendering_tests {
     use super::*;
-    use crate::{AppContext as _, Context, ParentElement as _, Render, TestAppContext, px, size};
+    use crate::{
+        AppContext as _, Bounds, Context, InteractiveElement as _, Render, TestAppContext, px, size,
+    };
     use std::cell::Cell;
     use std::rc::Rc;
 
@@ -1356,14 +1371,171 @@ mod rendering_tests {
             "the row height is read back as 20px"
         );
     }
+
+    /// A list that carries padding itself, like a chat column with a gutter: the rows are laid
+    /// out inside the padding, while the exit animations position themselves against the
+    /// container's padding box.
+    struct PaddedView {
+        scroll: UniformListScrollHandle,
+        keys: Rc<RefCell<Vec<u64>>>,
+        leaving: LeavingHandle<u64>,
+    }
+
+    impl Render for PaddedView {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let keys = Rc::new(self.keys.borrow().clone());
+            let count = keys.len();
+            let row_keys = keys.clone();
+
+            div().size_full().child(
+                animated_uniform_list("items", &self.scroll)
+                    .h(px(200.))
+                    .p(px(16.))
+                    .leaving(&self.leaving)
+                    .leave(|row, delta, _time| {
+                        div().child(row).opacity(1. - delta).into_any_element()
+                    })
+                    .count(count)
+                    .key_of({
+                        let keys = keys.clone();
+                        move |index| keys[index]
+                    })
+                    .rows(move |range, _window, _cx| {
+                        range
+                            .map(|index| {
+                                let key = row_keys[index];
+                                div()
+                                    .h(px(20.))
+                                    .debug_selector(move || format!("row-{key}"))
+                                    .child(format!("row {key}"))
+                            })
+                            .collect()
+                    }),
+            )
+        }
+    }
+
+    type PaddedWindow = crate::WindowHandle<PaddedView>;
+
+    fn draw_padded(cx: &mut TestAppContext, window: &PaddedWindow) {
+        cx.update_window(**window, |_, window, cx| {
+            let token = window.draw(cx);
+            token.clear(cx);
+        })
+        .expect("window update failed");
+    }
+
+    fn padded_bounds(
+        cx: &mut TestAppContext,
+        window: &PaddedWindow,
+        selector: &'static str,
+    ) -> Bounds<Pixels> {
+        window
+            .update(cx, |_, window, _| {
+                window.rendered_frame.debug_bounds.get(selector).copied()
+            })
+            .expect("window update failed")
+            .unwrap_or_else(|| panic!("{selector} was never laid out"))
+    }
+
+    /// How many callbacks the frame asked for: a running animation requests the next frame, a
+    /// settled one requests nothing.
+    fn frames_requested(cx: &mut TestAppContext, window: &PaddedWindow) -> usize {
+        window
+            .update(cx, |_, window, cx| window.simulate_next_frame(cx))
+            .expect("window update failed")
+    }
+
+    /// The last item leaving has to animate out like any other: nothing else is moving then, so
+    /// the exit is the only thing that can keep the frames coming.
+    #[hgpui::test]
+    fn the_last_item_keeps_the_frames_coming(cx: &mut TestAppContext) {
+        let keys = Rc::new(RefCell::new(vec![1u64]));
+        let leaving = LeavingHandle::new();
+        let (keys_for_view, leaving_for_view) = (keys.clone(), leaving.clone());
+
+        let window = cx.open_window(size(px(300.), px(400.)), move |_, _cx| PaddedView {
+            scroll: UniformListScrollHandle::new(),
+            keys: keys_for_view,
+            leaving: leaving_for_view,
+        });
+        cx.run_until_parked();
+        draw_padded(cx, &window);
+        assert_eq!(
+            frames_requested(cx, &window),
+            0,
+            "a settled list requests no frames"
+        );
+        let before = padded_bounds(cx, &window, "row-1");
+
+        keys.borrow_mut().clear();
+        leaving.push(1, |_window, _cx| {
+            div()
+                .h(px(20.))
+                .debug_selector(|| "leaving".to_string())
+                .child("row 1")
+                .into_any_element()
+        });
+        window
+            .update(cx, |_, _, cx| cx.notify())
+            .expect("update failed");
+        draw_padded(cx, &window);
+
+        assert!(
+            frames_requested(cx, &window) > 0,
+            "the exit has to keep the frames coming by itself"
+        );
+        assert_eq!(
+            padded_bounds(cx, &window, "leaving").origin,
+            before.origin,
+            "the item that went away is on its way out from where it was"
+        );
+    }
+
+    /// The row that is leaving has to start exactly where it was painted a moment ago —
+    /// padding included.
+    #[hgpui::test]
+    fn a_padded_list_starts_the_exit_where_the_row_was(cx: &mut TestAppContext) {
+        let keys = Rc::new(RefCell::new(vec![1u64, 2, 3, 4, 5]));
+        let leaving = LeavingHandle::new();
+        let (keys_for_view, leaving_for_view) = (keys.clone(), leaving.clone());
+
+        let window = cx.open_window(size(px(300.), px(400.)), move |_, _cx| PaddedView {
+            scroll: UniformListScrollHandle::new(),
+            keys: keys_for_view,
+            leaving: leaving_for_view,
+        });
+        cx.run_until_parked();
+        draw_padded(cx, &window);
+
+        let before = padded_bounds(cx, &window, "row-2");
+
+        keys.borrow_mut().retain(|key| *key != 2);
+        leaving.push(2, |_window, _cx| {
+            div()
+                .h(px(20.))
+                .debug_selector(|| "leaving".to_string())
+                .child("row 2")
+                .into_any_element()
+        });
+        window
+            .update(cx, |_, _, cx| cx.notify())
+            .expect("update failed");
+        draw_padded(cx, &window);
+
+        let leaving = padded_bounds(cx, &window, "leaving");
+        assert_eq!(
+            leaving.origin, before.origin,
+            "the exit starts where the row was painted, not a padding away"
+        );
+    }
 }
 
 #[cfg(test)]
 mod live_tests {
     use super::*;
     use crate::{
-        AppContext as _, Context, IntoElement, ParentElement as _, Render, Styled as _,
-        TestAppContext, Window, div, px, size,
+        AppContext as _, Context, IntoElement, Render, TestAppContext, Window, div, px, size,
     };
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
@@ -1372,7 +1544,6 @@ mod live_tests {
         items: Rc<RefCell<Vec<u64>>>,
         scroll: UniformListScrollHandle,
         leaving: LeavingHandle<u64>,
-        exit_rows: Rc<Cell<usize>>,
     }
 
     impl Render for LiveView {
@@ -1383,8 +1554,8 @@ mod live_tests {
                 animated_uniform_list("items", &self.scroll)
                     .h(px(400.))
                     .leaving(&self.leaving)
-                    .leave(|row, t| {
-                        div().opacity(1. - t).child(row).into_any_element()
+                    .leave(|row, delta, _time| {
+                        div().opacity(1. - delta).child(row).into_any_element()
                     })
                     .count(count)
                     .key_of({
@@ -1418,12 +1589,11 @@ mod live_tests {
         let leaving = LeavingHandle::new();
         let exit_rows = Rc::new(Cell::new(0));
         let (items_for_view, scroll_for_view) = (items.clone(), scroll.clone());
-        let (leaving_for_view, exit_for_view) = (leaving.clone(), exit_rows.clone());
+        let leaving_for_view = leaving.clone();
         let window = cx.open_window(size(px(300.), px(400.)), move |_, _cx| LiveView {
             items: items_for_view,
             scroll: scroll_for_view,
             leaving: leaving_for_view,
-            exit_rows: exit_for_view,
         });
         cx.run_until_parked();
         draw(cx, &window);
@@ -1525,7 +1695,6 @@ mod live_tests {
             items: items_for_view,
             scroll: scroll_for_view,
             leaving,
-            exit_rows: Rc::new(Cell::new(0)),
         });
         cx.run_until_parked();
 
