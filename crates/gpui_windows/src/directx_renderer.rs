@@ -522,7 +522,7 @@ impl DirectXRenderer {
                                 &current_srv,
                                 &current_rtv,
                                 filter.bounds,
-                                filter.content_mask.bounds,
+                                filter.content_mask,
                                 corner_radii_array(filter.corner_radii),
                                 max_blur_radius(&filter.filters),
                                 filter.opacity,
@@ -566,7 +566,7 @@ impl DirectXRenderer {
                                 &current_srv,
                                 &parent_rtv,
                                 boundary.bounds,
-                                boundary.content_mask.bounds,
+                                boundary.content_mask,
                                 corner_radii_array(boundary.corner_radii),
                                 max_blur_radius(&boundary.filters),
                                 boundary.opacity,
@@ -1033,7 +1033,7 @@ impl DirectXRenderer {
         source_srv: &Option<ID3D11ShaderResourceView>,
         target_rtv: &Option<ID3D11RenderTargetView>,
         bounds: Bounds<ScaledPixels>,
-        content_mask: Bounds<ScaledPixels>,
+        content_mask: ContentMask<ScaledPixels>,
         corner_radii: [f32; 4],
         blur_radius: f32,
         opacity: f32,
@@ -1141,7 +1141,8 @@ impl DirectXRenderer {
             &ping_srv,
             BlurParams {
                 bounds: composite_bounds,
-                content_mask,
+                content_mask: content_mask.bounds,
+                content_mask_radii: corner_radii_array(content_mask.corner_radii),
                 corner_radii,
                 opacity,
                 clip_rounded: if clip_rounded { 1.0 } else { 0.0 },
@@ -1510,6 +1511,10 @@ struct BlurParams {
     /// mirrored into (downsample pass), in device pixels.
     bounds: Bounds<ScaledPixels>,
     content_mask: Bounds<ScaledPixels>,
+    /// The content mask's corner radii (tl, tr, br, bl), in device pixels. The clip an element is
+    /// painted under may itself be rounded (`overflow_hidden` + a corner radius), and a filter's
+    /// output is clipped by it like any other painting — corners included.
+    content_mask_radii: [f32; 4],
     corner_radii: [f32; 4],
     direction: [f32; 2],
     sigma: f32,
@@ -1532,6 +1537,7 @@ impl Default for BlurParams {
         BlurParams {
             bounds: Bounds::default(),
             content_mask: Bounds::default(),
+            content_mask_radii: [0.0; 4],
             corner_radii: [0.0; 4],
             direction: [0.0, 0.0],
             sigma: 0.0,
@@ -2636,8 +2642,9 @@ mod tests {
     // recursion. Import only what this module needs, explicitly.
     use super::{
         create_blend_state, create_blend_state_for_path_sprite, create_blend_state_no_blend,
-        create_blur_sampler, create_color_target, create_constant_buffer, create_fragment_shader,
-        create_vertex_shader, update_buffer, BlurParams, GlobalParams, PipelineState,
+        corner_radii_array, create_blur_sampler, create_color_target, create_constant_buffer,
+        create_fragment_shader, create_vertex_shader, update_buffer, BlurParams, GlobalParams,
+        PipelineState,
         RawShaderBytes, ShaderTarget, RENDER_TARGET_FORMAT,
     };
     use crate::directx_renderer::shader_resources::ShaderModule;
@@ -3120,7 +3127,9 @@ mod tests {
             ),
         );
 
-        let run = |mirror_into: Bounds<ScaledPixels>| -> Result<()> {
+        let run = |mirror_into: Bounds<ScaledPixels>,
+                   content_mask: ContentMask<ScaledPixels>|
+         -> Result<()> {
             let rtv = output_rtv.clone().expect("output rtv");
             let srv = &source_srv;
             // The composite blends into the target, so each run starts from transparent black.
@@ -3193,13 +3202,8 @@ mod tests {
                 &params_buffer,
                 BlurParams {
                     bounds: composite_bounds,
-                    content_mask: bounds(
-                        point(ScaledPixels(0.0), ScaledPixels(0.0)),
-                        size(
-                            ScaledPixels(TEST_SIZE as f32),
-                            ScaledPixels(TEST_SIZE as f32),
-                        ),
-                    ),
+                    content_mask: content_mask.bounds,
+                    content_mask_radii: corner_radii_array(content_mask.corner_radii),
                     opacity: 1.0,
                     clip_rounded: 0.0,
                     ..Default::default()
@@ -3213,10 +3217,20 @@ mod tests {
 
         let close =
             |px: [u8; 4], expected: [u8; 4]| (0..4).all(|i| px[i].abs_diff(expected[i]) <= 2);
+        let whole_texture = ContentMask {
+            bounds: bounds(
+                point(ScaledPixels(0.0), ScaledPixels(0.0)),
+                size(
+                    ScaledPixels(TEST_SIZE as f32),
+                    ScaledPixels(TEST_SIZE as f32),
+                ),
+            ),
+            corner_radii: Corners::default(),
+        };
 
         // With the reflection the blur only ever sees the element's own (opaque) content, so no
         // tap can fade it out: the whole composite is the element's colour at full alpha.
-        run(element_bounds)?;
+        run(element_bounds, whole_texture)?;
         dump_device_errors(&device);
         for (x, y, what) in [
             (32, 32, "the middle"),
@@ -3231,10 +3245,17 @@ mod tests {
                  full alpha, got {px:?}"
             );
         }
+        // The mirror fills the box's corners as well — which is exactly why the rounded clip
+        // below has to be able to cut them back off.
+        let filled_corner = read_pixel(&context, &output, &staging, 17, 17)?;
+        assert!(
+            close(filled_corner, RED),
+            "the mirror reaches into the corner of the box, got {filled_corner:?}"
+        );
 
         // Without it — the zero box the pass used to be handed — the same taps read the
         // transparent surround instead, and the border dissolves toward whatever is behind.
-        run(Bounds::default())?;
+        run(Bounds::default(), whole_texture)?;
         let inside = read_pixel(&context, &output, &staging, 17, 32)?;
         assert!(
             (20..=250).contains(&inside[3]),
@@ -3245,6 +3266,33 @@ mod tests {
         assert!(
             far[3] < 45 && far[3] < inside[3],
             "and further out it keeps dissolving (inside {inside:?}, far {far:?})"
+        );
+
+        // The clip the element is painted under is part of its shape: a rounded `overflow_hidden`
+        // ancestor clips the blurred output like anything else it contains. The corner is inside
+        // the element's box (the mirror fills it — see the run above) but outside the rounding,
+        // so it must be clipped away, while the mid-edge stays solid.
+        run(
+            element_bounds,
+            ContentMask {
+                bounds: element_bounds,
+                corner_radii: Corners {
+                    top_left: ScaledPixels(RADIUS),
+                    top_right: ScaledPixels(RADIUS),
+                    bottom_right: ScaledPixels(RADIUS),
+                    bottom_left: ScaledPixels(RADIUS),
+                },
+            },
+        )?;
+        let corner = read_pixel(&context, &output, &staging, 17, 17)?;
+        assert!(
+            corner[3] < 20,
+            "a rounded clip must cut the corner the mirror would otherwise fill, got {corner:?}"
+        );
+        let edge = read_pixel(&context, &output, &staging, 17, 32)?;
+        assert!(
+            close(edge, RED),
+            "while the mid-edge stays the element's own colour at full alpha, got {edge:?}"
         );
 
         Ok(())

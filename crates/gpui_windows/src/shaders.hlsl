@@ -1517,6 +1517,10 @@ cbuffer BlurParams: register(b1) {
     // back into (downsample pass), in device pixels.
     Bounds blur_bounds;
     Bounds blur_content_mask;
+    // The content mask's corner radii (tl, tr, br, bl), in device pixels: the clip the element
+    // was painted under may itself be rounded (an ancestor's `overflow_hidden` + corner radius),
+    // and the filter's output is clipped by it exactly like any other painting.
+    float4 blur_content_mask_radii;
     float4 blur_corner_radii;
     float2 blur_direction;
     float blur_sigma;
@@ -1639,10 +1643,19 @@ float4 blur_composite_fragment(BlurCompositeFragmentInput input): SV_Target {
     // Backdrop clips to the rounded rect (the panel has a defined shape); content blur bleeds past
     // its bounds like CSS `filter: blur`, so its shape comes from the blurred group's own alpha.
     float coverage = blur_clip_rounded > 0.5 ? saturate(0.5 - distance) : 1.0;
+    // The clip the element was painted under is part of that shape too: a rounded `overflow_hidden`
+    // ancestor clips the filter's output like anything else it contains, corners included.
+    Corners mask_radii;
+    mask_radii.top_left = blur_content_mask_radii.x;
+    mask_radii.top_right = blur_content_mask_radii.y;
+    mask_radii.bottom_right = blur_content_mask_radii.z;
+    mask_radii.bottom_left = blur_content_mask_radii.w;
+    float mask_coverage =
+        saturate(0.5 - quad_sdf(input.position.xy, blur_content_mask, mask_radii));
     // The blurred sample is premultiplied (blurring against the transparent surround scales rgb
     // with the fading alpha), so output premultiplied and use a premultiplied-blend state. A
     // backdrop's scene is opaque (so this replaces); a content-filter group is transparent outside
     // its subtree (so the target shows through there instead of darkening).
-    float a = coverage * blur_opacity;
+    float a = coverage * mask_coverage * blur_opacity;
     return float4(blurred.rgb * a, blurred.a * a);
 }

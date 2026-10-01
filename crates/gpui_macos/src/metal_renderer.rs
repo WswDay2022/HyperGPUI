@@ -182,6 +182,10 @@ struct BlurUniform {
     /// back into (downsample pass), in device pixels.
     bounds: Bounds<ScaledPixels>,
     content_mask: Bounds<ScaledPixels>,
+    /// The content mask's corner radii (tl, tr, br, bl), in device pixels. The clip an element is
+    /// painted under may itself be rounded (`overflow_hidden` + a corner radius), and a filter's
+    /// output is clipped by it like any other painting — corners included.
+    content_mask_radii: Corners<ScaledPixels>,
     corner_radii: Corners<ScaledPixels>,
     direction: [f32; 2],
     sigma: f32,
@@ -204,6 +208,7 @@ impl Default for BlurUniform {
         BlurUniform {
             bounds: Bounds::default(),
             content_mask: Bounds::default(),
+            content_mask_radii: Corners::default(),
             corner_radii: Corners::default(),
             direction: [0.0, 0.0],
             sigma: 0.0,
@@ -1106,7 +1111,7 @@ impl MetalRenderer {
                                 pong,
                                 viewport_size,
                                 filter.bounds,
-                                filter.content_mask.bounds,
+                                filter.content_mask,
                                 filter.corner_radii,
                                 max_blur_radius(&filter.filters),
                                 filter.opacity,
@@ -1164,7 +1169,7 @@ impl MetalRenderer {
                                     pong,
                                     viewport_size,
                                     boundary.bounds,
-                                    boundary.content_mask.bounds,
+                                    boundary.content_mask,
                                     boundary.corner_radii,
                                     max_blur_radius(&boundary.filters),
                                     boundary.opacity,
@@ -1298,7 +1303,7 @@ impl MetalRenderer {
         pong: &metal::TextureRef,
         viewport_size: Size<DevicePixels>,
         bounds: Bounds<ScaledPixels>,
-        content_mask: Bounds<ScaledPixels>,
+        content_mask: ContentMask<ScaledPixels>,
         corner_radii: Corners<ScaledPixels>,
         blur_radius: f32,
         opacity: f32,
@@ -1384,7 +1389,8 @@ impl MetalRenderer {
             viewport_size,
             BlurUniform {
                 bounds: composite_bounds,
-                content_mask,
+                content_mask: content_mask.bounds,
+                content_mask_radii: content_mask.corner_radii,
                 corner_radii,
                 opacity,
                 clip_rounded: if clip_rounded { 1.0 } else { 0.0 },

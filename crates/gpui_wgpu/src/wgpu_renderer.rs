@@ -1,8 +1,8 @@
 use crate::{CompositorGpuHint, WgpuAtlas, WgpuContext, WgpuDeviceRequirements};
 use bytemuck::{Pod, Zeroable};
 use hgpui::{
-    AtlasTextureId, BackdropFilter, Background, Bounds, DevicePixels, FilterBoundary, GpuSpecs,
-    MonochromeSprite, PaintSurface, Path, Point, PolychromeSprite, PrimitiveBatch, Quad,
+    AtlasTextureId, BackdropFilter, Background, Bounds, ContentMask, DevicePixels, FilterBoundary,
+    GpuSpecs, MonochromeSprite, PaintSurface, Path, Point, PolychromeSprite, PrimitiveBatch, Quad,
     ScaledFilter, ScaledPixels, Scene, Shadow, Size, SubpixelSprite, Underline,
     get_gamma_correction_ratios,
 };
@@ -67,6 +67,10 @@ struct BlurParams {
     bounds: PodBounds,
     /// Clip rectangle, in device pixels (composite pass only).
     content_mask: PodBounds,
+    /// The content mask's corner radii (tl, tr, br, bl), in device pixels. The clip an element is
+    /// painted under may itself be rounded (`overflow_hidden` + a corner radius), and a filter's
+    /// output is clipped by it like any other painting — corners included.
+    content_mask_radii: [f32; 4],
     /// Rounded-corner radii (tl, tr, br, bl), in device pixels (composite pass only).
     corner_radii: [f32; 4],
     /// Per-tap sampling step in UV space (gaussian passes only): (1/width, 0) or (0, 1/height).
@@ -1694,7 +1698,7 @@ impl WgpuRenderer {
                                         &current_target,
                                         &parent,
                                         boundary.bounds,
-                                        boundary.content_mask.bounds,
+                                        boundary.content_mask,
                                         [
                                             boundary.corner_radii.top_left.0,
                                             boundary.corner_radii.top_right.0,
@@ -1999,7 +2003,7 @@ impl WgpuRenderer {
         source: &wgpu::TextureView,
         target: &wgpu::TextureView,
         bounds: Bounds<ScaledPixels>,
-        content_mask: Bounds<ScaledPixels>,
+        content_mask: ContentMask<ScaledPixels>,
         corner_radii: [f32; 4],
         blur_radius: f32,
         opacity: f32,
@@ -2124,7 +2128,13 @@ impl WgpuRenderer {
         };
         let params = BlurParams {
             bounds: composite_bounds.into(),
-            content_mask: content_mask.into(),
+            content_mask: content_mask.bounds.into(),
+            content_mask_radii: [
+                content_mask.corner_radii.top_left.0,
+                content_mask.corner_radii.top_right.0,
+                content_mask.corner_radii.bottom_right.0,
+                content_mask.corner_radii.bottom_left.0,
+            ],
             corner_radii,
             opacity,
             clip_rounded: if clip_rounded { 1.0 } else { 0.0 },
@@ -2164,7 +2174,7 @@ impl WgpuRenderer {
             scene_color_view,
             scene_color_view,
             filter.bounds,
-            filter.content_mask.bounds,
+            filter.content_mask,
             [
                 filter.corner_radii.top_left.0,
                 filter.corner_radii.top_right.0,

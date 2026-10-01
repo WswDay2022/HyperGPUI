@@ -1577,6 +1577,10 @@ struct BlurParams {
     // into (downsample pass), in device pixels.
     bounds: Bounds,
     content_mask: Bounds,
+    // The content mask's corner radii (tl, tr, br, bl), in device pixels: the clip an element is
+    // painted under may itself be rounded (`overflow_hidden` + a corner radius), and a filter's
+    // output is clipped by it like any other painting — corners included.
+    content_mask_radii: vec4<f32>,
     corner_radii: vec4<f32>,
     direction: vec2<f32>,
     sigma: f32,
@@ -1686,11 +1690,22 @@ fn fs_blur_composite(input: BlurVarying) -> @location(0) vec4<f32> {
     // isn't sharply truncated at the edge; its shape comes from the blurred group's own alpha.
     let distance = quad_sdf(input.position.xy, blur_locals.bounds, corner_radii);
     let coverage = select(1.0, saturate(0.5 - distance), blur_locals.clip_rounded > 0.5);
+    // The clip the element was painted under is part of its shape too: a rounded `overflow_hidden`
+    // ancestor clips the filter's output like anything else it contains, corners included.
+    let mask_radii = Corners(
+        blur_locals.content_mask_radii.x,
+        blur_locals.content_mask_radii.y,
+        blur_locals.content_mask_radii.z,
+        blur_locals.content_mask_radii.w,
+    );
+    let mask_coverage = saturate(
+        0.5 - quad_sdf(input.position.xy, blur_locals.content_mask, mask_radii),
+    );
 
     // The blurred sample is premultiplied (blurring against the transparent, rgb=0 surround scales
     // rgb with the fading alpha), so output premultiplied and let the pipeline blend premultiplied.
     // A backdrop's scene is opaque (alpha ~= 1) so this replaces; a content-filter group is
     // transparent outside its subtree, so the target shows through there instead of darkening.
-    let c = coverage * blur_locals.opacity;
+    let c = coverage * mask_coverage * blur_locals.opacity;
     return vec4<f32>(blurred.rgb * c, blurred.a * c);
 }
