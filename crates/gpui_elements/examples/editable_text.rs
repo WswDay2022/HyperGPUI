@@ -8,6 +8,8 @@
 //!   application can read the value, write to it, and focus it from outside.
 //! - `EventEmitter<TextChanged>` as the way to re-render when the text changes (the state
 //!   keeps the only copy — nothing snapshots the text on the render path).
+//! - Caret styling: shape (`bar` / `block` / `underscore`, mirroring CSS `caret-shape`),
+//!   thickness, corner radius, height ratio, color and blink interval.
 //!
 //! Type into either field: navigation, selection, IME, cut/copy/paste and undo/redo all
 //! work through the key bindings installed in `main` (`default_bindings`).
@@ -22,7 +24,7 @@ use hgpui::{
     Styled as _, Window, WindowBounds, WindowOptions, div, px, rgb, size,
 };
 use hgpui_elements::editable_text::{
-    EditableTextState, StringStorage, TextChanged,
+    CaretShape, EditableTextState, StringStorage, TextChanged,
     actions::{DEFAULT_INPUT_CONTEXT, default_bindings},
     text_area, text_input,
 };
@@ -53,6 +55,21 @@ impl Render for Example {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let name_value = self.name.read(cx).as_str().to_string();
         let notes_len = self.notes.read(cx).as_str().chars().count();
+
+        // Small labelled fields used to compare caret shapes. They keep their own state
+        // (no `.state(..)`), since the app never reads their contents.
+        let caret_field = |id: &'static str, placeholder: &'static str| {
+            text_input(id)
+                .placeholder(placeholder)
+                .caret_blink_interval_500ms()
+                .caret_color(hgpui::hsla(0.133, 0.845, 0.531, 1.0)) // #facc15
+                .border_1()
+                .border_color(rgb(0x3a3a40))
+                .rounded_lg()
+                .p_2()
+                .w_24()
+                .whitespace_nowrap()
+        };
 
         div()
             .id("editable-text-example")
@@ -155,6 +172,33 @@ impl Render for Example {
                     .text_color(rgb(0x9a9a9a))
                     .child(format!("name = {name_value:?}"))
                     .child(format!("notes = {notes_len} chars")),
+            )
+            // Caret styling: click into each field to compare the shapes.
+            .child(
+                div()
+                    .mt_2()
+                    .text_sm()
+                    .text_color(rgb(0x9a9a9a))
+                    .child("Caret styles:"),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap_2()
+                    .child(caret_field("caret-bar", "bar"))
+                    .child(
+                        caret_field("caret-underscore", "underscore")
+                            .caret_shape(CaretShape::Underline)
+                            .caret_width(px(3.))
+                            .caret_radius(px(1.5)),
+                    )
+                    .child(
+                        caret_field("caret-short", "0.7 height")
+                            .caret_width(px(4.))
+                            .caret_radius(px(2.))
+                            .caret_height_ratio(0.7),
+                    ),
             )
             // A read-only field: the element lays it out, but edits are refused while
             // selection and copy still work.

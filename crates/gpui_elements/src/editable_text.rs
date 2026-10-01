@@ -8,7 +8,9 @@
 //! - typing using an InputMethodEditor (IME) for writing Chinese, Japanese, and Korean utf-16
 //! - inserting newlines (`\n`) and tabs (`\t`)
 //! - cut/copy/paste
-//! - caret / text cursor that can blink
+//! - a caret / text cursor that can blink, and whose shape (`bar`, `underscore`),
+//!   thickness, corner radius, height ratio and color are all configurable (see
+//!   [`CaretShape`] and [`EditableTextElement::caret_style`])
 //! - simple undo/redo within a single field
 //!
 //! For all input actions, see documentation in the [`actions`] module.

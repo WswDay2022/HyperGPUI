@@ -10,17 +10,17 @@
 //! Imports are explicit on purpose: a glob here would also pull in `hgpui`'s `test` macro
 //! and shadow the `#[test]` attribute.
 
-use std::ops::Range;
+use std::{cell::Cell, ops::Range, rc::Rc};
 
 use hgpui::{
     AppContext as _, Bounds, Context, Entity, EntityInputHandler, Focusable as _,
-    NavigationDirection, ParentElement as _, Render, Styled as _, TestAppContext, Window,
-    WindowHandle, div, point, px, size,
+    InteractiveElement as _, Keystroke, NavigationDirection, ParentElement as _, Render,
+    Styled as _, TestAppContext, Window, WindowHandle, div, point, px, size,
 };
 
 use crate::editable_text::{
-    EditableTextState, StringStorage, TextBoundary,
-    actions::{DEFAULT_INPUT_CONTEXT, EditableTextActionHandler as _, default_bindings},
+    CaretShape, CaretStyle, EditableTextState, StringStorage, TextBoundary,
+    actions::{DEFAULT_INPUT_CONTEXT, EditableTextActionHandler as _, Enter, default_bindings},
     text_input,
 };
 
@@ -68,21 +68,37 @@ fn setup(
     (window, input)
 }
 
+/// Lets the helpers below work with any view that owns one editable text state.
+trait HasInput {
+    fn input_entity(&self) -> &Entity<EditableTextState>;
+}
+
+impl HasInput for TestView {
+    fn input_entity(&self) -> &Entity<EditableTextState> {
+        &self.input
+    }
+}
+
 /// Runs `f` against the state with a window available.
-fn with_state<R>(
+fn with_state<V: HasInput + Render + 'static, R>(
     cx: &mut TestAppContext,
-    window: &WindowHandle<TestView>,
+    window: &WindowHandle<V>,
     f: impl FnOnce(&mut EditableTextState, &mut Window, &mut Context<EditableTextState>) -> R,
 ) -> R {
     window
         .update(cx, |view, window, cx| {
-            view.input.update(cx, |state, cx| f(state, window, cx))
+            view.input_entity()
+                .update(cx, |state, cx| f(state, window, cx))
         })
         .expect("window update failed")
 }
 
 /// Simulates the platform handing typed (or pasted) text to the focused input.
-fn type_text(cx: &mut TestAppContext, window: &WindowHandle<TestView>, text: &str) {
+fn type_text<V: HasInput + Render + 'static>(
+    cx: &mut TestAppContext,
+    window: &WindowHandle<V>,
+    text: &str,
+) {
     with_state(cx, window, |state, window, cx| {
         state.replace_text_in_range(None, text, window, cx);
     });
@@ -485,4 +501,298 @@ fn bounds_for_range_reports_a_laid_out_rectangle(cx: &mut TestAppContext) {
         bounds.size.width > px(0.) && bounds.size.height > px(0.),
         "bounds for a non-empty range must have a visible size, got {bounds:?}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Form patterns: intercepting Enter from an ancestor
+// ---------------------------------------------------------------------------
+
+/// A form: an ancestor `div` that wants `Enter` (submit), wrapping a single-line input.
+///
+/// `capture` selects which phase the ancestor listens in, which is exactly what decides
+/// whether it ever sees the key: the focused element handles actions during the bubble
+/// phase and stops propagation there, so only a capture-phase listener runs first.
+struct FormView {
+    input: Entity<EditableTextState>,
+    submits: Rc<Cell<usize>>,
+    capture: bool,
+}
+
+impl HasInput for FormView {
+    fn input_entity(&self) -> &Entity<EditableTextState> {
+        &self.input
+    }
+}
+
+impl Render for FormView {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl hgpui::IntoElement {
+        let on_enter = cx.listener(move |this, _: &Enter, _window, cx| {
+            this.submits.set(this.submits.get() + 1);
+            cx.stop_propagation();
+        });
+
+        let form = if self.capture {
+            div().capture_action(on_enter)
+        } else {
+            div().on_action(on_enter)
+        };
+
+        form.child(text_input("form-input").state(self.input.downgrade()))
+    }
+}
+
+fn setup_form(cx: &mut TestAppContext, capture: bool) -> (WindowHandle<FormView>, Entity<EditableTextState>) {
+    cx.update(|cx| {
+        cx.bind_keys(default_bindings().as_keybindings(Some(DEFAULT_INPUT_CONTEXT)));
+    });
+
+    let input = cx.update(|cx| cx.new(|cx| EditableTextState::new(StringStorage::default(), cx)));
+    let input_for_view = input.clone();
+    let window = cx.open_window(size(px(600.), px(400.)), move |_, _cx| FormView {
+        input: input_for_view,
+        submits: Rc::new(Cell::new(0)),
+        capture,
+    });
+    cx.run_until_parked();
+
+    // Focus the input the way a click would, so key dispatch targets the element.
+    window
+        .update(cx, |view, window, cx| {
+            view.input.read(cx).focus_handle(cx).focus(window, cx);
+        })
+        .expect("window update failed");
+    cx.run_until_parked();
+
+    (window, input)
+}
+
+/// Presses a key through the real key dispatch path (keymap → action → listeners).
+///
+/// Uses `TestAppContext::dispatch_keystroke` rather than `WindowHandle::update` because
+/// dispatching a key may draw the window, and drawing re-renders the root view — which
+/// would re-enter the view lease held by `WindowHandle::update`.
+fn press_key(cx: &mut TestAppContext, window: &WindowHandle<FormView>, key: &str) {
+    cx.dispatch_keystroke(**window, Keystroke::parse(key).unwrap());
+    cx.run_until_parked();
+}
+
+#[hgpui::test]
+fn single_line_enter_is_a_no_op_for_the_input_itself(cx: &mut TestAppContext) {
+    let (window, input) = setup_form(cx, false);
+    type_text(cx, &window, "hello");
+    with_state(cx, &window, |state, window, cx| {
+        state.focus_handle(cx).focus(window, cx);
+    });
+    cx.run_until_parked();
+
+    press_key(cx, &window, "enter");
+
+    assert_eq!(
+        content(cx, &input),
+        "hello",
+        "single-line fields must not gain a newline from enter"
+    );
+}
+
+#[hgpui::test]
+fn an_ancestor_capture_action_receives_enter_before_the_input(cx: &mut TestAppContext) {
+    let (window, input) = setup_form(cx, true);
+    type_text(cx, &window, "hello");
+
+    press_key(cx, &window, "enter");
+
+    let submits = cx.update(|cx| window.read(cx).expect("window read failed").submits.get());
+    assert_eq!(
+        submits, 1,
+        "a capture-phase listener on an ancestor must see enter and be able to stop it"
+    );
+    assert_eq!(
+        content(cx, &input),
+        "hello",
+        "submitting must not disturb the text"
+    );
+}
+
+#[hgpui::test]
+fn an_ancestor_bubble_action_never_receives_enter(cx: &mut TestAppContext) {
+    let (window, _input) = setup_form(cx, false);
+
+    press_key(cx, &window, "enter");
+
+    let submits = cx.update(|cx| window.read(cx).expect("window read failed").submits.get());
+    assert_eq!(
+        submits, 0,
+        "actions stop propagating at the focused element, so a bubble-phase listener \
+         on an ancestor is unreachable while the input has focus"
+    );
+}
+
+#[hgpui::test]
+fn tab_inserts_a_literal_tab_into_a_single_line_field(cx: &mut TestAppContext) {
+    // Documented backlog item in the module docs ("disabling insert_tab in favor of tab
+    // being used to change focus between elements"); pinned here so a change is noticed.
+    let (window, input) = setup(cx, false);
+    with_state(cx, &window, |state, window, cx| {
+        state.focus_handle(cx).focus(window, cx);
+    });
+    cx.run_until_parked();
+
+    cx.dispatch_keystroke(*window, Keystroke::parse("tab").unwrap());
+    cx.run_until_parked();
+
+    assert_eq!(
+        content(cx, &input),
+        "\t",
+        "tab is currently inserted as text; intercept it in the capture phase to use it \
+         for focus movement instead"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// "User is done editing": detecting focus loss
+// ---------------------------------------------------------------------------
+
+/// Two inputs where the first one wants to know when the user leaves it.
+///
+/// The element has no "editing finished" callback, so the view derives it: it remembers
+/// whether the field was focused last frame and reacts to the focused→unfocused edge.
+/// (`Context::on_blur` is the intended API for this, but its focus events are only
+/// populated for an active window, which the test harness never has.)
+struct BlurView {
+    first: Entity<EditableTextState>,
+    second: Entity<EditableTextState>,
+    was_focused: bool,
+    blurs: Rc<Cell<usize>>,
+}
+
+impl Render for BlurView {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl hgpui::IntoElement {
+        let focused = self.first.read(cx).focus_handle(cx).is_focused(window);
+        if self.was_focused && !focused {
+            self.blurs.set(self.blurs.get() + 1);
+        }
+        self.was_focused = focused;
+
+        div()
+            .flex()
+            .flex_col()
+            .child(text_input("blur-input-a").state(self.first.downgrade()))
+            .child(text_input("blur-input-b").state(self.second.downgrade()))
+    }
+}
+
+/// Draws the window once. Focus arrives as a *render* input (`is_focused`) and focus
+/// events are dispatched at the end of a draw, so a redraw is what makes focus changes
+/// observable.
+fn draw(cx: &mut TestAppContext, window: &WindowHandle<BlurView>) {
+    cx.update_window(**window, |_, window, cx| {
+        let _ = window.draw(cx);
+    })
+    .expect("window update failed");
+    cx.run_until_parked();
+}
+
+#[hgpui::test]
+fn leaving_a_field_is_observable_in_render(cx: &mut TestAppContext) {
+    use hgpui::Focusable as _;
+
+    let first = cx.new(|cx| EditableTextState::new(StringStorage::default(), cx));
+    let second = cx.new(|cx| EditableTextState::new(StringStorage::default(), cx));
+    let blurs = Rc::new(Cell::new(0));
+    let (first_for_view, second_for_view, blurs_for_view) =
+        (first.clone(), second.clone(), blurs.clone());
+    let window = cx.open_window(size(px(600.), px(400.)), move |_, _cx| BlurView {
+        first: first_for_view,
+        second: second_for_view,
+        was_focused: false,
+        blurs: blurs_for_view,
+    });
+    cx.run_until_parked();
+
+    window
+        .update(cx, |view, window, cx| {
+            view.first.read(cx).focus_handle(cx).focus(window, cx);
+        })
+        .expect("window update failed");
+    draw(cx, &window);
+    assert_eq!(blurs.get(), 0, "focusing a field is not losing focus");
+
+    // Focus the other field, which is what tabbing or clicking away does.
+    window
+        .update(cx, |view, window, cx| {
+            view.second.read(cx).focus_handle(cx).focus(window, cx);
+        })
+        .expect("window update failed");
+    draw(cx, &window);
+
+    assert_eq!(
+        blurs.get(),
+        1,
+        "the focused -> unfocused edge must be visible while rendering; it is the hook          to commit a value on, since the element has no 'editing finished' event"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Caret styling
+// ---------------------------------------------------------------------------
+
+/// Renders one input per caret shape so the styling setters are exercised through the
+/// element itself (the geometry they produce is pinned in `element`'s unit tests).
+struct CaretView {
+    input: Entity<EditableTextState>,
+}
+
+impl HasInput for CaretView {
+    fn input_entity(&self) -> &Entity<EditableTextState> {
+        &self.input
+    }
+}
+
+impl Render for CaretView {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl hgpui::IntoElement {
+        div()
+            .flex()
+            .flex_col()
+            .child(text_input("caret-bar").state(self.input.downgrade()))
+            .child(
+                text_input("caret-underline")
+                    .state(self.input.downgrade())
+                    .caret_shape(CaretShape::Underline)
+                    .caret_width(px(3.0))
+                    .caret_radius(px(1.5)),
+            )
+            .child(
+                text_input("caret-full-style")
+                    .state(self.input.downgrade())
+                    .caret_style(CaretStyle {
+                        color: hgpui::hsla(0.133, 0.845, 0.531, 1.0),
+                        shape: CaretShape::Bar,
+                        width: px(4.0),
+                        radius: px(2.0),
+                        height_ratio: 0.7,
+                    }),
+            )
+    }
+}
+
+#[hgpui::test]
+fn caret_styling_setters_render(cx: &mut TestAppContext) {
+    let input = cx.new(|cx| EditableTextState::new(StringStorage::from("hello"), cx));
+    let input_for_view = input.clone();
+    let window = cx.open_window(size(px(600.), px(400.)), move |_, _cx| CaretView {
+        input: input_for_view,
+    });
+    cx.run_until_parked();
+
+    window
+        .update(cx, |view, window, cx| {
+            view.input.read(cx).focus_handle(cx).focus(window, cx);
+        })
+        .expect("window update failed");
+    cx.run_until_parked();
+
+    // The caret is drawn while focused; painting every shape must both succeed and leave
+    // editing untouched. (The caret starts at offset 0, so the text lands before it.)
+    type_text(cx, &window, "!");
+    assert_eq!(content(cx, &input), "!hello");
 }
