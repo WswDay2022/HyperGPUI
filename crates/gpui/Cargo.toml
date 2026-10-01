@@ -235,6 +235,10 @@ name = "blur-test"
 path = "examples/learn/blur_test.rs"
 
 [[example]]
+name = "animated-list"
+path = "examples/learn/animated_list.rs"
+
+[[example]]
 name = "css-transform"
 path = "examples/learn/transform.rs"
 
