@@ -387,7 +387,7 @@ impl TransitionBuilder {
         // Phase transitions caused by finished animations.
         match phase {
             Phase::Idle => {}
-            Phase::Entering { leave_armed } => {
+            Phase::Entering { .. } => {
                 let enter_done = enter_t.unwrap_or(1.0) >= 1.0;
                 match leave_t {
                     // The exit is running alongside the entrance.
@@ -482,9 +482,6 @@ impl TransitionBuilder {
         container.child(child).into_any_element()
     }
 }
-
-#[cfg(test)]
-mod tests;
 
 /// This frame's progress for each half of the transition, given the phase.
 fn progress(

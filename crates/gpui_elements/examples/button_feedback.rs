@@ -11,7 +11,7 @@
 //!
 //! Run it and hold the button; watch the console for the first log after `MOUSE_DOWN`.
 
-#[path = "../shared/prelude.rs"]
+#[path = "shared/prelude.rs"]
 mod example_prelude;
 
 use std::time::{Duration, Instant};

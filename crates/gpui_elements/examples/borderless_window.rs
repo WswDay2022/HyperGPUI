@@ -12,7 +12,7 @@
 //! Try dragging any edge or corner of the window: the cursor changes and the window resizes with
 //! the normal system behavior.
 
-#[path = "../shared/prelude.rs"]
+#[path = "shared/prelude.rs"]
 mod example_prelude;
 
 use hgpui::{

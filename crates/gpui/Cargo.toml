@@ -231,20 +231,12 @@ name = "counter"
 path = "examples/learn/counter.rs"
 
 [[example]]
-name = "borderless-resizeable-window"
-path = "examples/learn/borderless_resizeable_window.rs"
-
-[[example]]
 name = "blur-test"
 path = "examples/learn/blur_test.rs"
 
 [[example]]
-name = "button-feedback"
-path = "examples/learn/button_feedback.rs"
-
-[[example]]
 name = "css-transform"
-path = "examples/learn/css_transform.rs"
+path = "examples/learn/transform.rs"
 
 [[example]]
 name = "radial-gradient"

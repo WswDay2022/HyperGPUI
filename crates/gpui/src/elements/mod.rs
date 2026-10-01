@@ -1,6 +1,5 @@
 mod anchored;
 mod animation;
-mod borderless_window;
 mod canvas;
 mod container_query;
 mod deferred;
@@ -16,7 +15,6 @@ mod animated_div;
 
 pub use anchored::*;
 pub use animation::*;
-pub use borderless_window::*;
 pub use canvas::*;
 pub use container_query::*;
 pub use deferred::*;
