@@ -214,6 +214,11 @@ pub struct Style {
     /// Ideally we would match the web's behavior and not have a need for this, but right now we're adding this opt-in
     /// style property to limit the potential blast radius.
     pub restrict_scroll_to_axis: bool,
+    /// Eases this element's scroll offset towards its target instead of jumping to it.
+    ///
+    /// Off by default; see [`SmoothScroll`](crate::SmoothScroll). Once enabled, every change to
+    /// the offset glides — the wheel, a trackpad, `scroll_to_item`, anything.
+    pub smooth_scroll: Option<crate::SmoothScroll>,
 
     // Position properties
     /// What should the `position` value of this struct use as a base offset?
@@ -902,6 +907,7 @@ impl Default for Style {
             },
             allow_concurrent_scroll: false,
             restrict_scroll_to_axis: false,
+            smooth_scroll: None,
             scrollbar_width: AbsoluteLength::default(),
             position: Position::Relative,
             inset: Edges::auto(),

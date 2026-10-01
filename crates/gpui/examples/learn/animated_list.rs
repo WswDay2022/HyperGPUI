@@ -22,7 +22,8 @@
 //! - **Remove #3.** The removed row (tinted red here, so you can see it) fades out where it was
 //!   painted while the rows below slide up to close the gap.
 //!
-//! Turn "Live" off when you want to drive the list by hand without the background churn.
+//! Turn "Live" off when you want to drive the list by hand without the background churn, and
+//! try `.smooth_scroll(false)` (it is on by default here) to feel the difference in the wheel.
 //!
 //! ```sh
 //! cargo run -p hgpui --example animated-list
@@ -307,10 +308,16 @@ impl Render for AnimatedListExample {
                 animated_list("items", &self.scroll)
                     .flex_1()
                     .rounded_lg()
+                    // Rounded corners only clip with `overflow: hidden`, exactly like CSS. The
+                    // exit animations paint inside this element, so this clips them too.
+                    .overflow_hidden()
                     .border_1()
                     .border_color(rgb(0x3a3a40))
                     .count(row_count)
                     .duration(SLIDE)
+                    // Eased scrolling: the offset glides towards the wheel's target, and keeps
+                    // coasting for a moment after the wheel stops.
+                    .smooth_scroll(true)
                     .leaving(&self.leaving)
                     // Removed rows fade out where they were, over the rows closing up.
                     .leave(|row, t| {

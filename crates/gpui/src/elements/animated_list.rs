@@ -32,6 +32,10 @@
 //! A new item can also animate itself in with [`AnimatedListBuilder::enter`]; only genuinely
 //! new items do, never ones that merely scrolled into view.
 //!
+//! An exit animation is painted by this element, above the list. If the element has rounded
+//! corners, add `overflow_hidden`: rounded corners only clip with `overflow: hidden`, exactly
+//! like CSS, and that mask covers the exit animations too.
+//!
 //! The element is [`Styled`], so sizing it works like any other element
 //! (`.h(px(400.))`, `.flex_1()`, …) — the style is applied to the list itself.
 //!
@@ -372,11 +376,13 @@ where
 
             let anchored_offset = state.update(cx, |state, _| state.advance(&input));
             if let Some(y) = anchored_offset {
+                // A correction, not a scroll: it has to land this frame, even when the list
+                // is scrolling smoothly.
                 self.scroll
                     .0
                     .borrow()
                     .base_handle
-                    .set_offset(point(offset.x, y));
+                    .set_offset_immediate(point(offset.x, y));
             }
             if state.read(cx).is_animating() {
                 window.request_animation_frame();
@@ -439,9 +445,12 @@ where
         let mut container = div().relative();
         container.style().refine(&self.style);
 
-        let list = uniform_list(self.id.clone(), self.count, wrapped_rows)
+        let mut list = uniform_list(self.id.clone(), self.count, wrapped_rows)
             .track_scroll(&self.scroll)
             .size_full();
+        // The scroll-related part of the style belongs to the element that actually scrolls
+        // (the container only carries layout).
+        list.style().smooth_scroll = self.style.smooth_scroll;
         container = container.child(list);
 
         if let Some(leave_style) = self.leave.clone() {
@@ -1387,7 +1396,7 @@ mod live_tests {
         }
     }
 
-    fn draw(cx: &mut TestAppContext, window: &crate::WindowHandle<LiveView>) {
+    fn draw<V: Render + 'static>(cx: &mut TestAppContext, window: &crate::WindowHandle<V>) {
         cx.update_window(**window, |_, window, cx| {
             let token = window.draw(cx);
             token.clear(cx);
@@ -1438,6 +1447,64 @@ mod live_tests {
             exit_rows.get(),
             painted,
             "the removed item is released when its animation ends"
+        );
+    }
+
+    struct SmoothView {
+        scroll: UniformListScrollHandle,
+    }
+
+    impl Render for SmoothView {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(
+                animated_list("items", &self.scroll)
+                    .h(px(400.))
+                    .smooth_scroll(true)
+                    .count(200)
+                    .key_of(move |index| index as u64)
+                    .rows(move |range, _window, _cx| {
+                        range
+                            .map(|index| div().h(px(20.)).child(format!("row {index}")))
+                            .collect()
+                    }),
+            )
+        }
+    }
+
+    #[hgpui::test]
+    fn smooth_scrolling_eases_towards_the_target(cx: &mut TestAppContext) {
+        let scroll = UniformListScrollHandle::new();
+        let scroll_for_view = scroll.clone();
+        let window = cx.open_window(size(px(300.), px(400.)), move |_, _cx| SmoothView {
+            scroll: scroll_for_view,
+        });
+        cx.run_until_parked();
+        draw(cx, &window);
+
+        // Ask to scroll 400px (20 rows): the offset should glide there, not jump.
+        scroll
+            .0
+            .borrow()
+            .base_handle
+            .set_offset(point(px(0.), px(-400.)));
+        draw(cx, &window);
+
+        let after_one_frame = -scroll.0.borrow().base_handle.offset().y;
+        assert!(
+            after_one_frame > px(0.) && after_one_frame < px(400.),
+            "the offset should be part way there, got {after_one_frame:?}"
+        );
+
+        // Run it out the way a real frame loop would. (A single long sleep would not do: a
+        // frame's delta time is clamped, so a stalled frame cannot teleport the offset.)
+        for _ in 0..20 {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            draw(cx, &window);
+        }
+        assert_eq!(
+            scroll.0.borrow().base_handle.offset().y,
+            px(-400.),
+            "and it settles exactly on the target"
         );
     }
 

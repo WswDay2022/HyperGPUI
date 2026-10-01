@@ -10,9 +10,13 @@
 //! [`PinchEvent`](crate::PinchEvent)s — so components written against
 //! `on_click` and scroll containers work untouched on mobile.
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use crate::{Axis, IsZero, Pixels, Point, TouchPhase, px};
+use crate::{Axis, IsZero, Pixels, Point, TouchPhase, point, px};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 const SCROLL_EVENT_SEPARATION: Duration = Duration::from_millis(28);
 
@@ -198,6 +202,137 @@ mod tests {
     use super::*;
     use crate::point;
 
+    const FRAME: Duration = Duration::from_millis(16);
+
+    /// The omega the state uses for a given length.
+    fn omega(length: Duration) -> f32 {
+        SPRING_OMEGA_PER_LENGTH / length.as_secs_f32()
+    }
+
+    #[test]
+    fn the_spring_converges_without_overshooting() {
+        let mut position = 100.0_f32;
+        let mut velocity = 0.0_f32;
+        let omega = omega(SmoothScroll::default().length);
+
+        for _ in 0..60 {
+            let previous = position;
+            (position, velocity) = step_spring(position, velocity, omega, 0.016);
+            assert!(
+                position >= 0.0 && position <= previous,
+                "critically damped means no overshoot: {position} after {previous}"
+            );
+        }
+
+        assert!(position.abs() < 0.1, "should have arrived, got {position}");
+    }
+
+    #[test]
+    fn the_spring_reaches_two_percent_in_the_configured_length() {
+        let length = Duration::from_millis(90);
+        let (position, _) = step_spring(
+            100.0,
+            0.0,
+            omega(length),
+            length.as_secs_f32(),
+        );
+
+        assert!(
+            position.abs() <= 2.5,
+            "a 90ms glide should be within 2% after 90ms, got {position}"
+        );
+    }
+
+    #[test]
+    fn smoothing_glides_to_the_target_and_stops() {
+        let mut state = SmoothScrollState::default();
+        let mut rendered = Point::<Pixels>::default();
+        let start = Instant::now();
+
+        state.set_config(Some(SmoothScroll::default()), &mut rendered);
+        state.set_target(point(Pixels::ZERO, px(-100.)), &mut rendered);
+        assert_eq!(rendered.y, Pixels::ZERO, "the target moves, not the offset");
+
+        // One frame in: part of the way there, still moving.
+        assert!(state.step(&mut rendered, start + FRAME));
+        assert!(
+            rendered.y < Pixels::ZERO && rendered.y > px(-100.),
+            "in flight: {:?}",
+            rendered.y
+        );
+
+        // Once it is over, it sits exactly on the target.
+        for frame in 2..30 {
+            state.step(&mut rendered, start + FRAME * frame);
+        }
+        assert_eq!(rendered.y, px(-100.));
+        assert!(!state.is_animating());
+    }
+
+    #[test]
+    fn without_smoothing_the_offset_jumps_to_the_target() {
+        let mut state = SmoothScrollState::default();
+        let mut rendered = Point::<Pixels>::default();
+
+        state.set_target(point(Pixels::ZERO, px(-100.)), &mut rendered);
+
+        assert_eq!(rendered.y, px(-100.), "no glide unless it was asked for");
+        assert!(!state.step(&mut rendered, Instant::now()));
+        assert_eq!(rendered.y, px(-100.));
+    }
+
+    #[test]
+    fn a_second_target_mid_flight_keeps_the_movement_smooth() {
+        let mut state = SmoothScrollState::default();
+        let mut rendered = Point::<Pixels>::default();
+        let start = Instant::now();
+
+        state.set_config(Some(SmoothScroll::default()), &mut rendered);
+        state.set_target(point(Pixels::ZERO, px(-100.)), &mut rendered);
+        state.step(&mut rendered, start + FRAME);
+        let first_step = rendered.y;
+
+        // The wheel ticks again while the first glide is still running: the offset must carry
+        // on from where it is, with the velocity it already had.
+        state.set_target(point(Pixels::ZERO, px(-200.)), &mut rendered);
+        assert_eq!(rendered.y, first_step, "re-targeting does not move the offset");
+
+        state.step(&mut rendered, start + FRAME * 2);
+        let second_step = rendered.y - first_step;
+        assert!(
+            second_step < Pixels::ZERO && second_step.abs() > first_step.abs(),
+            "carrying momentum, not starting over: {first_step:?} then {second_step:?}"
+        );
+    }
+
+    #[test]
+    fn snapping_ignores_the_glide() {
+        let mut state = SmoothScrollState::default();
+        let mut rendered = Point::<Pixels>::default();
+
+        state.set_config(Some(SmoothScroll::default()), &mut rendered);
+        state.set_target(point(Pixels::ZERO, px(-100.)), &mut rendered);
+        state.snap_to(point(Pixels::ZERO, px(-40.)), &mut rendered);
+
+        assert_eq!(rendered.y, px(-40.));
+        assert_eq!(state.target().y, px(-40.));
+        assert!(!state.is_animating());
+    }
+
+    #[test]
+    fn turning_smoothing_off_lands_on_the_target() {
+        let mut state = SmoothScrollState::default();
+        let mut rendered = Point::<Pixels>::default();
+
+        state.set_config(Some(SmoothScroll::default()), &mut rendered);
+        state.set_target(point(Pixels::ZERO, px(-100.)), &mut rendered);
+        state.step(&mut rendered, Instant::now() + FRAME);
+        assert!(rendered.y > px(-100.));
+
+        state.set_config(None, &mut rendered);
+        assert_eq!(rendered.y, px(-100.), "no half-way state once it is off");
+    }
+
     #[test]
     fn ongoing_scroll_locks_to_dominant_axis() {
         let now = Instant::now();
@@ -308,5 +443,191 @@ mod tests {
         ongoing_scroll.filter_at(&mut horizontal_delta, TouchPhase::Moved, now);
         assert_eq!(ongoing_scroll.axis, Some(Axis::Horizontal));
         assert_eq!(horizontal_delta, point(px(10.), px(0.)));
+    }
+}
+
+/// Makes a scroll container ease towards its target offset instead of jumping to it.
+///
+/// Off by default: opt in per element with
+/// [`.smooth_scroll(true)`](crate::Styled::smooth_scroll).
+///
+/// Once enabled, *every* change to the offset glides — the wheel, a trackpad, `scroll_to_item`,
+/// anything that sets the offset — because they all move the same target and the rendered
+/// offset chases it with a critically damped spring. That is what reads as "a little damping,
+/// and it keeps coasting for a moment after you stop".
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SmoothScroll {
+    /// How long the offset takes to converge to within 2% of its target.
+    ///
+    /// Bigger is slower and floatier — this is "how much damping" the glide has.
+    /// Defaults to 200ms.
+    pub length: Duration,
+}
+
+impl Default for SmoothScroll {
+    fn default() -> Self {
+        Self {
+            length: Duration::from_millis(200),
+        }
+    }
+}
+
+impl SmoothScroll {
+    /// Sets how long the glide takes to converge.
+    pub fn length(mut self, length: Duration) -> Self {
+        self.length = length;
+        self
+    }
+}
+
+/// The offset a scroll container is heading for: the same as the rendered offset when
+/// smoothing is off, and the glide's destination when it is on.
+pub(crate) fn scroll_target(
+    smooth: Option<&Rc<RefCell<SmoothScrollState>>>,
+    rendered: Point<Pixels>,
+) -> Point<Pixels> {
+    match smooth {
+        Some(smooth) => smooth.borrow().target(),
+        None => rendered,
+    }
+}
+
+/// Moves a scroll offset to `target`: immediately when smoothing is off, and as a glide (the
+/// rendered offset catches up over the following frames) when it is on.
+pub(crate) fn set_scroll_target(
+    smooth: Option<&Rc<RefCell<SmoothScrollState>>>,
+    target: Point<Pixels>,
+    rendered: &mut Point<Pixels>,
+) {
+    match smooth {
+        Some(smooth) => smooth.borrow_mut().set_target(target, rendered),
+        None => *rendered = target,
+    }
+}
+
+/// The damping coefficient that puts a critically damped spring within 2% of its target after
+/// exactly `length`: the solution of `(1 + x) * exp(-x) = 0.02`.
+///
+/// (Neovide's cursor uses `4.0 / length`, which is a little loose — that reaches ~9% at
+/// `length`. Same shape, just an honest unit for the parameter.)
+const SPRING_OMEGA_PER_LENGTH: f32 = 5.834;
+
+/// Distances this small are indistinguishable from arrived.
+const SMOOTH_SCROLL_EPSILON: f32 = 0.1;
+/// Speeds this low, at that distance, are indistinguishable from stopped.
+const SMOOTH_SCROLL_VELOCITY_EPSILON: f32 = 10.0;
+
+/// One axis of a critically damped spring, in the formulation Neovide uses for its cursor:
+/// `position` is the distance still to travel and `velocity` its rate of change. Both decay
+/// together, reaching a 2% tolerance after `5.834 / omega` seconds.
+fn step_spring(position: f32, velocity: f32, omega: f32, dt: f32) -> (f32, f32) {
+    if position == 0.0 && velocity == 0.0 {
+        return (0.0, 0.0);
+    }
+    // Analytic solution of a critically damped oscillator (zeta = 1), with a and b the initial
+    // conditions solved from the position and velocity at dt = 0.
+    let a = position;
+    let b = position * omega + velocity;
+    let c = (-omega * dt).exp();
+    let position = (a + b * dt) * c;
+    let velocity = c * (-a * omega - b * dt * omega + b);
+    (position, velocity)
+}
+
+/// Per-container state for [`SmoothScroll`], kept across frames by the scroll handle (or the
+/// element state, for a scrolling `div`).
+#[derive(Default, Debug)]
+pub(crate) struct SmoothScrollState {
+    /// Where the offset should end up. Every writer of the scroll offset sets this.
+    target: Point<Pixels>,
+    /// How fast the rendered offset is moving, per axis, in pixels per second.
+    velocity: Point<Pixels>,
+    /// When the offset was last stepped, so the spring can use a real delta time.
+    last_tick: Option<Instant>,
+    /// `None` while smoothing is off: the rendered offset simply is the target.
+    config: Option<SmoothScroll>,
+    /// Whether the rendered offset is still moving towards the target.
+    animating: bool,
+}
+
+impl SmoothScrollState {
+    /// Where the offset should end up.
+    pub(crate) fn target(&self) -> Point<Pixels> {
+        self.target
+    }
+
+    /// Moves the target, letting the rendered offset glide there. When smoothing is off the
+    /// rendered offset is set immediately, so callers behave exactly as they did before.
+    pub(crate) fn set_target(&mut self, target: Point<Pixels>, rendered: &mut Point<Pixels>) {
+        self.target = target;
+        if self.config.is_none() {
+            *rendered = target;
+        }
+    }
+
+    /// Moves the target by a delta (what the wheel does).
+    pub(crate) fn add_target(&mut self, delta: Point<Pixels>, rendered: &mut Point<Pixels>) {
+        self.set_target(self.target + delta, rendered);
+    }
+
+    /// Puts the offset where it is asked to be, with no glide at all. For corrections that
+    /// must be invisible, like keeping a view anchored on its content while the list changes.
+    pub(crate) fn snap_to(&mut self, target: Point<Pixels>, rendered: &mut Point<Pixels>) {
+        self.target = target;
+        *rendered = target;
+        self.velocity = Point::default();
+        self.animating = false;
+    }
+
+    /// Turns smoothing on or off, as configured on the element this frame.
+    pub(crate) fn set_config(&mut self, config: Option<SmoothScroll>, rendered: &mut Point<Pixels>) {
+        if self.config != config {
+            self.config = config;
+            if config.is_none() {
+                self.snap_to(self.target, rendered);
+            }
+        }
+    }
+
+    pub(crate) fn is_animating(&self) -> bool {
+        self.animating
+    }
+
+    /// Advances the rendered offset towards the target. Returns whether it is still moving.
+    pub(crate) fn step(&mut self, rendered: &mut Point<Pixels>, now: Instant) -> bool {
+        let Some(config) = self.config else {
+            *rendered = self.target;
+            self.animating = false;
+            return false;
+        };
+
+        let dt = match self.last_tick {
+            // A real delta time, clamped so a dropped frame doesn't teleport the offset.
+            Some(last) => (now - last).as_secs_f32().clamp(0.0, 0.1),
+            None => 1.0 / 60.0,
+        };
+        self.last_tick = Some(now);
+
+        let omega = SPRING_OMEGA_PER_LENGTH / config.length.as_secs_f32().max(1e-4);
+        let (remaining_x, velocity_x) =
+            step_spring(self.target.x.0 - rendered.x.0, self.velocity.x.0, omega, dt);
+        let (remaining_y, velocity_y) =
+            step_spring(self.target.y.0 - rendered.y.0, self.velocity.y.0, omega, dt);
+
+        rendered.x.0 = self.target.x.0 - remaining_x;
+        rendered.y.0 = self.target.y.0 - remaining_y;
+        self.velocity = point(px(velocity_x), px(velocity_y));
+
+        self.animating = remaining_x.abs() > SMOOTH_SCROLL_EPSILON
+            || remaining_y.abs() > SMOOTH_SCROLL_EPSILON
+            || velocity_x.abs() > SMOOTH_SCROLL_VELOCITY_EPSILON
+            || velocity_y.abs() > SMOOTH_SCROLL_VELOCITY_EPSILON;
+
+        if !self.animating {
+            *rendered = self.target;
+            self.velocity = Point::default();
+        }
+
+        self.animating
     }
 }

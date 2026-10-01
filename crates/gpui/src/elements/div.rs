@@ -26,9 +26,11 @@ use crate::{
     PinchEvent, Pixels, Point, Render, ScrollWheelEvent, SharedString, Size, Style,
     StyleRefinement, Styled, Task, TooltipId, Visibility, Window, WindowControlArea, point, px,
     size,
+    SmoothScrollState,
 };
 use collections::HashMap;
 use refineable::Refineable;
+use scheduler::Instant;
 use smallvec::SmallVec;
 use stacksafe::{StackSafe, stacksafe};
 use std::{
@@ -2115,6 +2117,8 @@ pub struct Interactivity {
     pub(crate) scroll_anchor: Option<ScrollAnchor>,
     pub(crate) scroll_offset: Option<Rc<RefCell<Point<Pixels>>>>,
     pub(crate) ongoing_scroll: Option<Rc<RefCell<OngoingScroll>>>,
+    /// Cross-frame state for [`SmoothScroll`], kept next to the offset it drives.
+    pub(crate) smooth_scroll: Option<Rc<RefCell<SmoothScrollState>>>,
     pub(crate) group: Option<SharedString>,
     /// The base style of the element, before any modifications are applied
     /// by focus, active, etc.
@@ -2192,7 +2196,11 @@ impl Interactivity {
                     && let Some(element_state) = element_state.as_mut()
                 {
                     let scroll_offset = element_state.scroll_offset.get_or_insert_with(Rc::default);
-                    *scroll_offset.borrow_mut() = point;
+                    let smooth_scroll =
+                        element_state.smooth_scroll.get_or_insert_with(Rc::default);
+                    smooth_scroll
+                        .borrow_mut()
+                        .set_target(point, &mut scroll_offset.borrow_mut());
                 }
                 ((), element_state)
             },
@@ -2269,6 +2277,7 @@ impl Interactivity {
                     let scroll_handle_state = scroll_handle.0.borrow();
                     self.scroll_offset = Some(scroll_handle_state.offset.clone());
                     self.ongoing_scroll = Some(scroll_handle_state.ongoing_scroll.clone());
+                    self.smooth_scroll = Some(scroll_handle_state.smooth.clone());
                 } else if (self.base_style.overflow.x == Some(Overflow::Scroll)
                     || self.base_style.overflow.y == Some(Overflow::Scroll))
                     && let Some(element_state) = element_state.as_mut()
@@ -2283,6 +2292,12 @@ impl Interactivity {
                         element_state
                             .ongoing_scroll
                             .get_or_insert_with(|| Rc::new(RefCell::new(OngoingScroll::default())))
+                            .clone(),
+                    );
+                    self.smooth_scroll = Some(
+                        element_state
+                            .smooth_scroll
+                            .get_or_insert_with(Rc::default)
                             .clone(),
                     );
                 }
@@ -2451,6 +2466,17 @@ impl Interactivity {
         }
 
         if let Some(scroll_offset) = self.scroll_offset.as_ref() {
+            // Ease the offset towards its target. A no-op unless the element opted into smooth
+            // scrolling; while it is still moving, keep the frames coming.
+            if let Some(smooth_scroll) = self.smooth_scroll.as_ref() {
+                let mut smooth = smooth_scroll.borrow_mut();
+                smooth.set_config(style.smooth_scroll, &mut scroll_offset.borrow_mut());
+                let animating = smooth.step(&mut scroll_offset.borrow_mut(), Instant::now());
+                if animating {
+                    window.request_animation_frame();
+                }
+            }
+
             let mut scroll_to_bottom = false;
             let mut tracked_scroll_handle = self
                 .tracked_scroll_handle
@@ -2483,6 +2509,22 @@ impl Interactivity {
                 scroll_offset.y = -scroll_max.y;
             } else {
                 scroll_offset.y = scroll_offset.y.clamp(-scroll_max.y, px(0.));
+            }
+
+            // The target has to be kept in range too: a glide aiming past the edge would keep
+            // the spring running against a clamped offset, and never settle.
+            if let Some(smooth_scroll) = self.smooth_scroll.as_ref() {
+                let mut smooth = smooth_scroll.borrow_mut();
+                let mut target = smooth.target();
+                target.x = target.x.clamp(-scroll_max.x, px(0.));
+                target.y = target.y.clamp(-scroll_max.y, px(0.));
+                if scroll_to_bottom {
+                    // Pinning to the bottom follows the content rather than the user, so it
+                    // lands immediately instead of gliding.
+                    smooth.snap_to(target, &mut scroll_offset);
+                } else {
+                    smooth.set_target(target, &mut scroll_offset);
+                }
             }
 
             if let Some(mut scroll_handle_state) = tracked_scroll_handle {
@@ -3308,6 +3350,7 @@ impl Interactivity {
     ) {
         if let Some(scroll_offset) = self.scroll_offset.clone() {
             let ongoing_scroll = self.ongoing_scroll.clone();
+            let smooth_scroll = self.smooth_scroll.clone();
             let overflow = style.overflow;
             let allow_concurrent_scroll = style.allow_concurrent_scroll;
             let restrict_scroll_to_axis = style.restrict_scroll_to_axis;
@@ -3317,7 +3360,11 @@ impl Interactivity {
             window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
                 if phase == DispatchPhase::Bubble && hitbox.should_handle_scroll(window) {
                     let mut scroll_offset = scroll_offset.borrow_mut();
-                    let old_scroll_offset = *scroll_offset;
+                    let mut smooth_scroll = smooth_scroll.as_ref().map(|state| state.borrow_mut());
+                    let old_target = match smooth_scroll.as_ref() {
+                        Some(smooth) => smooth.target(),
+                        None => *scroll_offset,
+                    };
                     let mut delta = event.delta.pixel_delta(line_height);
 
                     if restrict_scroll_to_axis
@@ -3354,9 +3401,17 @@ impl Interactivity {
                             delta_x = Pixels::ZERO;
                         }
                     }
-                    scroll_offset.y += delta_y;
-                    scroll_offset.x += delta_x;
-                    if *scroll_offset != old_scroll_offset {
+                    let delta = point(delta_x, delta_y);
+                    match smooth_scroll.as_mut() {
+                        // The wheel moves the target; the offset glides towards it.
+                        Some(smooth) => smooth.add_target(delta, &mut scroll_offset),
+                        None => *scroll_offset += delta,
+                    }
+                    let new_target = match smooth_scroll.as_ref() {
+                        Some(smooth) => smooth.target(),
+                        None => *scroll_offset,
+                    };
+                    if new_target != old_target {
                         cx.notify(current_view);
                     }
                 }
@@ -3581,6 +3636,8 @@ impl Interactivity {
 #[derive(Default)]
 pub struct InteractiveElementState {
     pub(crate) focus_handle: Option<FocusHandle>,
+    /// Cross-frame state for [`SmoothScroll`] on elements that scroll without a handle.
+    pub(crate) smooth_scroll: Option<Rc<RefCell<SmoothScrollState>>>,
     pub(crate) clicked_state: Option<Rc<RefCell<ElementClickedState>>>,
     pub(crate) hover_state: Option<Rc<RefCell<ElementHoverState>>>,
     pub(crate) hover_listener_state: Option<Rc<RefCell<bool>>>,
@@ -4123,6 +4180,8 @@ impl ScrollAnchor {
 pub(crate) struct ScrollHandleState {
     pub(crate) offset: Rc<RefCell<Point<Pixels>>>,
     pub(crate) ongoing_scroll: Rc<RefCell<OngoingScroll>>,
+    /// Drives [`SmoothScroll`] for elements scrolling through this handle.
+    pub(crate) smooth: Rc<RefCell<SmoothScrollState>>,
     pub(crate) bounds: Bounds<Pixels>,
     pub(crate) max_offset: Point<Pixels>,
     pub(crate) child_bounds: Vec<Bounds<Pixels>>,
@@ -4299,9 +4358,21 @@ impl ScrollHandle {
     /// Set the offset explicitly. The offset is the distance from the top left of the
     /// parent container to the top left of the first child.
     /// As you scroll further down the offset becomes more negative.
-    pub fn set_offset(&self, mut position: Point<Pixels>) {
+    pub fn set_offset(&self, position: Point<Pixels>) {
         let state = self.0.borrow();
-        *state.offset.borrow_mut() = position;
+        let mut smooth = state.smooth.borrow_mut();
+        smooth.set_target(position, &mut state.offset.borrow_mut());
+    }
+
+    /// Set the offset of the scroll handle immediately, with no smoothing even when
+    /// [`SmoothScroll`] is enabled.
+    ///
+    /// For corrections that must be invisible rather than animated — keeping a view anchored on
+    /// its content while the list changes, say.
+    pub fn set_offset_immediate(&self, position: Point<Pixels>) {
+        let state = self.0.borrow();
+        let mut smooth = state.smooth.borrow_mut();
+        smooth.snap_to(position, &mut state.offset.borrow_mut());
     }
 
     /// Get the logical scroll top, based on a child index and a pixel offset.

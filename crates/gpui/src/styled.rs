@@ -851,6 +851,24 @@ pub trait Styled: Sized {
     }
 
     /// Sets the opacity of this element and its children.
+    /// Ease this element's scroll offset towards its target instead of jumping to it.
+    ///
+    /// Off by default. Once enabled, *every* change to the offset glides: the wheel, a trackpad,
+    /// `scroll_to_item`, anything that sets it. The offset chases the target with a critically
+    /// damped spring, which reads as a little damping, and a moment of coasting after you stop.
+    ///
+    /// Use [`smooth_scroll_with`](Self::smooth_scroll_with) to change the feel.
+    fn smooth_scroll(mut self, enabled: bool) -> Self {
+        self.style().smooth_scroll = enabled.then(crate::SmoothScroll::default);
+        self
+    }
+
+    /// Ease this element's scroll offset, with a custom [`SmoothScroll`](crate::SmoothScroll).
+    fn smooth_scroll_with(mut self, smooth_scroll: crate::SmoothScroll) -> Self {
+        self.style().smooth_scroll = Some(smooth_scroll);
+        self
+    }
+
     fn opacity(mut self, opacity: f32) -> Self {
         self.style().opacity = Some(opacity);
         self

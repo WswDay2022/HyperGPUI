@@ -9,6 +9,7 @@ use crate::{
     GlobalElementId, Hitbox, InspectorElementId, InteractiveElement, Interactivity, IntoElement,
     IsZero, LayoutId, ListSizingBehavior, Overflow, Pixels, Point, ScrollHandle, Size,
     StyleRefinement, Styled, Window, point, px, size,
+    scroll_target, set_scroll_target,
 };
 use smallvec::SmallVec;
 use std::{cell::RefCell, cmp, ops::Range, rc::Rc, usize};
@@ -373,6 +374,7 @@ impl Element for UniformList {
         };
 
         let shared_scroll_offset = self.interactivity.scroll_offset.clone().unwrap();
+        let smooth_scroll = self.interactivity.smooth_scroll.clone();
         let item_height = longest_item_size.height;
         let shared_scroll_to_item = self.scroll_handle.as_mut().and_then(|handle| {
             let mut handle = handle.0.borrow_mut();
@@ -405,16 +407,24 @@ impl Element for UniformList {
                     let max_scroll_offset = padded_bounds.size.height - content_height;
 
                     if is_scrolled_vertically && scroll_offset.y < max_scroll_offset {
-                        shared_scroll_offset.borrow_mut().y = max_scroll_offset;
-                        scroll_offset.y = max_scroll_offset;
+                        let mut target = scroll_target(smooth_scroll.as_ref(), scroll_offset);
+                        target.y = max_scroll_offset;
+                        let mut offset = shared_scroll_offset.borrow_mut();
+                        set_scroll_target(smooth_scroll.as_ref(), target, &mut offset);
+                        // With smoothing on this is still the rendered offset, which glides
+                        // back into range; with it off it is the clamped one.
+                        scroll_offset = *offset;
                     }
 
                     let content_width = content_size.width + padding.left + padding.right;
                     let is_scrolled_horizontally =
                         can_scroll_horizontally && !scroll_offset.x.is_zero();
                     if is_scrolled_horizontally && content_width <= padded_bounds.size.width {
-                        shared_scroll_offset.borrow_mut().x = Pixels::ZERO;
-                        scroll_offset.x = Pixels::ZERO;
+                        let mut target = scroll_target(smooth_scroll.as_ref(), scroll_offset);
+                        target.x = Pixels::ZERO;
+                        let mut offset = shared_scroll_offset.borrow_mut();
+                        set_scroll_target(smooth_scroll.as_ref(), target, &mut offset);
+                        scroll_offset = *offset;
                     }
 
                     if let Some(DeferredScrollToItem {
@@ -429,6 +439,9 @@ impl Element for UniformList {
                         }
                         let list_height = padded_bounds.size.height;
                         let mut updated_scroll_offset = shared_scroll_offset.borrow_mut();
+                        // The item is scrolled into view by moving the *target*; the offset
+                        // glides there (instantly, when smoothing is off).
+                        let mut target = scroll_target(smooth_scroll.as_ref(), *updated_scroll_offset);
                         let item_top = item_height * item_index;
                         let item_bottom = item_top + item_height;
                         let scroll_top = -updated_scroll_offset.y;
@@ -451,7 +464,7 @@ impl Element for UniformList {
                                 (content_height - list_height).max(Pixels::ZERO);
                             match strategy {
                                 ScrollStrategy::Top => {
-                                    updated_scroll_offset.y = -(item_top - offset_pixels)
+                                    target.y = -(item_top - offset_pixels)
                                         .clamp(Pixels::ZERO, max_scroll_offset);
                                 }
                                 ScrollStrategy::Center => {
@@ -460,11 +473,11 @@ impl Element for UniformList {
                                     let viewport_height = list_height - offset_pixels;
                                     let viewport_center = offset_pixels + viewport_height / 2.0;
                                     let target_scroll_top = item_center - viewport_center;
-                                    updated_scroll_offset.y =
+                                    target.y =
                                         -target_scroll_top.clamp(Pixels::ZERO, max_scroll_offset);
                                 }
                                 ScrollStrategy::Bottom => {
-                                    updated_scroll_offset.y = -(item_bottom - list_height)
+                                    target.y = -(item_bottom - list_height)
                                         .clamp(Pixels::ZERO, max_scroll_offset);
                                 }
                                 ScrollStrategy::Nearest => {
@@ -472,7 +485,8 @@ impl Element for UniformList {
                                 }
                             }
                         }
-                        scroll_offset = *updated_scroll_offset
+                        set_scroll_target(smooth_scroll.as_ref(), target, &mut updated_scroll_offset);
+                        scroll_offset = *updated_scroll_offset;
                     }
 
                     let first_visible_element_ix =
