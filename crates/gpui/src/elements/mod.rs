@@ -13,6 +13,7 @@ mod text;
 mod uniform_list;
 mod animated_div;
 mod animated_list;
+mod animated_uniform_list;
 
 pub use anchored::*;
 pub use animation::*;
@@ -29,3 +30,4 @@ pub use text::*;
 pub use uniform_list::*;
 pub use animated_div::*;
 pub use animated_list::*;
+pub use animated_uniform_list::*;
