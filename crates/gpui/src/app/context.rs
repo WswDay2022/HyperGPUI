@@ -230,6 +230,11 @@ impl<'a, T: 'static> Context<'a, T> {
         self.app.notify(self.entity_state.entity_id);
     }
 
+    /// Tell GPUI that an entity has changed and observers of it should be notified.
+    pub fn notify_raw(&mut self, entity_id: EntityId) {
+        self.app.notify(entity_id);
+    }
+
     /// Spawn the future returned by the given function.
     /// The function is provided a weak handle to the entity owned by this context and a context that can be held across await points.
     /// The returned task must be held or detached.

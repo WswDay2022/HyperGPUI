@@ -608,12 +608,6 @@ pub trait Styled: Sized {
         self
     }
 
-    /// Sets the transparent background of the element.
-    fn transparent_background(mut self) -> Self {
-        self.style().background = None;
-        self
-    }
-
     /// Sets the border style of the element.
     fn border_dashed(mut self) -> Self {
         self.style().border_style = Some(BorderStyle::Dashed);
