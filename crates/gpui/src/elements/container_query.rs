@@ -6,7 +6,7 @@ use refineable::Refineable as _;
 
 use crate::{
     AnyElement, App, AvailableSpace, Bounds, Element, ElementId, GlobalElementId,
-    InspectorElementId, IntoElement, LayoutId, Pixels, Size, Style, StyleRefinement, Styled,
+    InspectorElementId, IntoElement, LayoutId, Pixels, Style, StyleRefinement, Styled,
     Window, relative,
 };
 
@@ -31,7 +31,7 @@ use crate::{
 /// });
 /// ```
 pub fn container_query<E>(
-    render: impl 'static + FnOnce(Size<Pixels>, &mut Window, &mut App) -> E,
+    render: impl 'static + FnOnce(Bounds<Pixels>, &mut Window, &mut App) -> E,
 ) -> ContainerQuery
 where
     E: IntoElement,
@@ -50,7 +50,7 @@ where
 
 /// A container query element, created with [`container_query`].
 pub struct ContainerQuery {
-    render: Option<Box<dyn FnOnce(Size<Pixels>, &mut Window, &mut App) -> AnyElement>>,
+    render: Option<Box<dyn FnOnce(Bounds<Pixels>, &mut Window, &mut App) -> AnyElement>>,
     style: StyleRefinement,
 }
 
@@ -68,7 +68,7 @@ impl Element for ContainerQuery {
 
     fn request_layout(
         &mut self,
-        _id: Option<&GlobalElementId>,
+        _: Option<&GlobalElementId>,
         _: Option<&InspectorElementId>,
         window: &mut Window,
         cx: &mut App,
@@ -81,15 +81,15 @@ impl Element for ContainerQuery {
 
     fn prepaint(
         &mut self,
-        _id: Option<&GlobalElementId>,
+        _: Option<&GlobalElementId>,
         _: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
-        _request_layout: &mut Self::RequestLayoutState,
+        _: &mut Self::RequestLayoutState,
         window: &mut Window,
         cx: &mut App,
     ) -> Option<AnyElement> {
         let render = self.render.take()?;
-        let mut child = render(bounds.size, window, cx);
+        let mut child = render(bounds, window, cx);
         child.layout_as_root(bounds.size.map(AvailableSpace::Definite), window, cx);
         child.prepaint_at(bounds.origin, window, cx);
         Some(child)
@@ -97,10 +97,10 @@ impl Element for ContainerQuery {
 
     fn paint(
         &mut self,
-        _id: Option<&GlobalElementId>,
+        _: Option<&GlobalElementId>,
         _: Option<&InspectorElementId>,
-        _bounds: Bounds<Pixels>,
-        _request_layout: &mut Self::RequestLayoutState,
+        _: Bounds<Pixels>,
+        _: &mut Self::RequestLayoutState,
         prepaint: &mut Self::PrepaintState,
         window: &mut Window,
         cx: &mut App,
