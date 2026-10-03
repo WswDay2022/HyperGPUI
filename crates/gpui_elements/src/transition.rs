@@ -485,7 +485,7 @@ impl TransitionBuilder {
             (slot.leaving.clone(), in_flow, slot.phase)
         };
 
-        let mut container = div().relative().id(self.id.clone());
+        let mut container = div().relative().size_full().id(self.id.clone());
 
         if let Some(leaving) = &leaving {
             let child = leaving(window, cx);

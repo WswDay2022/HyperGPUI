@@ -170,8 +170,8 @@ mod tests {
             .open_offscreen_window_default(|_, cx| cx.new(|_| Empty))
             .expect("Failed to open window");
 
-        // Spawn a task via window.spawn - this is the critical test case
-        // for tooltip behavior, as tooltips use window.spawn for delayed show
+        // Spawn a task via window.spawn - this exercises tasks that wait on
+        // a timer and are driven by the test dispatcher
         {
             let task_ran = task_ran.clone();
             cx.update_window(window.into(), |_, window, cx| {

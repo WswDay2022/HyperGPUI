@@ -148,14 +148,14 @@ impl VisualTestAppContext {
     }
 
     /// Runs all pending foreground and background tasks until there's nothing left to do.
-    /// This is essential for processing async operations like tooltip timers.
+    /// This is essential for processing async operations like timer-driven tasks.
     pub fn run_until_parked(&self) {
         self.dispatcher.run_until_parked();
     }
 
     /// Advances the simulated clock by the given duration and processes any tasks
     /// that become ready. This is essential for testing time-based behaviors like
-    /// tooltip delays.
+    /// delayed tasks.
     pub fn advance_clock(&self, duration: Duration) {
         self.dispatcher.advance_clock(duration);
     }

@@ -27,7 +27,7 @@ use std::{
 /// This allows visual tests to:
 /// - Render real UI via Metal for accurate screenshots
 /// - Control task scheduling deterministically via TestDispatcher
-/// - Advance simulated time for testing time-based behaviors (tooltips, animations, etc.)
+/// - Advance simulated time for testing time-based behaviors (animations, etc.)
 pub struct VisualTestPlatform {
     dispatcher: TestDispatcher,
     background_executor: BackgroundExecutor,

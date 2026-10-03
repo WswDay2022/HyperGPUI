@@ -46,7 +46,7 @@ use crate::InspectorElementRegistry;
 use crate::MacActivationPolicy;
 use crate::{
     Action, ActionBuildError, ActionRegistry, Any, AnyView, AnyWindowHandle, AppContext, Arena,
-    ArenaBox, Asset, AssetSource, BackgroundExecutor, Bounds, ClipboardItem, CursorStyle,
+    ArenaBox, Asset, AssetSource, BackgroundExecutor, ClipboardItem, CursorStyle,
     DispatchPhase, DisplayId, EventEmitter, ExternalDragPayload, FocusHandle, FocusMap,
     ForegroundExecutor, Global, HapticFeedbackStyle, KeyBinding, KeyContext, Keymap, Keystroke,
     LayoutId, Menu, MenuItem, OwnedMenu, PathPromptOptions, Pixels, Platform, PlatformDisplay,
@@ -3009,22 +3009,6 @@ pub struct AnyDrag {
 /// promoted to a native drag session.
 pub type ExternalDragPayloadSource =
     Box<dyn FnOnce(&mut Window, &mut App) -> Option<ExternalDragPayload> + 'static>;
-
-/// Contains state associated with a tooltip. You'll only need this struct if you're implementing
-/// tooltip behavior on a custom element. Otherwise, use [Div::tooltip](crate::Interactivity::tooltip).
-#[derive(Clone)]
-pub struct AnyTooltip {
-    /// The view used to display the tooltip
-    pub view: AnyView,
-
-    /// The absolute position of the mouse when the tooltip was deployed.
-    pub mouse_position: Point<Pixels>,
-
-    /// Given the bounds of the tooltip, checks whether the tooltip should still be visible and
-    /// updates its state accordingly. This is needed atop the hovered element's mouse move handler
-    /// to handle the case where the element is not painted (e.g. via use of `visible_on_hover`).
-    pub check_visible_and_update: Rc<dyn Fn(Bounds<Pixels>, &mut Window, &mut App) -> bool>,
-}
 
 /// A keystroke event, and potentially the associated action
 #[derive(Debug)]

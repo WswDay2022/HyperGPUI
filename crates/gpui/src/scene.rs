@@ -90,7 +90,7 @@ impl Scene {
     }
 
     /// Raise the draw-order floor so every primitive inserted afterwards sorts above everything
-    /// inserted before. Called before painting deferred draws so overlays (tooltips, popovers,
+    /// inserted before. Called before painting deferred draws so overlays (popovers,
     /// drag images) sort above the main scene — and a deferred backdrop's order can't fall inside
     /// a content-filter (`filter`) order range left behind by the main scene.
     pub fn raise_order_floor(&mut self) {

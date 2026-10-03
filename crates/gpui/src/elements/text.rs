@@ -1,10 +1,9 @@
 use crate::ResultExt;
 use crate::{
-    ActiveTooltip, AnyView, App, Bounds, DispatchPhase, Element, ElementId, GlobalElementId,
-    HighlightStyle, Hitbox, HitboxBehavior, InspectorElementId, IntoElement, LayoutId,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, SharedString, Size, TextOverflow,
-    TextRun, TextStyle, TextTransform, TooltipId, TruncateFrom, WhiteSpace, Window, WrappedLine,
-    WrappedLineLayout, register_tooltip_mouse_handlers, set_tooltip_on_window,
+    App, Bounds, DispatchPhase, Element, ElementId, GlobalElementId, HighlightStyle, Hitbox,
+    HitboxBehavior, InspectorElementId, IntoElement, LayoutId, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, Pixels, Point, SharedString, Size, TextOverflow, TextRun, TextStyle,
+    TextTransform, TruncateFrom, WhiteSpace, Window, WrappedLine, WrappedLineLayout,
 };
 use anyhow::Context as _;
 use itertools::Itertools;
@@ -1226,8 +1225,6 @@ pub struct InteractiveText {
     click_listener:
         Option<Box<dyn Fn(&[Range<usize>], InteractiveTextClickEvent, &mut Window, &mut App)>>,
     hover_listener: Option<Box<dyn Fn(Option<usize>, MouseMoveEvent, &mut Window, &mut App)>>,
-    tooltip_builder: Option<Rc<dyn Fn(usize, &mut Window, &mut App) -> Option<AnyView>>>,
-    tooltip_id: Option<TooltipId>,
     clickable_ranges: Vec<Range<usize>>,
 }
 
@@ -1241,7 +1238,6 @@ struct InteractiveTextClickEvent {
 pub struct InteractiveTextState {
     mouse_down_index: Rc<Cell<Option<usize>>>,
     hovered_index: Rc<Cell<Option<usize>>>,
-    active_tooltip: Rc<RefCell<Option<ActiveTooltip>>>,
 }
 
 /// InteractiveTest is a wrapper around StyledText that adds mouse interactions.
@@ -1253,8 +1249,6 @@ impl InteractiveText {
             text,
             click_listener: None,
             hover_listener: None,
-            tooltip_builder: None,
-            tooltip_id: None,
             clickable_ranges: Vec::new(),
         }
     }
@@ -1285,15 +1279,6 @@ impl InteractiveText {
         listener: impl Fn(Option<usize>, MouseMoveEvent, &mut Window, &mut App) + 'static,
     ) -> Self {
         self.hover_listener = Some(Box::new(listener));
-        self
-    }
-
-    /// tooltip lets you specify a tooltip for a given character index in the string.
-    pub fn tooltip(
-        mut self,
-        builder: impl Fn(usize, &mut Window, &mut App) -> Option<AnyView> + 'static,
-    ) -> Self {
-        self.tooltip_builder = Some(Rc::new(builder));
         self
     }
 }
@@ -1340,18 +1325,8 @@ impl Element for InteractiveText {
         window.with_optional_element_state::<InteractiveTextState, _>(
             global_id,
             |interactive_state, window| {
-                let mut interactive_state = interactive_state
+                let interactive_state = interactive_state
                     .map(|interactive_state| interactive_state.unwrap_or_default());
-
-                if let Some(interactive_state) = interactive_state.as_mut() {
-                    if self.tooltip_builder.is_some() {
-                        self.tooltip_id =
-                            set_tooltip_on_window(&interactive_state.active_tooltip, window);
-                    } else {
-                        // If there is no longer a tooltip builder, remove the active tooltip.
-                        interactive_state.active_tooltip.take();
-                    }
-                }
 
                 self.text
                     .prepaint(None, inspector_id, bounds, state, window, cx);
@@ -1449,58 +1424,6 @@ impl Element for InteractiveText {
                         }
                     }
                 });
-
-                if let Some(tooltip_builder) = self.tooltip_builder.clone() {
-                    let active_tooltip = interactive_state.active_tooltip.clone();
-                    let build_tooltip = Rc::new({
-                        let tooltip_is_hoverable = false;
-                        let text_layout = text_layout.clone();
-                        move |window: &mut Window, cx: &mut App| {
-                            text_layout
-                                .index_for_position(window.mouse_position())
-                                .ok()
-                                .and_then(|position| tooltip_builder(position, window, cx))
-                                .map(|view| (view, tooltip_is_hoverable))
-                        }
-                    });
-
-                    // Use bounds instead of testing hitbox since this is called during prepaint.
-                    let check_is_hovered_during_prepaint = Rc::new({
-                        let source_bounds = hitbox.bounds;
-                        let text_layout = text_layout.clone();
-                        let pending_mouse_down = interactive_state.mouse_down_index.clone();
-                        move |window: &Window| {
-                            text_layout
-                                .index_for_position(window.mouse_position())
-                                .is_ok()
-                                && source_bounds.contains(&window.mouse_position())
-                                && pending_mouse_down.get().is_none()
-                        }
-                    });
-
-                    let check_is_hovered = Rc::new({
-                        let hitbox = hitbox.clone();
-                        let text_layout = text_layout.clone();
-                        let pending_mouse_down = interactive_state.mouse_down_index.clone();
-                        move |window: &Window| {
-                            text_layout
-                                .index_for_position(window.mouse_position())
-                                .is_ok()
-                                && hitbox.is_hovered(window)
-                                && pending_mouse_down.get().is_none()
-                        }
-                    });
-
-                    register_tooltip_mouse_handlers(
-                        &active_tooltip,
-                        self.tooltip_id,
-                        build_tooltip,
-                        check_is_hovered,
-                        check_is_hovered_during_prepaint,
-                        None,
-                        window,
-                    );
-                }
 
                 self.text
                     .paint(None, inspector_id, bounds, &mut (), &mut (), window, cx);

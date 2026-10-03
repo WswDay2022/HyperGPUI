@@ -53,6 +53,7 @@ mod styled;
 mod subscription;
 mod svg_renderer;
 mod tab_stop;
+mod delegate;
 mod taffy;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test;
@@ -105,6 +106,7 @@ pub use elements::*;
 pub use executor::*;
 pub use geometry::*;
 pub use gestures::*;
+pub use delegate::*;
 pub use global::*;
 pub use collections;
 pub use smallvec;
@@ -140,7 +142,6 @@ pub use util::arc_cow;
 pub use util::arc_cow::ArcCow;
 /// HTTP client abstraction for making requests.
 pub mod http_client;
-pub mod delegate;
 
 pub use input::*;
 pub use inspector::*;
