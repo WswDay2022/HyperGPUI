@@ -5,6 +5,7 @@ mod derive_into_element;
 mod derive_render;
 mod derive_visual_context;
 mod property_test;
+mod derive_element_delegate;
 mod register_action;
 mod styles;
 mod test;
@@ -14,6 +15,13 @@ mod derive_inspector_reflection;
 
 use proc_macro::TokenStream;
 use syn::{DeriveInput, Ident};
+
+/// #[derive(ElementDelegate)] generates custom impls for a type, like `Styled` `Interactive`,
+/// delegating to the field marked with `#[delegate]`.
+#[proc_macro_derive(ElementDelegate, attributes(delegate))]
+pub fn derive_element_delegate(input: TokenStream) -> TokenStream {
+    derive_element_delegate::derive_element_delegate(input)
+}
 
 /// `Action` derive macro - see the trait documentation for details.
 #[proc_macro_derive(Action, attributes(action))]

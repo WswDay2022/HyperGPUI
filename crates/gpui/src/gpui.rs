@@ -109,7 +109,7 @@ pub use global::*;
 pub use collections;
 pub use smallvec;
 pub use hgpui_macros::{
-    AppContext, IntoElement, Render, VisualContext, bench, property_test, register_action, test,
+    AppContext, IntoElement, Render, VisualContext, bench, property_test, register_action, test, ElementDelegate
 };
 
 /// Defines a Criterion benchmark group for benchmarks annotated with [`hgpui::bench`].
@@ -140,6 +140,8 @@ pub use util::arc_cow;
 pub use util::arc_cow::ArcCow;
 /// HTTP client abstraction for making requests.
 pub mod http_client;
+pub mod delegate;
+
 pub use input::*;
 pub use inspector::*;
 pub use interactive::*;

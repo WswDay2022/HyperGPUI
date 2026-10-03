@@ -1701,6 +1701,7 @@ pub trait StatefulInteractiveElement: InteractiveElement {
     }
 }
 
+
 /// Describes the known state of an Interactivity element before prepaint begins.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct InteractivityPrepaint {
