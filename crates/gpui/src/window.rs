@@ -4159,6 +4159,17 @@ impl Window {
         // Instead, split it into four non-overlapping strips that cover the regions where borders are painted:
         // the side strips own the straight left and right edges, while the top and bottom strips own the horizontal
         // edges and the rounded corners.
+        //
+        // The strip masks are expressed in the quad's local space, while the shaders test masks against
+        // transformed positions, so the strips are mapped through the quad's transform below. That mapping is only
+        // rectangle-to-rectangle for pure translate/scale transforms; rotation and skew turn the strips into
+        // non-axis-aligned shapes that a mask can't express, so those fall back to painting the whole quad (whose
+        // masks are already in the transformed space's frame).
+        if !quad.transformation.is_axis_aligned() {
+            self.next_frame.scene.insert_primitive(quad);
+            return;
+        }
+
         let radii = &quad.corner_radii;
         let widths = &quad.border_widths;
 
@@ -4207,6 +4218,9 @@ impl Window {
         ];
 
         for strip in strips {
+            // Map the strip into the quad's transformed space so the mask clip matches the
+            // positions the shaders transform fragments to.
+            let strip = quad.transformation.map_rect(strip);
             // Clip the full (rounded) mask to the strip: a strip corner only inherits the
             // mask's radius when the mask's own corner sits exactly there (outer corners
             // flush with the quad), while corners cut straight through the mask's edge
@@ -7024,12 +7038,13 @@ mod tests {
     };
 
     use crate::{
-        AnyWindowHandle, AppContext as _, Bounds, Context, CssTransform, DragMoveEvent, Empty,
-        ExternalDragPayload, ExternalPaths, FileDragPaths, FileDropEvent, FocusHandle,
-        InputEvent as _, InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent,
-        MouseMoveEvent, ParentElement, Pixels, Point, Render, StatefulInteractiveElement as _,
-        Styled, TestAppContext, TransformationMatrix, Window, WindowAppearance, WindowOptions,
-        canvas, deferred, div, point, px, radians, size,
+        AnyWindowHandle, AppContext as _, Background, BorderStyle, Bounds, Context, Corners,
+        CssTransform, DragMoveEvent, Edges, Empty, Entity, ExternalDragPayload, ExternalPaths,
+        FileDragPaths, FileDropEvent, FocusHandle, InputEvent as _, InteractiveElement as _,
+        IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement, Pixels, Point,
+        Render, ScaledPixels, SceneHsla, StatefulInteractiveElement as _, Styled, TestAppContext,
+        TransformationMatrix, Window, WindowAppearance, WindowOptions, canvas, deferred, div,
+        point, px, quad, radians, rgba, size, transparent_black,
     };
 
     struct EmptyView;
@@ -7245,6 +7260,283 @@ mod tests {
                 // ancestors' composite.
                 assert_eq!(re_prepaint.get(), painted.get());
                 assert_ne!(re_prepaint.get(), main.get());
+            })
+            .unwrap();
+    }
+
+    struct PaintQuadStripsProbe {
+        transformation: Option<TransformationMatrix>,
+    }
+
+    impl Render for PaintQuadStripsProbe {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let transformation = self.transformation;
+            div().size_full().child(canvas(
+                |_, _, _| {},
+                move |_, _, window, _| {
+                    let mut paint_quad = quad(
+                        Bounds {
+                            origin: point(px(8.), px(8.)),
+                            size: size(px(48.), px(48.)),
+                        },
+                        Corners::default(),
+                        transparent_black(),
+                        Edges {
+                            top: px(4.),
+                            right: px(4.),
+                            bottom: px(4.),
+                            left: px(4.),
+                        },
+                        crate::red(),
+                        BorderStyle::Solid,
+                    );
+                    paint_quad.transformation = transformation;
+                    window.paint_quad(paint_quad);
+                },
+            ))
+        }
+    }
+
+    fn painted_quad_rects(window: &Window) -> Vec<(f32, f32, f32, f32)> {
+        window
+            .rendered_frame
+            .scene
+            .quads
+            .iter()
+            .map(|quad| {
+                let bounds = quad.content_mask.bounds;
+                (
+                    bounds.origin.x.0,
+                    bounds.origin.y.0,
+                    bounds.origin.x.0 + bounds.size.width.0,
+                    bounds.origin.y.0 + bounds.size.height.0,
+                )
+            })
+            .collect()
+    }
+
+    /// The four strip masks of the border-only probe quad, in device pixels, derived from the
+    /// window's scale factor; `dx` shifts them horizontally for the transform cases.
+    fn expected_strips(window: &Window, dx: f32) -> Vec<(f32, f32, f32, f32)> {
+        let s = window.scale_factor();
+        let (x0, y0) = (8.0 * s + dx, 8.0 * s);
+        let (x1, y1) = (56.0 * s + dx, 56.0 * s);
+        let inset = 4.0 * s + 1.0;
+        let (ix0, iy0, ix1, iy1) = (x0 + inset, y0 + inset, x1 - inset, y1 - inset);
+        vec![
+            (x0, y0, x1, iy0),
+            (x0, iy1, x1, y1),
+            (x0, iy0, ix0, iy1),
+            (ix1, iy0, x1, iy1),
+        ]
+    }
+
+    /// A border-only (transparent background) quad takes the four-strip fast path. The strip
+    /// masks are cut against transformed fragment positions in the shaders, so under a
+    /// translate/scale transform the strips must be mapped into the transformed space — an
+    /// unmapped strip mask clips the border at the untransformed position ("eaten" borders).
+    /// Rotation and skew can't be expressed as axis-aligned masks, so they paint the whole
+    /// quad instead.
+    #[hgpui::test]
+    fn paint_quad_border_strips_follow_transform(cx: &mut TestAppContext) {
+        // Identity: the historical behavior — four local strips, unmoved.
+        let window = cx.add_window(|_, _| PaintQuadStripsProbe {
+            transformation: None,
+        });
+        window
+            .update(cx, |_, window, _| {
+                assert_eq!(painted_quad_rects(window), expected_strips(window, 0.0));
+            })
+            .unwrap();
+
+        // Translate: four strips, each masked at its mapped (shifted) rect.
+        let translate = TransformationMatrix::unit().translate(point(
+            ScaledPixels(8.0),
+            ScaledPixels(0.0),
+        ));
+        let window = cx.add_window(|_, _| PaintQuadStripsProbe {
+            transformation: Some(translate),
+        });
+        window
+            .update(cx, |_, window, _| {
+                assert_eq!(painted_quad_rects(window), expected_strips(window, 8.0));
+            })
+            .unwrap();
+
+        // Rotation: a single quad (no strips), and it carries the rotation.
+        let rotate = TransformationMatrix::unit().rotate(radians(0.3));
+        let window = cx.add_window(|_, _| PaintQuadStripsProbe {
+            transformation: Some(rotate),
+        });
+        window
+            .update(cx, |_, window, _| {
+                assert_eq!(window.rendered_frame.scene.quads.len(), 1);
+                assert_eq!(window.rendered_frame.scene.quads[0].transformation, rotate);
+            })
+            .unwrap();
+    }
+
+    struct CountingChildView {
+        renders: Rc<Cell<usize>>,
+    }
+
+    impl Render for CountingChildView {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            self.renders.set(self.renders.get() + 1);
+            div().w(px(40.)).h(px(40.))
+        }
+    }
+
+    struct TransformedParent {
+        child: Entity<CountingChildView>,
+        scale: Rc<Cell<f32>>,
+    }
+
+    impl Render for TransformedParent {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(
+                div()
+                    .transform(CssTransform::identity().scale_both(self.scale.get()))
+                    .child(self.child.clone()),
+            )
+        }
+    }
+
+    struct CachedTransformRoot {
+        parent: Entity<TransformedParent>,
+    }
+
+    impl Render for CachedTransformRoot {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            self.parent.clone()
+        }
+    }
+
+    /// A cached view's prepaint/paint ranges bake in the ancestor transform at capture time.
+    /// An animating ancestor transform (bounds, mask and text style all unchanged) must
+    /// therefore invalidate the cache — otherwise the subtree keeps replaying the stale
+    /// matrices, which is the "ghosting while scaling" bug.
+    #[hgpui::test]
+    fn view_cache_invalidates_when_ancestor_transform_changes(cx: &mut TestAppContext) {
+        let renders = Rc::new(Cell::new(0usize));
+        let scale = Rc::new(Cell::new(1.0f32));
+
+        let child = cx.update(|cx| {
+            let renders = renders.clone();
+            cx.new(|_| CountingChildView { renders })
+        });
+        let parent = cx.update(|cx| {
+            let scale = scale.clone();
+            cx.new(|_| TransformedParent { child, scale })
+        });
+        let window = cx.add_window({
+            let parent = parent.clone();
+            move |_, _| CachedTransformRoot { parent }
+        });
+        let window: AnyWindowHandle = window.into();
+
+        cx.update_window(window, |_, _, _| {
+            assert_eq!(renders.get(), 1, "the initial frame renders the child once");
+        })
+        .unwrap();
+
+        // The child's own state is untouched; only the ancestor transform changes. The harness
+        // flushes the resulting redraw when the update returns, and that frame consults the
+        // view cache — pre-fix the child's cache key ignored the transform and stayed at 1.
+        scale.set(2.0);
+        cx.update(|cx| parent.update(cx, |_, cx| cx.notify()));
+        let after_change = renders.get();
+        assert!(
+            after_change > 1,
+            "a changed ancestor transform must re-render the cached child (renders: {after_change})"
+        );
+
+        // Frames with nothing dirty must not re-render the child again.
+        cx.update(|_| {});
+        cx.update(|_| {});
+        assert_eq!(
+            renders.get(),
+            after_change,
+            "unchanged frames must keep hitting the cache"
+        );
+    }
+
+    struct PainterOrderProbe;
+
+    impl Render for PainterOrderProbe {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .w(px(140.))
+                        .h(px(50.))
+                        .background(rgba(0xff0000ff))
+                        .translate(px(0.), px(40.))
+                        .child(div().w_full().h(px(10.)).background(rgba(0xdd0000ff)))
+                        .child(div().w_full().h(px(10.)).background(rgba(0xbb0000ff)))
+                        .child(div().w_full().h(px(10.)).background(rgba(0x990000ff))),
+                )
+                .child(
+                    div()
+                        .mt(px(10.))
+                        .w(px(140.))
+                        .h(px(50.))
+                        .background(rgba(0x00ff00ff))
+                        .border_1()
+                        .border_color(rgba(0x0000ffff)),
+                )
+        }
+    }
+
+    /// Painter's order must hold across transformed overlap: a card translated onto the next
+    /// row is painted before it, so the next row (background and border) has to sort above the
+    /// card. Scene draw orders come from each primitive's *bounds*, and untransformed bounds
+    /// hide the overlap from the bounds tree — the later row then reuses lower orders and the
+    /// translated card's content paints over its border ("the green card lost its border").
+    #[hgpui::test]
+    fn transformed_overlap_keeps_painter_order(cx: &mut TestAppContext) {
+        let window = cx.add_window(|_, _| PainterOrderProbe);
+        window
+            .update(cx, |_, window, _| {
+                let quads = &window.rendered_frame.scene.quads;
+                let red_shades = [
+                    Background::from(rgba(0xff0000ff)),
+                    Background::from(rgba(0xdd0000ff)),
+                    Background::from(rgba(0xbb0000ff)),
+                    Background::from(rgba(0x990000ff)),
+                ];
+                let green_bg = Background::from(rgba(0x00ff00ff));
+                let blue_border: SceneHsla = crate::rgb_to_hsla(rgba(0x0000ffff)).into();
+                let red_indices: Vec<usize> = quads
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, quad)| red_shades.contains(&quad.background))
+                    .map(|(ix, _)| ix)
+                    .collect();
+                let green_indices: Vec<usize> = quads
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, quad)| {
+                        quad.background == green_bg || quad.border_color == blue_border
+                    })
+                    .map(|(ix, _)| ix)
+                    .collect();
+                assert_eq!(red_indices.len(), 4, "red background plus three stacked children");
+                assert!(
+                    green_indices.len() >= 5,
+                    "green background plus four border strips: {green_indices:?}"
+                );
+                assert!(
+                    red_indices.iter().max().unwrap() < green_indices.iter().min().unwrap(),
+                    "the later row (green background + blue border) must sort above the \
+                     translated red card that visually covers it \
+                     (red: {red_indices:?}, green: {green_indices:?})"
+                );
             })
             .unwrap();
     }

@@ -1,7 +1,8 @@
 use crate::{
     AnyElement, AnyEntity, AnyWeakEntity, App, Bounds, ContentMask, Context, Element, ElementId,
     Entity, EntityId, GlobalElementId, InspectorElementId, IntoElement, LayoutId, PaintIndex,
-    Pixels, PrepaintStateIndex, Render, RenderOnce, Style, StyleRefinement, TextStyle, WeakEntity,
+    Pixels, PrepaintStateIndex, Render, RenderOnce, Style, StyleRefinement, TextStyle,
+    TransformationMatrix, WeakEntity,
 };
 use crate::{Empty, Window};
 use anyhow::Result;
@@ -293,6 +294,11 @@ struct ViewElementCacheKey {
     bounds: Bounds<Pixels>,
     content_mask: ContentMask<Pixels>,
     text_style: TextStyle,
+    /// The ambient transform when the view was last prepared. A cached view's prepaint/paint
+    /// ranges bake in every ancestor transform at capture time, so a changed transform must
+    /// invalidate the cache — otherwise the cached subtree keeps replaying stale matrices
+    /// (ghosting while a transform animates above it).
+    transform: TransformationMatrix,
 }
 
 impl<V: View> Element for ViewElement<V> {
@@ -387,6 +393,7 @@ impl<V: View> Element for ViewElement<V> {
                             && element_state.cache_key.bounds == bounds
                             && element_state.cache_key.content_mask == content_mask
                             && element_state.cache_key.text_style == text_style
+                            && element_state.cache_key.transform == window.current_transform()
                             && !window.dirty_views.contains(&entity_id)
                             && !window.refreshing
                         {
@@ -427,6 +434,7 @@ impl<V: View> Element for ViewElement<V> {
                                     bounds,
                                     content_mask,
                                     text_style,
+                                    transform: window.current_transform(),
                                 },
                             },
                         )

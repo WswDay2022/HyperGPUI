@@ -2650,8 +2650,9 @@ mod tests {
     use crate::directx_renderer::shader_resources::ShaderModule;
     use anyhow::Result;
     use hgpui::{
-        bounds, hsla, linear_color_stop, linear_gradient, point, radial_gradient, rgba, size,
-        Background, Bounds, ContentMask, Corners, Quad, RadialShape, RadialSize, ScaledPixels,
+        bounds, hsla, linear_color_stop, linear_gradient, point, px, radial_gradient, rgba, size,
+        Background, Bounds, ContentMask, Corners, Edges, Quad, RadialShape, RadialSize, ScaledPixels,
+        TransformationMatrix, red, transparent_black,
     };
     use std::slice;
     use windows::core::Interface;
@@ -2913,6 +2914,324 @@ mod tests {
             corner,
             [128, 32, 64, 255],
             "corner pixel should be the clear color (B,G,R,A), got {corner:?}"
+        );
+        Ok(())
+    }
+
+    /// Borders and rounded corners must follow a CSS transform, and the mask-equals-own-cutout
+    /// skip must not depend on the transform being identity: when the mask is the quad's own
+    /// untransformed rounded rect, the quad's own local-space SDF already cuts exactly that
+    /// outline, so the mask must be skipped even for translated/skewed quads — otherwise the
+    /// mask slices the moved quad at its untransformed rect and the trailing edge is eaten.
+    #[test]
+    fn hlsl_quad_transformed_border_and_cutout_readback() -> Result<()> {
+        let Some((device, context)) = create_warp_device() else {
+            eprintln!("[quad_transform] WARP device unavailable, skipping");
+            return Ok(());
+        };
+        let (texture, rtv, staging) = make_render_target(&device)?;
+
+        let globals = GlobalParams {
+            gamma_ratios: [1.0, 1.0, 1.0, 1.0],
+            viewport_size: [TEST_SIZE as f32, TEST_SIZE as f32],
+            grayscale_enhanced_contrast: 0.0,
+            subpixel_enhanced_contrast: 0.0,
+            is_bgr: 0,
+            _pad: [0; 3],
+        };
+        let globals_buffer = unsafe {
+            let desc = D3D11_BUFFER_DESC {
+                ByteWidth: std::mem::size_of::<GlobalParams>() as u32,
+                Usage: D3D11_USAGE_DYNAMIC,
+                BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
+                CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
+                ..Default::default()
+            };
+            let mut buffer = None;
+            device.CreateBuffer(&desc, None, Some(&mut buffer))?;
+            buffer.unwrap()
+        };
+        update_buffer(&context, &globals_buffer, &[globals])?;
+
+        let blend = create_blend_state(&device)?;
+        let mut pipeline =
+            PipelineState::<Quad>::new(&device, "test_quad_transform", ShaderModule::Quad, 4, blend)?;
+
+        let quad_bounds = bounds(
+            point(ScaledPixels(8.0), ScaledPixels(8.0)),
+            size(ScaledPixels(48.0), ScaledPixels(48.0)),
+        );
+        let radius = ScaledPixels(8.0);
+        let rounded_corners = Corners {
+            top_left: radius,
+            top_right: radius,
+            bottom_left: radius,
+            bottom_right: radius,
+        };
+        let viewport_mask = ContentMask {
+            bounds: bounds(
+                point(ScaledPixels(0.0), ScaledPixels(0.0)),
+                size(ScaledPixels(64.0), ScaledPixels(64.0)),
+            ),
+            corner_radii: Corners::default(),
+        };
+
+        let viewport = D3D11_VIEWPORT {
+            TopLeftX: 0.0,
+            TopLeftY: 0.0,
+            Width: TEST_SIZE as f32,
+            Height: TEST_SIZE as f32,
+            MinDepth: 0.0,
+            MaxDepth: 1.0,
+        };
+        let bg = [0.25, 0.125, 0.5, 1.0];
+        let clear = [128u8, 32, 64, 255];
+        let red_px = [0u8, 0, 255, 255];
+
+        let draw_quad = |pipeline: &mut PipelineState<Quad>, quad: Quad| -> Result<()> {
+            pipeline.update_buffer(&device, &context, &[quad])?;
+            unsafe {
+                context.ClearRenderTargetView(&rtv, &bg);
+                context.OMSetRenderTargets(Some(slice::from_ref(&Some(rtv.clone()))), None);
+            }
+            pipeline.draw_range(
+                &device,
+                &context,
+                &[viewport],
+                &[Some(globals_buffer.clone())],
+                4,
+                0,
+                1,
+            )?;
+            dump_device_errors(&device);
+            Ok(())
+        };
+
+        let translate = TransformationMatrix::unit().translate(point(
+            ScaledPixels(8.0),
+            ScaledPixels(0.0),
+        ));
+
+        // Case 1: border-only quad, translated right by 8px. All four border bands must be
+        // present at the moved position, and the interior must stay clear.
+        let border_quad = Quad {
+            bounds: quad_bounds,
+            content_mask: viewport_mask,
+            background: Background::from(transparent_black()),
+            border_color: red().into(),
+            border_widths: Edges {
+                top: ScaledPixels(4.0),
+                right: ScaledPixels(4.0),
+                bottom: ScaledPixels(4.0),
+                left: ScaledPixels(4.0),
+            },
+            transformation: translate,
+            ..Default::default()
+        };
+        draw_quad(&mut pipeline, border_quad)?;
+        for (x, y) in [(40, 9), (17, 32), (60, 32), (40, 54)] {
+            let px = read_pixel(&context, &texture, &staging, x, y)
+                .unwrap_or_else(|err| panic!("readback of ({x}, {y}) failed: {err}"));
+            assert_eq!(
+                px, red_px,
+                "translated border quad must have a border pixel at ({x}, {y})"
+            );
+        }
+        let interior = read_pixel(&context, &texture, &staging, 40, 32)
+            .expect("readback of interior failed");
+        assert_eq!(
+            interior, clear,
+            "a border-only quad's interior stays transparent"
+        );
+
+        // Case 2: solid rounded quad whose content mask is its own rounded rect, translated by
+        // 8px. The trailing edge past the untransformed rect must survive: pre-fix the mask cut
+        // everything with scene x > 56, which is exactly pixel (60, 32).
+        let own_cutout_quad = Quad {
+            bounds: quad_bounds,
+            content_mask: ContentMask {
+                bounds: quad_bounds,
+                corner_radii: rounded_corners,
+            },
+            background: Background::from(rgba(0xff0000ff)),
+            corner_radii: rounded_corners,
+            transformation: translate,
+            ..Default::default()
+        };
+        draw_quad(&mut pipeline, own_cutout_quad)?;
+        for (what, x, y) in [("right band", 60, 32), ("rounded corner", 58, 14)] {
+            let px = read_pixel(&context, &texture, &staging, x, y)
+                .unwrap_or_else(|err| panic!("readback of ({x}, {y}) failed: {err}"));
+            assert_eq!(
+                px, red_px,
+                "translated own-cutout quad lost its {what} at ({x}, {y})"
+            );
+        }
+
+        // Case 3: the same quad under a center-pivoted skewX(0.3). Pixel (58, 46) sits inside
+        // the skewed shape's lower-right region, past the untransformed mask rect the pre-fix
+        // code cut at.
+        let t = 0.3f32.tan();
+        let skew = TransformationMatrix {
+            rotation_scale: [[1.0, t], [0.0, 1.0]],
+            translation: [-t * 32.0, 0.0],
+        };
+        let skew_quad = Quad {
+            bounds: quad_bounds,
+            content_mask: ContentMask {
+                bounds: quad_bounds,
+                corner_radii: rounded_corners,
+            },
+            background: Background::from(rgba(0xff0000ff)),
+            corner_radii: rounded_corners,
+            transformation: skew,
+            ..Default::default()
+        };
+        draw_quad(&mut pipeline, skew_quad)?;
+        for (x, y) in [(58, 46), (40, 32)] {
+            let px = read_pixel(&context, &texture, &staging, x, y)
+                .unwrap_or_else(|err| panic!("readback of ({x}, {y}) failed: {err}"));
+            assert_eq!(px, red_px, "skewed own-cutout quad missing at ({x}, {y})");
+        }
+
+        // Case 4: border-only quad rotated 22.5° about its center. The border must follow the
+        // rotated edges: probe points are band midpoints of the untransformed border, mapped
+        // through the same matrix the shader applies.
+        let rotation = {
+            let center = ScaledPixels(32.0);
+            TransformationMatrix::unit()
+                .translate(point(center, center))
+                .compose(TransformationMatrix::unit().rotate(hgpui::radians(0.3927)))
+                .translate(point(ScaledPixels(-32.0), ScaledPixels(-32.0)))
+        };
+        let rotated_border = Quad {
+            bounds: quad_bounds,
+            content_mask: ContentMask {
+                bounds: bounds(
+                    point(ScaledPixels(0.0), ScaledPixels(0.0)),
+                    size(ScaledPixels(64.0), ScaledPixels(64.0)),
+                ),
+                corner_radii: Corners::default(),
+            },
+            background: Background::from(transparent_black()),
+            border_color: red().into(),
+            border_widths: Edges {
+                top: ScaledPixels(4.0),
+                right: ScaledPixels(4.0),
+                bottom: ScaledPixels(4.0),
+                left: ScaledPixels(4.0),
+            },
+            transformation: rotation,
+            ..Default::default()
+        };
+        draw_quad(&mut pipeline, rotated_border)?;
+        for local in [
+            point(px(10.0), px(32.0)),
+            point(px(54.0), px(32.0)),
+            point(px(32.0), px(10.0)),
+            point(px(32.0), px(54.0)),
+        ] {
+            let scene = rotation.apply(local);
+            let (x, y) = (
+                f32::from(scene.x).floor() as u32,
+                f32::from(scene.y).floor() as u32,
+            );
+            let px_color = read_pixel(&context, &texture, &staging, x, y)
+                .unwrap_or_else(|err| panic!("readback of ({x}, {y}) failed: {err}"));
+            assert_eq!(
+                px_color, red_px,
+                "rotated border quad missing its border at local {local:?} (scene ({x}, {y}))"
+            );
+        }
+
+        Ok(())
+    }
+
+    /// The checkerboard pattern must antialias its cell edges: with the pattern offset by half
+    /// a cell, every vertical cell boundary sits on a pixel center, so a row scan across the
+    /// boundary must contain blended pixels instead of a binary on/off staircase.
+    #[test]
+    fn hlsl_checkerboard_edge_aa_readback() -> Result<()> {
+        let Some((device, context)) = create_warp_device() else {
+            eprintln!("[checker-aa] WARP device unavailable, skipping");
+            return Ok(());
+        };
+        let (texture, rtv, staging) = make_render_target(&device)?;
+        let globals = GlobalParams {
+            gamma_ratios: [1.0, 1.0, 1.0, 1.0],
+            viewport_size: [TEST_SIZE as f32, TEST_SIZE as f32],
+            grayscale_enhanced_contrast: 0.0,
+            subpixel_enhanced_contrast: 0.0,
+            is_bgr: 0,
+            _pad: [0; 3],
+        };
+        let globals_buffer = unsafe {
+            let desc = D3D11_BUFFER_DESC {
+                ByteWidth: std::mem::size_of::<GlobalParams>() as u32,
+                Usage: D3D11_USAGE_DYNAMIC,
+                BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
+                CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
+                ..Default::default()
+            };
+            let mut buffer = None;
+            device.CreateBuffer(&desc, None, Some(&mut buffer))?;
+            buffer.unwrap()
+        };
+        update_buffer(&context, &globals_buffer, &[globals])?;
+        let blend = create_blend_state(&device)?;
+        let mut pipeline =
+            PipelineState::<Quad>::new(&device, "test_checker_aa", ShaderModule::Quad, 4, blend)?;
+
+        // Half-pixel offset puts the cell boundaries on pixel centers (x = 16.5 + 8k).
+        let quad = Quad {
+            bounds: bounds(
+                point(ScaledPixels(16.5), ScaledPixels(16.5)),
+                size(ScaledPixels(31.0), ScaledPixels(31.0)),
+            ),
+            content_mask: ContentMask {
+                bounds: bounds(
+                    point(ScaledPixels(0.0), ScaledPixels(0.0)),
+                    size(ScaledPixels(64.0), ScaledPixels(64.0)),
+                ),
+                corner_radii: Corners::default(),
+            },
+            background: hgpui::checkerboard(rgba(0xff0000ff), 8.0),
+            ..Default::default()
+        };
+        pipeline.update_buffer(&device, &context, &[quad])?;
+        let viewport = D3D11_VIEWPORT {
+            TopLeftX: 0.0,
+            TopLeftY: 0.0,
+            Width: TEST_SIZE as f32,
+            Height: TEST_SIZE as f32,
+            MinDepth: 0.0,
+            MaxDepth: 1.0,
+        };
+        let bg = [0.25, 0.125, 0.5, 1.0];
+        unsafe {
+            context.ClearRenderTargetView(&rtv, &bg);
+            context.OMSetRenderTargets(Some(slice::from_ref(&Some(rtv.clone()))), None);
+        }
+        pipeline.draw_range(
+            &device,
+            &context,
+            &[viewport],
+            &[Some(globals_buffer)],
+            4,
+            0,
+            1,
+        )?;
+        dump_device_errors(&device);
+
+        let blended = (0..TEST_SIZE)
+            .filter(|&x| {
+                let r = read_pixel(&context, &texture, &staging, x, 33).unwrap()[2];
+                (72..=248).contains(&r)
+            })
+            .count();
+        assert!(
+            blended >= 2,
+            "checkerboard cell boundaries must be antialiased (found {blended} blended pixels)"
         );
         Ok(())
     }

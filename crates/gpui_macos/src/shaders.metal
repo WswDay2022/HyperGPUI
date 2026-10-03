@@ -39,6 +39,16 @@ float radians(float degrees);
 float4 fill_color(Background background, float2 position, Bounds_ScaledPixels bounds,
   float4 solid_color, float4 color0, float4 color1);
 
+// Antialiasing for distances measured in the primitive's local (untransformed) space. The
+// local distance is converted to screen-pixel units using the screen-space gradient of the
+// interpolated local position (a varying, so the derivative is defined in every lane), and
+// the one-pixel coverage ramp stays exactly one pixel wide under any transform — scale and
+// skew no longer soften or harden the edge.
+float local_aa_coverage(float signed_distance, float2 local_position) {
+  float local_per_pixel = 0.5 * (length(dfdx(local_position)) + length(dfdy(local_position)));
+  return saturate(0.5 - signed_distance / max(local_per_pixel, 1e-5));
+}
+
 struct GradientColor {
   float4 solid;
   float4 color0;
@@ -83,7 +93,18 @@ vertex QuadVertexOutput quad_vertex(uint unit_vertex_id [[vertex_id]],
       float2(quad.bounds.origin.x, quad.bounds.origin.y);
   float2 transformed_position = apply_transformation(local_position, quad.transformation);
   float4 device_position = to_device_position_impl(transformed_position, viewport_size);
-  float4 clip_distance = distance_from_clip_rect_impl(transformed_position, quad.content_mask.bounds);
+  // A mask that coincides with the quad's own bounds is the quad's own cutout (see
+  // `quad_fragment`): the quad's local-space outline already bounds the painted area, so
+  // clipping the straight edges against it would slice the transformed quad at its
+  // untransformed rect. Skip the clip in that case.
+  bool mask_is_own =
+      quad.content_mask.bounds.origin.x == quad.bounds.origin.x &&
+      quad.content_mask.bounds.origin.y == quad.bounds.origin.y &&
+      quad.content_mask.bounds.size.width == quad.bounds.size.width &&
+      quad.content_mask.bounds.size.height == quad.bounds.size.height;
+  float4 clip_distance = mask_is_own
+      ? float4(1.0, 1.0, 1.0, 1.0)
+      : distance_from_clip_rect_impl(transformed_position, quad.content_mask.bounds);
   float4 border_color = hsla_to_rgba(quad.border_color);
 
   GradientColor gradient = prepare_fill_color(
@@ -113,8 +134,11 @@ fragment float4 quad_fragment(QuadFragmentInput input [[stage_in]],
   // Rounded content-mask cutout: the vertex stage's clip distances cut the mask's
   // straight edges, so only the mask's rounded-corner arcs are cut here. The mask
   // lives in the scene frame, so `local_position` is transformed the same way the
-  // vertex stage transformed the clip rect. An identity-rotated quad whose mask
-  // coincides with its own rounded rect skips the double cut.
+  // vertex stage transformed the clip rect. A mask that coincides with the quad's own
+  // *untransformed* bounds and radii is the quad's own rounded cutout: the own SDF
+  // below already cuts that outline in local space (following any transform), and
+  // cutting it again in scene space would slice it at the untransformed rect under
+  // rotation/skew/scale.
   float2 mask_point = float2(0, 0);
   mask_point[0] = input.local_position[0] * quad.transformation.rotation_scale[0][0] +
                   input.local_position[1] * quad.transformation.rotation_scale[0][1];
@@ -124,13 +148,9 @@ fragment float4 quad_fragment(QuadFragmentInput input [[stage_in]],
   mask_point[1] += quad.transformation.translation[1];
   float mask_coverage = content_mask_coverage(
       mask_point, quad.content_mask.bounds, quad.content_mask.corner_radii,
-      float2(quad.bounds.origin.x, quad.bounds.origin.y) +
-          float2(quad.transformation.translation[0], quad.transformation.translation[1]),
+      float2(quad.bounds.origin.x, quad.bounds.origin.y),
       float2(quad.bounds.size.width, quad.bounds.size.height), quad.corner_radii,
-      quad.transformation.rotation_scale[0][0] == 1.0 &&
-          quad.transformation.rotation_scale[0][1] == 0.0 &&
-          quad.transformation.rotation_scale[1][0] == 0.0 &&
-          quad.transformation.rotation_scale[1][1] == 1.0);
+      true);
 
   float4 background_color = fill_color(quad.background, input.local_position, quad.bounds,
     input.background_solid, input.background_color0, input.background_color1);
@@ -140,12 +160,16 @@ fragment float4 quad_fragment(QuadFragmentInput input [[stage_in]],
     quad.corner_radii.top_right == 0.0 &&
     quad.corner_radii.bottom_right == 0.0;
 
-  // Fast path when the quad is not rounded and doesn't have any border
+  // Fast path when the quad is not rounded and doesn't have any border. Rotation and skew
+  // are excluded: their rasterized edges are not axis-aligned, so they need the SDF-based
+  // coverage this path skips (scale/translate keep crisp snapped edges either way).
+  bool axis_aligned = quad.transformation.rotation_scale[0][1] == 0.0 &&
+      quad.transformation.rotation_scale[1][0] == 0.0;
   if (quad.border_widths.top == 0.0 &&
       quad.border_widths.left == 0.0 &&
       quad.border_widths.right == 0.0 &&
       quad.border_widths.bottom == 0.0 &&
-      unrounded) {
+      unrounded && axis_aligned) {
     background_color.a *= mask_coverage;
     return background_color;
   }
@@ -423,10 +447,16 @@ fragment float4 quad_fragment(QuadFragmentInput input [[stage_in]],
     // between the two as we slide inside the background.
     float4 blended_border = over(background_color, border_color);
     color = mix(background_color, blended_border,
-                saturate(antialias_threshold - inner_sdf));
+                local_aa_coverage(inner_sdf, input.local_position));
   }
 
-  return color * float4(1.0, 1.0, 1.0, saturate(antialias_threshold - outer_sdf) * mask_coverage);
+  // The quad's own coverage and the content mask are combined with `min`, not a product
+  // (see the HLSL mirror): when the mask is (nearly) coincident with the quad's own
+  // outline — the classic rounded `overflow_hidden` parent clipping a same-size child —
+  // multiplying the two partial coverages darkens the arc with a serrated fringe, while
+  // `min` keeps a single smooth one-pixel edge.
+  return color * float4(1.0, 1.0, 1.0,
+      min(local_aa_coverage(outer_sdf, input.local_position), mask_coverage));
 }
 
 // Returns the dash velocity of a corner given the dash velocity of the two
@@ -469,14 +499,13 @@ float dash_alpha(
 //
 // Negative on the outside and positive on the inside.
 float quarter_ellipse_sdf(float2 point, float2 radii) {
-  // Scale the space to treat the ellipse like a unit circle
+  // Distance to the nearest point on the quarter ellipse, to first order: the implicit
+  // value F = |p / r| - 1 divided by its gradient magnitude. Exact for circular corners
+  // and far more accurate than an average-radius scaling for eccentric ones.
   float2 circle_vec = point / radii;
-  float unit_circle_sdf = length(circle_vec) - 1.0;
-  // Approximate up-scaling of the length by using the average of the radii.
-  //
-  // TODO: A better solution would be to use the gradient of the implicit
-  // function for an ellipse to approximate a scaling factor.
-  return unit_circle_sdf * (radii.x + radii.y) * -0.5;
+  float len = length(circle_vec);
+  float2 gradient = circle_vec / max(radii, float2(1e-5)) / max(len, 1e-5);
+  return (1.0 - len) / max(length(gradient), 1e-5);
 }
 
 struct ShadowVertexOutput {
@@ -606,7 +635,7 @@ fragment float4 shadow_fragment(ShadowFragmentInput input [[stage_in]],
     alpha *= saturate(0.5 - element_distance);
   }
 
-  alpha *= mask_coverage;
+  alpha = min(alpha, mask_coverage);
   return input.color * float4(1., 1., 1., alpha);
 }
 
@@ -690,9 +719,9 @@ fragment float4 underline_fragment(UnderlineFragmentInput input [[stage_in]],
     float distance_in_pixels = distance * underline.bounds.size.height;
     float distance_from_top_border = distance_in_pixels - half_thickness;
     float distance_from_bottom_border = distance_in_pixels + half_thickness;
-    float alpha = saturate(
-        0.5 - max(-distance_from_bottom_border, distance_from_top_border));
-    return input.color * float4(1., 1., 1., alpha * mask_coverage);
+    float alpha = local_aa_coverage(
+        max(-distance_from_bottom_border, distance_from_top_border), input.local_position);
+    return input.color * float4(1., 1., 1., min(alpha, mask_coverage));
   } else {
     return input.color * float4(1., 1., 1., mask_coverage);
   }
@@ -809,7 +838,18 @@ vertex PolychromeSpriteVertexOutput polychrome_sprite_vertex(
       float2(sprite.bounds.origin.x, sprite.bounds.origin.y);
   float2 transformed_position = apply_transformation(local_position, sprite.transformation);
   float4 device_position = to_device_position_impl(transformed_position, viewport_size);
-  float4 clip_distance = distance_from_clip_rect_impl(transformed_position, sprite.content_mask.bounds);
+  // A mask that coincides with the sprite's own bounds is the sprite's own cutout (see
+  // `polychrome_sprite_fragment`): the sprite's local-space outline already bounds the painted
+  // area, so clipping the straight edges against it would slice the transformed sprite at its
+  // untransformed rect. Skip the clip in that case.
+  bool mask_is_own =
+      sprite.content_mask.bounds.origin.x == sprite.bounds.origin.x &&
+      sprite.content_mask.bounds.origin.y == sprite.bounds.origin.y &&
+      sprite.content_mask.bounds.size.width == sprite.bounds.size.width &&
+      sprite.content_mask.bounds.size.height == sprite.bounds.size.height;
+  float4 clip_distance = mask_is_own
+      ? float4(1.0, 1.0, 1.0, 1.0)
+      : distance_from_clip_rect_impl(transformed_position, sprite.content_mask.bounds);
   float2 tile_position = to_tile_position(unit_vertex, sprite.tile, atlas_size);
   return PolychromeSpriteVertexOutput{
       device_position,
@@ -828,8 +868,10 @@ fragment float4 polychrome_sprite_fragment(
   // Rounded content-mask cutout: the vertex stage's clip distances cut the mask's
   // straight edges, so only the mask's rounded-corner arcs are cut here. The mask
   // lives in the scene frame, so `local_position` is transformed the same way the
-  // vertex stage transformed the clip rect. An identity-rotated sprite whose mask
-  // coincides with its own rounded rect skips the double cut.
+  // vertex stage transformed the clip rect. A mask that coincides with the sprite's
+  // own *untransformed* bounds and radii is the sprite's own antialiased cutout — the
+  // own SDF below cuts that outline in local space (following any transform), so the
+  // mask must not cut it again in scene space.
   float2 mask_point = float2(0, 0);
   mask_point[0] = input.local_position[0] * sprite.transformation.rotation_scale[0][0] +
                   input.local_position[1] * sprite.transformation.rotation_scale[0][1];
@@ -839,13 +881,9 @@ fragment float4 polychrome_sprite_fragment(
   mask_point[1] += sprite.transformation.translation[1];
   float mask_coverage = content_mask_coverage(
       mask_point, sprite.content_mask.bounds, sprite.content_mask.corner_radii,
-      float2(sprite.bounds.origin.x, sprite.bounds.origin.y) +
-          float2(sprite.transformation.translation[0], sprite.transformation.translation[1]),
+      float2(sprite.bounds.origin.x, sprite.bounds.origin.y),
       float2(sprite.bounds.size.width, sprite.bounds.size.height), sprite.corner_radii,
-      sprite.transformation.rotation_scale[0][0] == 1.0 &&
-          sprite.transformation.rotation_scale[0][1] == 0.0 &&
-          sprite.transformation.rotation_scale[1][0] == 0.0 &&
-          sprite.transformation.rotation_scale[1][1] == 1.0);
+      true);
 
   constexpr sampler atlas_texture_sampler(mag_filter::linear,
                                           min_filter::linear);
@@ -861,7 +899,7 @@ fragment float4 polychrome_sprite_fragment(
     color.g = grayscale;
     color.b = grayscale;
   }
-  color.a *= sprite.opacity * saturate(0.5 - distance) * mask_coverage;
+  color.a *= sprite.opacity * min(local_aa_coverage(distance, input.local_position), mask_coverage);
   return color;
 }
 
@@ -1429,7 +1467,7 @@ float4 fill_color(Background background,
         float pattern = fmod(rotated_point.x, pattern_period);
         float distance = min(pattern, pattern_period - pattern) - pattern_period * (pattern_width / pattern_height) * 0.5f;
         color = solid_color;
-        color.a *= saturate(0.5 - distance);
+        color.a *= local_aa_coverage(distance, position);
         break;
     }
     case 3: {
@@ -1441,8 +1479,15 @@ float4 fill_color(Background background,
         float y_index = floor(relative_position.y / size);
         float should_be_colored = fmod(x_index + y_index, 2.0);
 
+        // Antialias the cell edges, or the alternating squares show hard diagonal
+        // staircases wherever they meet at an angle.
+        float2 cell_position = fract(relative_position / size);
+        float2 cell_edge_distance = min(cell_position, float2(1.0) - cell_position) * size;
+        float cell_coverage =
+            local_aa_coverage(min(cell_edge_distance.x, cell_edge_distance.y), position);
+
         color = solid_color;
-        color.a *= saturate(should_be_colored);
+        color.a *= saturate(should_be_colored) * cell_coverage;
         break;
     }
     case 4:
@@ -1648,6 +1693,6 @@ fragment float4 blur_composite_fragment(
   // the fading alpha), so output premultiplied and use a premultiplied-blend pipeline. A backdrop's
   // scene is opaque (so this replaces); a content-filter group is transparent outside its subtree
   // (so the target shows through there instead of darkening).
-  float a = coverage * mask_coverage * params.opacity;
+  float a = min(coverage, mask_coverage) * params.opacity;
   return float4(blurred.rgb * a, blurred.a * a);
 }

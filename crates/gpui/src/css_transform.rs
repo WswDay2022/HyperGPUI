@@ -7,8 +7,8 @@
 //! drawing time. The 3D functions exist for API parity with CSS but are not implemented yet:
 //! they contribute the identity matrix and are marked as such.
 //!
-//! Like CSS, the transform only affects painting — layout and hit-testing keep using the
-//! element's untransformed bounds.
+//! The transform currently only affects painting; layout and hit-testing keep using the
+//! element's untransformed bounds. (CSS itself also applies transforms to hit-testing.)
 
 use crate::{size, Point, Pixels, Radians, ScaledPixels, TransformationMatrix};
 use serde::{Deserialize, Serialize};

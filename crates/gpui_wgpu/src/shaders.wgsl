@@ -203,6 +203,16 @@ fn distance_from_clip_rect(unit_vertex: vec2<f32>, bounds: Bounds, clip_bounds: 
     return distance_from_clip_rect_impl(position, clip_bounds);
 }
 
+// Antialiasing for distances measured in the primitive's local (untransformed) space. The
+// local distance is converted to screen-pixel units using the screen-space gradient of the
+// interpolated local position (a varying, so the derivative is defined in every lane), and
+// the one-pixel coverage ramp stays exactly one pixel wide under any transform — scale and
+// skew no longer soften or harden the edge.
+fn local_aa_coverage(signed_distance: f32, local_position: vec2<f32>) -> f32 {
+    let local_per_pixel = 0.5 * (length(dpdx(local_position)) + length(dpdy(local_position)));
+    return saturate(0.5 - signed_distance / max(local_per_pixel, 1e-5));
+}
+
 // https://gamedev.stackexchange.com/questions/92015/optimized-linear-to-srgb-glsl
 fn srgb_to_linear(srgb: vec3<f32>) -> vec3<f32> {
     let cutoff = srgb < vec3<f32>(0.04045);
@@ -532,7 +542,7 @@ fn gradient_color(background: Background, position: vec2<f32>, bounds: Bounds,
             let pattern = rotated_point.x % pattern_period;
             let distance = min(pattern, pattern_period - pattern) - pattern_period * (pattern_width / pattern_height) * 0.5;
             background_color = solid_color;
-            background_color.a *= saturate(0.5 - distance);
+            background_color.a *= local_aa_coverage(distance, position);
         }
         case 3u: {
             // checkerboard
@@ -543,8 +553,15 @@ fn gradient_color(background: Background, position: vec2<f32>, bounds: Bounds,
             let y_index = floor(relative_position.y / size);
             let should_be_colored = (x_index + y_index) % 2.0;
 
+            // Antialias the cell edges, or the alternating squares show hard diagonal
+            // staircases wherever they meet at an angle.
+            let cell_position = fract(relative_position / size);
+            let cell_edge_distance = min(cell_position, vec2<f32>(1.0) - cell_position) * size;
+            let cell_coverage =
+                local_aa_coverage(min(cell_edge_distance.x, cell_edge_distance.y), position);
+
             background_color = solid_color;
-            background_color.a *= saturate(should_be_colored);
+            background_color.a *= saturate(should_be_colored) * cell_coverage;
         }
         case 4u, 5u: {
             // Radial gradient: CSS `radial-gradient(<shape> <size> at <center>, ...)`. The center
@@ -638,7 +655,15 @@ fn vs_quad(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index) insta
     out.background_color1 = gradient.color1;
     out.border_color = hsla_to_rgba(quad.border_color);
     out.quad_id = instance_id;
-    out.clip_distances = distance_from_clip_rect_impl(transformed_position, quad.content_mask);
+    // A mask that coincides with the quad's own bounds is the quad's own cutout (see `fs_quad`):
+    // the straight-edge clip would slice the transformed quad at its untransformed rect, so it
+    // is skipped — the quad's own local-space outline already bounds the painted area.
+    let mask_is_own = all(quad.content_mask.origin == quad.bounds.origin) &&
+        all(quad.content_mask.size == quad.bounds.size);
+    out.clip_distances = select(
+        distance_from_clip_rect_impl(transformed_position, quad.content_mask),
+        vec4<f32>(1.0),
+        mask_is_own);
     return out;
 }
 
@@ -652,20 +677,18 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
     let quad = b_quads[input.quad_id];
 
     // Rounded content-mask cutout: `vs_quad` clipped the mask's straight edges (via
-    // `clip_distances`), so only the mask's rounded-corner arcs are cut here. The
-    // identity-rotation gate handles the mask coinciding with the quad's own rounded cutout
-    // (identity-rotated, translated with the quad) — the quad's own SDF would cut the same
-    // edge twice.
+    // `clip_distances`), so only the mask's rounded-corner arcs are cut here. A mask that
+    // coincides with the quad's own *untransformed* bounds and radii is the quad's own rounded
+    // cutout: the own SDF below already cuts that outline in local space (so it follows any
+    // transform), and cutting it again in scene space would slice it at the untransformed rect
+    // under rotation/skew/scale.
     let mask_coverage = content_mask_coverage(
         transpose(quad.transformation.rotation_scale) * input.local_position
             + quad.transformation.translation,
         quad.content_mask, quad.content_mask_corner_radii,
-        quad.bounds.origin + quad.transformation.translation, quad.bounds.size,
+        quad.bounds.origin, quad.bounds.size,
         quad.corner_radii,
-        quad.transformation.rotation_scale[0][0] == 1.0 &&
-            quad.transformation.rotation_scale[0][1] == 0.0 &&
-            quad.transformation.rotation_scale[1][0] == 0.0 &&
-            quad.transformation.rotation_scale[1][1] == 1.0);
+        true);
 
     let background_color = gradient_color(quad.background, input.local_position, quad.bounds,
         input.background_solid, input.background_color0, input.background_color1);
@@ -675,12 +698,16 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
         quad.corner_radii.top_right == 0.0 &&
         quad.corner_radii.bottom_right == 0.0;
 
-    // Fast path when the quad is not rounded and doesn't have any border
+    // Fast path when the quad is not rounded and doesn't have any border. Rotation and skew
+    // are excluded: their rasterized edges are not axis-aligned, so they need the SDF-based
+    // coverage this path skips (scale/translate keep crisp snapped edges either way).
+    let axis_aligned = quad.transformation.rotation_scale[0][1] == 0.0 &&
+        quad.transformation.rotation_scale[1][0] == 0.0;
     if (quad.border_widths.top == 0.0 &&
             quad.border_widths.left == 0.0 &&
             quad.border_widths.right == 0.0 &&
             quad.border_widths.bottom == 0.0 &&
-            unrounded) {
+            unrounded && axis_aligned) {
         return blend_color(background_color, mask_coverage);
     }
 
@@ -983,10 +1010,16 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
         // between the two as we slide inside the background.
         let blended_border = over(background_color, border_color);
         color = mix(background_color, blended_border,
-                    saturate(antialias_threshold - inner_sdf));
+                    local_aa_coverage(inner_sdf, input.local_position));
     }
 
-    return blend_color(color, saturate(antialias_threshold - outer_sdf) * mask_coverage);
+    // The quad's own coverage and the content mask are combined with `min`, not a product
+    // (see the HLSL mirror): when the mask is (nearly) coincident with the quad's own
+    // outline — the classic rounded `overflow_hidden` parent clipping a same-size child —
+    // multiplying the two partial coverages darkens the arc with a serrated fringe, while
+    // `min` keeps a single smooth one-pixel edge.
+    return blend_color(color,
+        min(local_aa_coverage(outer_sdf, input.local_position), mask_coverage));
 }
 
 // Returns the dash velocity of a corner given the dash velocity of the two
@@ -1027,14 +1060,13 @@ fn dash_alpha(t: f32, period: f32, length: f32, dash_velocity: f32, antialias_th
 //
 // Negative on the outside and positive on the inside.
 fn quarter_ellipse_sdf(point: vec2<f32>, radii: vec2<f32>) -> f32 {
-    // Scale the space to treat the ellipse like a unit circle.
+    // Distance to the nearest point on the quarter ellipse, to first order: the implicit
+    // value F = |p / r| - 1 divided by its gradient magnitude. Exact for circular corners
+    // and far more accurate than an average-radius scaling for eccentric ones.
     let circle_vec = point / radii;
-    let unit_circle_sdf = length(circle_vec) - 1.0;
-    // Approximate up-scaling of the length by using the average of the radii.
-    //
-    // TODO: A better solution would be to use the gradient of the implicit
-    // function for an ellipse to approximate a scaling factor.
-    return unit_circle_sdf * (radii.x + radii.y) * -0.5;
+    let len = length(circle_vec);
+    let gradient = circle_vec / max(radii, vec2<f32>(1e-5)) / max(len, 1e-5);
+    return (1.0 - len) / max(length(gradient), 1e-5);
 }
 
 // Modulus that has the same sign as `a`.
@@ -1157,7 +1189,7 @@ fn fs_shadow(input: ShadowVarying) -> @location(0) vec4<f32> {
     let mask_coverage = content_mask_coverage(input.position.xy, shadow.content_mask,
         shadow.content_mask_corner_radii, own_origin, own_size, own_radii, true);
 
-    return blend_color(input.color, alpha * mask_coverage);
+    return blend_color(input.color, min(alpha, mask_coverage));
 }
 
 // --- path rasterization --- //
@@ -1353,8 +1385,9 @@ fn fs_underline(input: UnderlineVarying) -> @location(0) vec4<f32> {
     let distance_in_pixels = distance * underline.bounds.size.y;
     let distance_from_top_border = distance_in_pixels - half_thickness;
     let distance_from_bottom_border = distance_in_pixels + half_thickness;
-    let alpha = saturate(0.5 - max(-distance_from_bottom_border, distance_from_top_border));
-    return blend_color(input.color, alpha * input.color.a * mask_coverage);
+    let alpha = local_aa_coverage(
+        max(-distance_from_bottom_border, distance_from_top_border), input.local_position);
+    return blend_color(input.color, min(alpha, mask_coverage) * input.color.a);
 }
 
 // --- monochrome sprites --- //
@@ -1463,7 +1496,16 @@ fn vs_poly_sprite(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index
     out.position = to_device_position_impl(transformed_position);
     out.tile_position = to_tile_position(unit_vertex, sprite.tile);
     out.sprite_id = instance_id;
-    out.clip_distances = distance_from_clip_rect_impl(transformed_position, sprite.content_mask);
+    // A mask that coincides with the sprite's own bounds is the sprite's own cutout (see
+    // `fs_poly_sprite`): the straight-edge clip would slice the transformed sprite at its
+    // untransformed rect, so it is skipped — the sprite's local-space outline already bounds
+    // the painted area.
+    let mask_is_own = all(sprite.content_mask.origin == sprite.bounds.origin) &&
+        all(sprite.content_mask.size == sprite.bounds.size);
+    out.clip_distances = select(
+        distance_from_clip_rect_impl(transformed_position, sprite.content_mask),
+        vec4<f32>(1.0),
+        mask_is_own);
     out.local_position = local_position;
     return out;
 }
@@ -1480,25 +1522,24 @@ fn fs_poly_sprite(input: PolySpriteVarying) -> @location(0) vec4<f32> {
     let distance = quad_sdf(input.local_position, sprite.bounds, sprite.corner_radii);
 
     // Rounded content-mask cutout: the vertex shader clipped the mask's straight edges, so only
-    // its rounded-corner arcs are cut here. The identity-rotation gate handles the mask
-    // coinciding with the sprite's own antialiased rounded cutout (cut by the SDF above).
+    // its rounded-corner arcs are cut here. A mask that coincides with the sprite's own
+    // *untransformed* bounds and radii is the sprite's own antialiased rounded cutout — the SDF
+    // above cuts that outline in local space (following any transform), so the mask must not cut
+    // it again in scene space.
     let mask_coverage = content_mask_coverage(
         transpose(sprite.transformation.rotation_scale) * input.local_position
             + sprite.transformation.translation,
         sprite.content_mask, sprite.content_mask_corner_radii,
-        sprite.bounds.origin + sprite.transformation.translation, sprite.bounds.size,
+        sprite.bounds.origin, sprite.bounds.size,
         sprite.corner_radii,
-        sprite.transformation.rotation_scale[0][0] == 1.0 &&
-            sprite.transformation.rotation_scale[0][1] == 0.0 &&
-            sprite.transformation.rotation_scale[1][0] == 0.0 &&
-            sprite.transformation.rotation_scale[1][1] == 1.0);
+        true);
 
     var color = sample;
     if (sprite.grayscale != 0u) {
         let grayscale = dot(color.rgb, GRAYSCALE_FACTORS);
         color = vec4<f32>(vec3<f32>(grayscale), sample.a);
     }
-    return blend_color(color, sprite.opacity * saturate(0.5 - distance) * mask_coverage);
+    return blend_color(color, sprite.opacity * min(local_aa_coverage(distance, input.local_position), mask_coverage));
 }
 
 // --- surfaces --- //
@@ -1708,6 +1749,6 @@ fn fs_blur_composite(input: BlurVarying) -> @location(0) vec4<f32> {
     // rgb with the fading alpha), so output premultiplied and let the pipeline blend premultiplied.
     // A backdrop's scene is opaque (alpha ~= 1) so this replaces; a content-filter group is
     // transparent outside its subtree, so the target shows through there instead of darkening.
-    let c = coverage * mask_coverage * blur_locals.opacity;
+    let c = min(coverage, mask_coverage) * blur_locals.opacity;
     return vec4<f32>(blurred.rgb * c, blurred.a * c);
 }

@@ -97,7 +97,7 @@ impl Element for Anchored {
 
     fn request_layout(
         &mut self,
-        _id: Option<&GlobalElementId>,
+        _: Option<&GlobalElementId>,
         _: Option<&InspectorElementId>,
         window: &mut Window,
         cx: &mut App,
@@ -121,7 +121,7 @@ impl Element for Anchored {
 
     fn prepaint(
         &mut self,
-        _id: Option<&GlobalElementId>,
+        _: Option<&GlobalElementId>,
         _: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
         request_layout: &mut Self::RequestLayoutState,

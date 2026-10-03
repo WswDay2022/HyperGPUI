@@ -101,7 +101,7 @@ impl Scene {
     pub fn insert_primitive(&mut self, primitive: impl Into<Primitive>) {
         let mut primitive = primitive.into();
         let clipped_bounds = primitive
-            .bounds()
+            .ordering_bounds()
             .intersect(&primitive.content_mask().bounds);
 
         // Content-filter boundaries must always be inserted as matched pairs — dropping one
@@ -358,6 +358,40 @@ impl Primitive {
             Primitive::Surface(surface) => &surface.content_mask,
             Primitive::BackdropFilter(filter) => &filter.content_mask,
             Primitive::FilterBoundary(boundary) => &boundary.content_mask,
+        }
+    }
+
+    /// The bounds used for scene ordering and occlusion culling: the primitive's layout
+    /// bounds mapped through its transform when it has one.
+    ///
+    /// The bounds tree assigns draw orders from these, and untransformed bounds would let a
+    /// transformed primitive sort below content painted after it that it visually covers (the
+    /// later content reuses a low order because the tree sees no overlap) — painter's order
+    /// would then be violated, e.g. a card translated over the next row covering that row's
+    /// border.
+    pub fn ordering_bounds(&self) -> Bounds<ScaledPixels> {
+        fn mapped(
+            bounds: &Bounds<ScaledPixels>,
+            transformation: &TransformationMatrix,
+        ) -> Bounds<ScaledPixels> {
+            if *transformation == TransformationMatrix::unit() {
+                *bounds
+            } else {
+                transformation.aabb_of_rect(*bounds)
+            }
+        }
+
+        match self {
+            Primitive::Quad(quad) => mapped(&quad.bounds, &quad.transformation),
+            Primitive::Underline(underline) => mapped(&underline.bounds, &underline.transformation),
+            Primitive::MonochromeSprite(sprite) => mapped(&sprite.bounds, &sprite.transformation),
+            Primitive::SubpixelSprite(sprite) => mapped(&sprite.bounds, &sprite.transformation),
+            Primitive::PolychromeSprite(sprite) => mapped(&sprite.bounds, &sprite.transformation),
+            Primitive::Shadow(_)
+            | Primitive::Path(_)
+            | Primitive::Surface(_)
+            | Primitive::BackdropFilter(_)
+            | Primitive::FilterBoundary(_) => *self.bounds(),
         }
     }
 }
@@ -908,6 +942,73 @@ impl TransformationMatrix {
             }
         }
         Point::new(output[0].into(), output[1].into())
+    }
+
+    /// Whether this matrix maps axis-aligned rectangles to axis-aligned rectangles, i.e.
+    /// it is a pure translate/scale with no rotation or skew.
+    pub fn is_axis_aligned(&self) -> bool {
+        self.rotation_scale[0][1] == 0.0 && self.rotation_scale[1][0] == 0.0
+    }
+
+    /// Maps a point in scaled (device-pixel) space through this matrix.
+    fn map_scaled_point(&self, point: Point<ScaledPixels>) -> Point<ScaledPixels> {
+        Point::new(
+            ScaledPixels(
+                self.rotation_scale[0][0] * point.x.0
+                    + self.rotation_scale[0][1] * point.y.0
+                    + self.translation[0],
+            ),
+            ScaledPixels(
+                self.rotation_scale[1][0] * point.x.0
+                    + self.rotation_scale[1][1] * point.y.0
+                    + self.translation[1],
+            ),
+        )
+    }
+
+    /// Maps an axis-aligned rectangle through this matrix. Exact when
+    /// [`is_axis_aligned`](Self::is_axis_aligned) holds; negative scales are normalized so the
+    /// result stays a well-formed rectangle.
+    pub fn map_rect(&self, rect: Bounds<ScaledPixels>) -> Bounds<ScaledPixels> {
+        let origin = self.map_scaled_point(rect.origin);
+        let bottom_right = self.map_scaled_point(rect.bottom_right());
+        Bounds::from_corners(
+            Point::new(
+                ScaledPixels(origin.x.0.min(bottom_right.x.0)),
+                ScaledPixels(origin.y.0.min(bottom_right.y.0)),
+            ),
+            Point::new(
+                ScaledPixels(origin.x.0.max(bottom_right.x.0)),
+                ScaledPixels(origin.y.0.max(bottom_right.y.0)),
+            ),
+        )
+    }
+
+    /// The axis-aligned bounding box of `rect` mapped through this matrix. Unlike
+    /// [`map_rect`](Self::map_rect) this is also correct for rotation and skew: all four
+    /// corners are mapped and folded.
+    pub fn aabb_of_rect(&self, rect: Bounds<ScaledPixels>) -> Bounds<ScaledPixels> {
+        let bottom_right = rect.bottom_right();
+        let corners = [
+            rect.origin,
+            Point::new(bottom_right.x, rect.origin.y),
+            bottom_right,
+            Point::new(rect.origin.x, bottom_right.y),
+        ];
+        let mut min = self.map_scaled_point(corners[0]);
+        let mut max = min;
+        for corner in &corners[1..] {
+            let mapped = self.map_scaled_point(*corner);
+            min = Point::new(
+                ScaledPixels(min.x.0.min(mapped.x.0)),
+                ScaledPixels(min.y.0.min(mapped.y.0)),
+            );
+            max = Point::new(
+                ScaledPixels(max.x.0.max(mapped.x.0)),
+                ScaledPixels(max.y.0.max(mapped.y.0)),
+            );
+        }
+        Bounds::from_corners(min, max)
     }
 }
 
