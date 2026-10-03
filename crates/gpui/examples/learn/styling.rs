@@ -11,7 +11,7 @@ use hgpui::{
     App, Bounds, ColorExt, Context, FocusHandle, Hsla, KeyBinding, Menu, MenuItem, Render, Rgba,
     Window, WindowBounds, WindowOptions, actions, div, prelude::*, px, rgb, size,
 };
-use palette::{IntoColor, WithAlpha};
+use palette::IntoColor;
 
 actions!(styling_example, [Quit, Tab, TabPrev]);
 
@@ -475,7 +475,7 @@ fn color_swatch(colors: &Colors, name: &'static str, color: Rgba) -> impl IntoEl
                 .rounded_md()
                 .background(color)
                 .border_1()
-                .border_color(hgpui::white().with_alpha(0.2)),
+                .border_color(hgpui::white().with_alphaf(0.2)),
         )
         .child(div().text_xs().text_color(text_muted).child(name))
 }

@@ -30,6 +30,28 @@ pub const fn rgba(hex: u32) -> Rgba {
     )
 }
 
+/// Construct an [`Rgba`] from 8-bit sRGB channels and an 8-bit alpha.
+///
+/// Unlike [`rgba`] (which takes a packed `0xRRGGBBAA` number), each channel is
+/// given separately in the usual `0..=255` range: `rgba8(255, 0, 0, 255)` is
+/// opaque red.
+pub const fn rgba8(r: u8, g: u8, b: u8, a: u8) -> Rgba {
+    Rgba::new(
+        (r as f32) / 255.0,
+        (g as f32) / 255.0,
+        (b as f32) / 255.0,
+        (a as f32) / 255.0,
+    )
+}
+
+/// Construct an opaque [`Rgba`] from 8-bit sRGB channels.
+///
+/// The companion of [`rgb`] (packed hex) with explicit `0..=255` channels:
+/// `rgb8(255, 0, 0)` is opaque red.
+pub const fn rgb8(r: u8, g: u8, b: u8) -> Rgba {
+    rgba8(r, g, b, 255)
+}
+
 /// Convert an sRGB color to GPUI's HSL-with-alpha representation.
 ///
 /// This is the explicit conversion boundary for APIs that store [`Hsla`]. It
@@ -54,7 +76,10 @@ pub fn swap_rgba_pa_to_bgra(color: &mut [u8]) {
     }
 }
 
-/// Construct an [`Hsla`] object from plain values
+/// Construct an [`Hsla`] object from plain values.
+///
+/// Units: `h` is a fraction of the color wheel (`0.0..=1.0`, where `0.25` is
+/// 90°), `s`, `l` and `a` are `0.0..=1.0`. All values are clamped.
 pub const fn hsla(h: f32, s: f32, l: f32, a: f32) -> Hsla {
     Hsla {
         color: palette::Hsl::new_const(
@@ -172,7 +197,18 @@ pub fn rgba_schemar(_generator: &mut schemars::SchemaGenerator) -> schemars::Sch
     })
 }
 
-/// Wrapper methods to make alpha operations more convenient
+/// Convenience methods shared by [`Rgba`] and [`Hsla`].
+///
+/// `Rgba` and `Hsla` come from the `palette` crate; this trait is where hgpui
+/// keeps its ergonomics for them. Import it (or `hgpui::prelude::*`) to get
+/// chainable color manipulation.
+///
+/// # Units
+///
+/// - `with_alpha` and `alpha_u8` use the 8-bit range `0..=255`, where `255` is
+///   fully opaque.
+/// - `with_alphaf` and the color types' `alpha` field use `0.0..=1.0`.
+/// - `darken` / `lighten` take a lightness delta in `0.0..=1.0`.
 pub trait ColorExt {
     /// Performs a SrcAlpha x (1 - SrcAlpha) blend
     fn blend(&self, other: &Self) -> Self
@@ -185,7 +221,7 @@ pub trait ColorExt {
 
     /// Multiplies the alpha value of the color by a given factor and returns a new color.
     /// If the color was previously opaque, then this is equivalent to
-    /// [`with_alpha`](palette::WithAlpha::with_alpha).
+    /// [`with_alphaf(1.0 - factor)`](ColorExt::with_alphaf).
     ///
     /// Useful for transforming colors with dynamic opacity,
     /// like a color from an external source.
@@ -214,7 +250,96 @@ pub trait ColorExt {
     fn opacity(&self, factor: f32) -> Self
     where
         Self: Sized;
+
+    /// Sets the alpha channel from an 8-bit value (`0` = fully transparent,
+    /// `255` = fully opaque) and returns the color.
+    ///
+    /// This is the `u8` flavor; see [`with_alphaf`](ColorExt::with_alphaf) for
+    /// the `0.0..=1.0` float flavor.
+    ///
+    /// ```
+    /// use hgpui::ColorExt;
+    /// let color = hgpui::red().with_alpha(128); // ~50% opacity
+    /// assert_eq!(color.alpha_u8(), 128);
+    /// ```
+    fn with_alpha(self, alpha: u8) -> Self
+    where
+        Self: Sized;
+
+    /// Sets the alpha channel from a `0.0..=1.0` float and returns the color.
+    ///
+    /// Out-of-range values are clamped (unlike `palette`'s unclamped
+    /// `WithAlpha::with_alpha`):
+    ///
+    /// ```
+    /// use hgpui::ColorExt;
+    /// assert_eq!(hgpui::blue().with_alphaf(2.0).alpha_u8(), 255);
+    /// assert_eq!(hgpui::blue().with_alphaf(-1.0).alpha_u8(), 0);
+    /// ```
+    fn with_alphaf(self, alpha: f32) -> Self
+    where
+        Self: Sized;
+
+    /// Returns the alpha channel as an 8-bit value (`0..=255`).
+    fn alpha_u8(self) -> u8
+    where
+        Self: Sized;
+
+    /// Converts the color to sRGB ([`Rgba`]). Identity for `Rgba`.
+    fn to_rgba(self) -> Rgba
+    where
+        Self: Sized;
+
+    /// Converts the color to HSL-with-alpha ([`Hsla`]). Identity for `Hsla`.
+    fn to_hsla(self) -> Hsla
+    where
+        Self: Sized;
+
+    /// Returns a copy with its HSL lightness decreased by `amount`, a
+    /// `0.0..=1.0` fraction clamped at black.
+    fn darken(self, amount: f32) -> Self
+    where
+        Self: Sized;
+
+    /// Returns a copy with its HSL lightness increased by `amount`, a
+    /// `0.0..=1.0` fraction clamped at white.
+    fn lighten(self, amount: f32) -> Self
+    where
+        Self: Sized;
+
+    /// The YIQ perceived brightness of the color, `0.0` (black) to `1.0`
+    /// (white). The alpha channel is ignored.
+    fn perceived_brightness(self) -> f32
+    where
+        Self: Sized;
+
+    /// Whether the color reads as dark (perceived brightness below `0.5`).
+    ///
+    /// Handy for picking a contrasting foreground, `tinycolor`-style:
+    ///
+    /// ```
+    /// use hgpui::ColorExt;
+    /// assert!(hgpui::black().is_dark());
+    /// assert!(hgpui::white().is_light());
+    /// ```
+    fn is_dark(self) -> bool
+    where
+        Self: Sized;
+
+    /// Whether the color reads as light. The inverse of [`is_dark`](ColorExt::is_dark).
+    fn is_light(self) -> bool
+    where
+        Self: Sized,
+    {
+        !self.is_dark()
+    }
 }
+
+/// YIQ perceived brightness (the formula behind `tinycolor`'s `isDark()`).
+fn rgba_brightness(color: Rgba) -> f32 {
+    0.299 * color.color.red + 0.587 * color.color.green + 0.114 * color.color.blue
+}
+
 impl ColorExt for Rgba {
     fn blend(&self, other: &Self) -> Self {
         use palette::blend::{BlendWith, Equations, Parameter};
@@ -232,6 +357,48 @@ impl ColorExt for Rgba {
         color.alpha *= factor.clamp(0., 1.);
         color
     }
+
+    fn with_alpha(mut self, alpha: u8) -> Self {
+        self.alpha = alpha as f32 / 255.0;
+        self
+    }
+
+    fn with_alphaf(mut self, alpha: f32) -> Self {
+        self.alpha = alpha.clamp(0.0, 1.0);
+        self
+    }
+
+    fn alpha_u8(self) -> u8 {
+        (self.alpha * 255.0).round().clamp(0.0, 255.0) as u8
+    }
+
+    fn to_rgba(self) -> Rgba {
+        self
+    }
+
+    fn to_hsla(self) -> Hsla {
+        rgb_to_hsla(self)
+    }
+
+    fn darken(self, amount: f32) -> Self {
+        let mut hsla = rgb_to_hsla(self);
+        hsla.color.lightness = (hsla.color.lightness - amount).clamp(0.0, 1.0);
+        hsla_to_rgba(hsla)
+    }
+
+    fn lighten(self, amount: f32) -> Self {
+        let mut hsla = rgb_to_hsla(self);
+        hsla.color.lightness = (hsla.color.lightness + amount).clamp(0.0, 1.0);
+        hsla_to_rgba(hsla)
+    }
+
+    fn perceived_brightness(self) -> f32 {
+        rgba_brightness(self)
+    }
+
+    fn is_dark(self) -> bool {
+        self.perceived_brightness() < 0.5
+    }
 }
 impl ColorExt for Hsla {
     fn blend(&self, other: &Self) -> Self {
@@ -248,6 +415,46 @@ impl ColorExt for Hsla {
         let mut color = *self;
         color.alpha *= factor.clamp(0., 1.);
         color
+    }
+
+    fn with_alpha(mut self, alpha: u8) -> Self {
+        self.alpha = alpha as f32 / 255.0;
+        self
+    }
+
+    fn with_alphaf(mut self, alpha: f32) -> Self {
+        self.alpha = alpha.clamp(0.0, 1.0);
+        self
+    }
+
+    fn alpha_u8(self) -> u8 {
+        (self.alpha * 255.0).round().clamp(0.0, 255.0) as u8
+    }
+
+    fn to_rgba(self) -> Rgba {
+        hsla_to_rgba(self)
+    }
+
+    fn to_hsla(self) -> Hsla {
+        self
+    }
+
+    fn darken(mut self, amount: f32) -> Self {
+        self.color.lightness = (self.color.lightness - amount).clamp(0.0, 1.0);
+        self
+    }
+
+    fn lighten(mut self, amount: f32) -> Self {
+        self.color.lightness = (self.color.lightness + amount).clamp(0.0, 1.0);
+        self
+    }
+
+    fn perceived_brightness(self) -> f32 {
+        rgba_brightness(hsla_to_rgba(self))
+    }
+
+    fn is_dark(self) -> bool {
+        self.perceived_brightness() < 0.5
     }
 }
 
@@ -807,19 +1014,86 @@ mod tests {
     }
 
     #[test]
-    fn test_rgba_alpha() {
-        use palette::WithAlpha;
-        let color = Rgba::<palette::Srgb>::new(0.2, 0.6, 1.0, 0.8);
-        assert_eq!(color.with_alpha(0.25).alpha, 0.25);
-        // NOTE: diverging from upstream, where Rgba::alpha clamps. palette does not clamp alpha
-        assert_eq!(color.with_alpha(1.5).alpha, 1.5);
+    fn test_u8_constructors() {
+        let from_hex = rgba(0xff0000ff);
+        let from_u8 = rgba8(255, 0, 0, 255);
+        assert_eq!(from_u8.color.red, from_hex.color.red);
+        assert_eq!(from_u8.color.green, from_hex.color.green);
+        assert_eq!(from_u8.color.blue, from_hex.color.blue);
+        assert_eq!(from_u8.alpha, from_hex.alpha);
+
+        let opaque = rgb8(0, 128, 255);
+        assert_eq!(opaque.color.red, 0.0);
+        assert!((opaque.color.green - 128.0 / 255.0).abs() < 1e-6);
+        assert_eq!(opaque.color.blue, 1.0);
+        assert_eq!(opaque.alpha, 1.0);
     }
 
     #[test]
-    fn test_rgba_opacity() {
-        use super::ColorExt;
-        let color = Rgba::new(0.2, 0.6, 1.0, 0.8);
-        assert!((color.opacity(0.5).alpha - 0.4).abs() < 1e-6);
-        assert_eq!(color.opacity(2.0).alpha, 0.8);
+    fn test_with_alpha_flavors() {
+        let color = rgba8(255, 0, 0, 128);
+        assert_eq!(color.with_alpha(64).alpha_u8(), 64);
+        assert_eq!(color.with_alphaf(0.25).alpha, 0.25);
+        // Unlike palette's `WithAlpha`, out-of-range floats are clamped.
+        assert_eq!(color.with_alphaf(1.5).alpha, 1.0);
+        assert_eq!(color.with_alphaf(-0.5).alpha, 0.0);
+        // The same API is available on `Hsla`.
+        assert_eq!(red().with_alpha(128).alpha_u8(), 128);
+        assert_eq!(red().with_alphaf(0.25).alpha, 0.25);
+    }
+
+    #[test]
+    fn test_alpha_u8_roundtrip() {
+        for alpha in [0u8, 1, 64, 128, 254, 255] {
+            assert_eq!(red().with_alpha(alpha).alpha_u8(), alpha);
+        }
+    }
+
+    #[test]
+    fn test_darken_lighten() {
+        assert_eq!(black().lighten(0.5).color.lightness, 0.5);
+        assert_eq!(white().darken(0.25).color.lightness, 0.75);
+        // Clamped at the extremes.
+        assert_eq!(black().darken(0.5).color.lightness, 0.0);
+        assert_eq!(white().lighten(0.5).color.lightness, 1.0);
+
+        // `Rgba` goes through HSL internally.
+        let lightened = rgb8(128, 128, 128).lighten(0.2).to_hsla();
+        assert!((lightened.color.lightness - (128.0 / 255.0 + 0.2)).abs() < 0.01);
+        assert!(
+            rgb8(128, 128, 128).darken(0.2).perceived_brightness()
+                < rgb8(128, 128, 128).perceived_brightness()
+        );
+    }
+
+    #[test]
+    fn test_is_dark() {
+        assert!(black().is_dark());
+        assert!(!black().is_light());
+        assert!(white().is_light());
+        assert!(!white().is_dark());
+        assert!(rgb8(120, 120, 120).is_dark());
+        assert!(rgb8(140, 140, 140).is_light());
+        assert!(rgb8(255, 255, 0).is_light()); // yellow reads bright
+        assert!(rgb8(0, 0, 255).is_dark()); // blue reads dark
+    }
+
+    #[test]
+    fn test_color_space_conversions_roundtrip() {
+        let rgba = rgba8(10, 200, 30, 255);
+        let roundtrip = rgba.to_hsla().to_rgba();
+        assert!((roundtrip.color.red - rgba.color.red).abs() < 1e-4);
+        assert!((roundtrip.color.green - rgba.color.green).abs() < 1e-4);
+        assert!((roundtrip.color.blue - rgba.color.blue).abs() < 1e-4);
+        assert_eq!(roundtrip.alpha, rgba.alpha);
+    }
+
+    #[test]
+    fn test_opacity_vs_with_alphaf() {
+        let color = rgba8(255, 0, 0, 128);
+        // `opacity` multiplies the existing alpha...
+        assert_eq!(color.opacity(0.5).alpha_u8(), 64);
+        // ...while `with_alphaf` sets it outright.
+        assert_eq!(color.with_alphaf(0.5).alpha_u8(), 128);
     }
 }

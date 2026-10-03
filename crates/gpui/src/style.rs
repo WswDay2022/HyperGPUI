@@ -1451,7 +1451,6 @@ impl From<Position> for taffy::style::Position {
 #[cfg(test)]
 mod tests {
     use crate::{blue, green, px, red, yellow};
-    use palette::WithAlpha;
 
     use super::*;
 
@@ -1499,7 +1498,7 @@ mod tests {
         let mut style_c = expected_style;
 
         let style_d = HighlightStyle {
-            color: Some(blue().with_alpha(0.7)),
+            color: Some(blue().with_alphaf(0.7)),
             strikethrough: Some(StrikethroughStyle {
                 thickness: px(4.),
                 color: Some(crate::red()),
@@ -1516,7 +1515,7 @@ mod tests {
         };
 
         let expected_style = HighlightStyle {
-            color: Some(red().blend(&blue().with_alpha(0.7))),
+            color: Some(red().blend(&blue().with_alphaf(0.7))),
             strikethrough: Some(StrikethroughStyle {
                 thickness: px(4.),
                 color: Some(red()),

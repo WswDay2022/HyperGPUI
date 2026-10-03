@@ -1,6 +1,4 @@
 use hgpui::{App, Bounds, Context, Window, WindowBounds, WindowOptions, div, prelude::*, px, size};
-use palette::WithAlpha;
-
 struct Scrollable {}
 
 impl Render for Scrollable {
@@ -17,7 +15,7 @@ impl Render for Scrollable {
                     .h(px(5000.))
                     .border_1()
                     .border_color(hgpui::blue())
-                    .background(hgpui::blue().with_alpha(0.05))
+                    .background(hgpui::blue().with_alphaf(0.05))
                     .p_4()
                     .child(
                         div()
@@ -29,8 +27,8 @@ impl Render for Scrollable {
                                 div()
                                     .w(px(2000.))
                                     .h(px(150.))
-                                    .background(hgpui::green().with_alpha(0.1))
-                                    .hover(|this| this.background(hgpui::green().with_alpha(0.2)))
+                                    .background(hgpui::green().with_alphaf(0.1))
+                                    .hover(|this| this.background(hgpui::green().with_alphaf(0.2)))
                                     .border_1()
                                     .border_color(hgpui::green())
                                     .p_4()

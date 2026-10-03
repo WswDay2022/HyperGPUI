@@ -15,7 +15,7 @@ use hgpui::{
     Bounds, ColorExt, Context, Div, Hsla, Render, Rgba, Window, WindowBounds, WindowOptions, div,
     prelude::*, px, size,
 };
-use palette::{IntoColor, WithAlpha};
+use palette::IntoColor;
 
 // Helper: Colored block for visualization
 
@@ -26,7 +26,7 @@ fn block(label: &'static str, color: Hsla, text_color: Rgba) -> Div {
         .justify_center()
         .background(color)
         .border_1()
-        .border_color(hgpui::white().with_alpha(0.3))
+        .border_color(hgpui::white().with_alphaf(0.3))
         .rounded_md()
         .text_xs()
         .text_color(text_color)
@@ -364,7 +364,7 @@ fn stack_pattern(colors: &Colors) -> impl IntoElement {
                         .top_2()
                         .left_2()
                         .size_10()
-                        .background(hgpui::red().with_alpha(0.7))
+                        .background(hgpui::red().with_alphaf(0.7))
                         .rounded_md(),
                 )
                 .child(
@@ -373,7 +373,7 @@ fn stack_pattern(colors: &Colors) -> impl IntoElement {
                         .top_4()
                         .left_4()
                         .size_10()
-                        .background(hgpui::green().with_alpha(0.7))
+                        .background(hgpui::green().with_alphaf(0.7))
                         .rounded_md(),
                 )
                 .child(
@@ -382,7 +382,7 @@ fn stack_pattern(colors: &Colors) -> impl IntoElement {
                         .top_6()
                         .left_6()
                         .size_10()
-                        .background(hgpui::blue().with_alpha(0.7))
+                        .background(hgpui::blue().with_alphaf(0.7))
                         .rounded_md(),
                 ),
         )

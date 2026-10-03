@@ -2,8 +2,6 @@ use hgpui::{
     App, AppContext, Bounds, Context, Window, WindowBounds, WindowOptions, div, linear_color_stop,
     linear_gradient, pattern_slash, prelude::*, px, rgb, size,
 };
-use palette::WithAlpha;
-
 struct PatternExample;
 
 impl Render for PatternExample {
@@ -53,7 +51,7 @@ impl Render for PatternExample {
                     .flex_col()
                     .border_1()
                     .border_color(hgpui::blue())
-                    .background(hgpui::green().with_alpha(0.16))
+                    .background(hgpui::green().with_alphaf(0.16))
                     .child("Elements the same height should align")
                     .child(div().w(px(256.0)).h(px(56.0)).background(pattern_slash(
                         hgpui::red(),
