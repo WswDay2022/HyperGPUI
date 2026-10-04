@@ -61,11 +61,7 @@
 //!   it is the only child on screen, and in the other modes it is painted underneath the
 //!   incoming child, which usually covers it.
 
-use hgpui::{
-    AnyElement, App, AppContext as _, Element, ElementId, EnterStyle, GlobalElementId,
-    InspectorElementId, InteractiveElement as _, IntoElement, LayoutId, LeaveStyle,
-    ParentElement as _, Styled as _, Transition, TransitionState, Window, div,
-};
+use hgpui::{div, AnyElement, App, AppContext as _, Div, Element, ElementId, EnterStyle, GlobalElementId, InspectorElementId, InteractiveElement, IntoElement, LayoutId, LeaveStyle, ParentElement as _, Stateful, Styled as _, Transition, TransitionState, Window};
 use std::{rc::Rc, time::Duration};
 
 /// Builds the child each frame. Stored as an `Rc` so the same factory can both render this
@@ -108,6 +104,7 @@ pub fn transition(id: impl Into<ElementId>, key: impl Into<ElementId>) -> Transi
         mode: TransitionMode::default(),
         enter: None,
         leave: None,
+        style: Rc::new(|this, _, _| this.relative().size_full()),
         appear: false,
         factory: None,
         container: None,
@@ -123,6 +120,7 @@ pub struct TransitionBuilder {
     mode: TransitionMode,
     enter: Option<EnterStyle>,
     leave: Option<LeaveStyle>,
+    style: Rc<dyn Fn(Stateful<Div>, &mut Window, &mut App) -> Stateful<Div>>,
     appear: bool,
     factory: Option<ChildFactory>,
     /// Assembled during `request_layout` and painted again in `prepaint`/`paint`.
@@ -170,6 +168,12 @@ impl TransitionBuilder {
     /// Also run the enter animation on the first render. Defaults to `false`.
     pub fn appear(mut self, appear: bool) -> Self {
         self.appear = appear;
+        self
+    }
+
+    /// The style of the transition.
+    pub fn style(mut self, style: impl Fn(Stateful<Div>, &mut Window, &mut App) -> Stateful<Div> + 'static) -> Self {
+        self.style = Rc::new(style);
         self
     }
 
@@ -485,7 +489,7 @@ impl TransitionBuilder {
             (slot.leaving.clone(), in_flow, slot.phase)
         };
 
-        let mut container = div().relative().size_full().id(self.id.clone());
+        let mut container = (self.style)(div().id(self.id.clone()), window, cx);
 
         if let Some(leaving) = &leaving {
             let child = leaving(window, cx);
