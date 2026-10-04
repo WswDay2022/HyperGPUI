@@ -1,4 +1,4 @@
-use palette::{IntoColor, OklabHue, Oklcha, RgbHue};
+use palette::{IntoColor, OklabHue, Oklcha, RgbHue, Mix};
 use schemars::{JsonSchema, json_schema};
 use serde::{Deserialize, Serialize};
 use std::fmt::{self, Display, Formatter};
@@ -197,79 +197,66 @@ pub fn rgba_schemar(_generator: &mut schemars::SchemaGenerator) -> schemars::Sch
     })
 }
 
-/// Convenience methods shared by [`Rgba`] and [`Hsla`].
+/// Color manipulation extensions shared by [`Rgba`] and [`Hsla`].
 ///
-/// `Rgba` and `Hsla` come from the `palette` crate; this trait is where hgpui
-/// keeps its ergonomics for them. Import it (or `hgpui::prelude::*`) to get
-/// chainable color manipulation.
+/// Import this trait (or `hgpui::prelude::*`) to get chainable color
+/// manipulation on `palette`'s color types.
 ///
 /// # Units
 ///
-/// - `with_alpha` and `alpha_u8` use the 8-bit range `0..=255`, where `255` is
-///   fully opaque.
-/// - `with_alphaf` and the color types' `alpha` field use `0.0..=1.0`.
-/// - `darken` / `lighten` take a lightness delta in `0.0..=1.0`.
-pub trait ColorExt {
-    /// Performs a SrcAlpha x (1 - SrcAlpha) blend
+/// - `with_alpha` and `alpha_u8` use the 8-bit range `0..=255`.
+/// - `with_alphaf` and the `alpha` field use `0.0..=1.0`.
+/// - `darken` / `lighten` take an HSL lightness delta.
+/// - `adjust_lightness` / `adjust_chroma` take an OKLCH delta.
+/// - `with_contrast` takes a multiplier where `1.0` is identity.
+///
+/// # Two kinds of "contrast"
+///
+/// [`ColorExt::with_contrast`] is a pixel operation like CSS
+/// `filter: contrast()`. [`ColorExt::contrast_ratio`] is the WCAG
+/// accessibility metric. They share a name but are unrelated.
+/// Convenience methods shared by [`Rgba`] and [`Hsla`].
+///
+/// Every derived method routes through [`ColorExt::from_rgba`], so the
+/// `Rgba` and `Hsla` impls share a single source of truth.
+pub trait ColorExt: Sized + Clone {
+    /// Constructs `Self` from an sRGB color. The bridge used by all
+    /// derived methods below.
+    fn from_rgba(rgba: Rgba) -> Self;
+
+    /// Performs a SrcAlpha x (1 - SrcAlpha) blend.
     fn blend(&self, other: &Self) -> Self
     where
         Self: Sized;
 
-    /// Fade out the color by a given factor. This factor should be between 0.0 and 1.0.
-    /// Where 0.0 will leave the color unchanged, and 1.0 will completely fade out the color.
+    /// Fades the color out by `factor`, where `0.0` leaves it unchanged
+    /// and `1.0` makes it fully transparent.
     fn fade_out(&mut self, factor: f32);
 
-    /// Multiplies the alpha value of the color by a given factor and returns a new color.
-    /// If the color was previously opaque, then this is equivalent to
-    /// [`with_alphaf(1.0 - factor)`](ColorExt::with_alphaf).
+    /// Multiplies alpha by `factor` and returns a new color. If the color
+    /// was opaque, this is equivalent to `with_alphaf(1.0 - factor)`.
     ///
-    /// Useful for transforming colors with dynamic opacity,
-    /// like a color from an external source.
-    ///
-    /// Example:
     /// ```
     /// use hgpui::ColorExt;
-    /// let color = hgpui::red();
-    /// let faded_color = color.opacity(0.5);
-    /// assert_eq!(faded_color.alpha, 0.5);
+    /// let faded = hgpui::red().opacity(0.5);
+    /// assert_eq!(faded.alpha, 0.5);
     /// ```
-    ///
-    /// This will return a red color with half the opacity.
-    ///
-    /// Example:
-    /// ```
-    /// use hgpui::{hsla, ColorExt};
-    /// let color = hsla(0.7, 1.0, 0.5, 0.7); // A saturated blue
-    /// let faded_color = color.opacity(0.16);
-    /// assert!((faded_color.alpha - 0.112).abs() < 1e-6);
-    /// ```
-    ///
-    /// This will return a blue color with around ~10% opacity,
-    /// suitable for an element's hover or selected state.
-    ///
     fn opacity(&self, factor: f32) -> Self
     where
         Self: Sized;
 
-    /// Sets the alpha channel from an 8-bit value (`0` = fully transparent,
-    /// `255` = fully opaque) and returns the color.
-    ///
-    /// This is the `u8` flavor; see [`with_alphaf`](ColorExt::with_alphaf) for
-    /// the `0.0..=1.0` float flavor.
+    /// Sets alpha from an 8-bit value (`0` transparent, `255` opaque).
     ///
     /// ```
     /// use hgpui::ColorExt;
-    /// let color = hgpui::red().with_alpha(128); // ~50% opacity
+    /// let color = hgpui::red().with_alpha(128);
     /// assert_eq!(color.alpha_u8(), 128);
     /// ```
     fn with_alpha(self, alpha: u8) -> Self
     where
         Self: Sized;
 
-    /// Sets the alpha channel from a `0.0..=1.0` float and returns the color.
-    ///
-    /// Out-of-range values are clamped (unlike `palette`'s unclamped
-    /// `WithAlpha::with_alpha`):
+    /// Sets alpha from a `0.0..=1.0` float, clamped.
     ///
     /// ```
     /// use hgpui::ColorExt;
@@ -280,42 +267,43 @@ pub trait ColorExt {
     where
         Self: Sized;
 
-    /// Returns the alpha channel as an 8-bit value (`0..=255`).
+    /// Returns alpha as an 8-bit value (`0..=255`).
     fn alpha_u8(self) -> u8
     where
         Self: Sized;
 
-    /// Converts the color to sRGB ([`Rgba`]). Identity for `Rgba`.
+    /// Converts to sRGB. Identity for `Rgba`.
     fn to_rgba(self) -> Rgba
     where
         Self: Sized;
 
-    /// Converts the color to HSL-with-alpha ([`Hsla`]). Identity for `Hsla`.
+    /// Converts to HSL-with-alpha. Identity for `Hsla`.
     fn to_hsla(self) -> Hsla
     where
         Self: Sized;
 
-    /// Returns a copy with its HSL lightness decreased by `amount`, a
-    /// `0.0..=1.0` fraction clamped at black.
+    /// Returns a copy with HSL lightness decreased by `amount`, clamped
+    /// at black.
+    ///
+    /// HSL lightness is not perceptually uniform. New code should prefer
+    /// [`adjust_lightness`](ColorExt::adjust_lightness).
     fn darken(self, amount: f32) -> Self
     where
         Self: Sized;
 
-    /// Returns a copy with its HSL lightness increased by `amount`, a
-    /// `0.0..=1.0` fraction clamped at white.
+    /// Returns a copy with HSL lightness increased by `amount`, clamped
+    /// at white. See [`darken`](ColorExt::darken) for the caveat.
     fn lighten(self, amount: f32) -> Self
     where
         Self: Sized;
 
-    /// The YIQ perceived brightness of the color, `0.0` (black) to `1.0`
-    /// (white). The alpha channel is ignored.
+    /// YIQ perceived brightness, `0.0` (black) to `1.0` (white). Alpha is
+    /// ignored. This is `tinycolor`'s formula, not the WCAG luminance.
     fn perceived_brightness(self) -> f32
     where
         Self: Sized;
 
-    /// Whether the color reads as dark (perceived brightness below `0.5`).
-    ///
-    /// Handy for picking a contrasting foreground, `tinycolor`-style:
+    /// Whether the color reads as dark (YIQ brightness below `0.5`).
     ///
     /// ```
     /// use hgpui::ColorExt;
@@ -326,21 +314,195 @@ pub trait ColorExt {
     where
         Self: Sized;
 
-    /// Whether the color reads as light. The inverse of [`is_dark`](ColorExt::is_dark).
+    /// Whether the color reads as light. Inverse of [`is_dark`](ColorExt::is_dark).
     fn is_light(self) -> bool
     where
         Self: Sized,
     {
         !self.is_dark()
     }
+
+    /// WCAG relative luminance, `0.0` (black) to `1.0` (white). Alpha is
+    /// ignored.
+    ///
+    /// Channels are linearized before applying the WCAG coefficients
+    /// `0.2126 R + 0.7152 G + 0.0722 B`. This is the quantity behind
+    /// [`contrast_ratio`](ColorExt::contrast_ratio).
+    fn relative_luminance(self) -> f32
+    where
+        Self: Sized,
+    {
+        let c = self.to_rgba();
+        let linearize = |v: f32| {
+            if v <= 0.04045 {
+                v / 12.92
+            } else {
+                ((v + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * linearize(c.color.red)
+            + 0.7152 * linearize(c.color.green)
+            + 0.0722 * linearize(c.color.blue)
+    }
+
+    /// WCAG contrast ratio between two colors, from `1.0` (identical
+    /// luminance) to `21.0` (black on white).
+    ///
+    /// Thresholds: `4.5` for AA body text, `3.0` for AA large text, `7.0`
+    /// for AAA body text.
+    ///
+    /// ```
+    /// use hgpui::ColorExt;
+    /// assert!((hgpui::white().contrast_ratio(hgpui::black()) - 21.0).abs() < 1e-3);
+    /// ```
+    fn contrast_ratio(self, other: Self) -> f32
+    where
+        Self: Sized,
+    {
+        let a = self.relative_luminance();
+        let b = other.relative_luminance();
+        let (lighter, darker) = if a > b { (a, b) } else { (b, a) };
+        (lighter + 0.05) / (darker + 0.05)
+    }
+
+    /// Scales contrast around mid-gray, matching CSS `filter: contrast()`.
+    /// Each channel becomes `(v - 0.5) * amount + 0.5`, clamped. Alpha is
+    /// preserved.
+    ///
+    /// `amount = 1.0` is identity, `0.0` collapses to mid-gray, values
+    /// below `1.0` pull light colors darker and dark colors lighter, and
+    /// values above `1.0` push them apart.
+    ///
+    /// Operates on sRGB-encoded values, so it is not perceptually linear.
+    /// For a brightness change that respects perceived hue, use
+    /// [`adjust_lightness`](ColorExt::adjust_lightness).
+    fn with_contrast(self, amount: f32) -> Self
+    where
+        Self: Sized,
+    {
+        let mut c = self.to_rgba();
+        let f = |v: f32| ((v - 0.5) * amount + 0.5).clamp(0.0, 1.0);
+        c.color.red = f(c.color.red);
+        c.color.green = f(c.color.green);
+        c.color.blue = f(c.color.blue);
+        Self::from_rgba(c)
+    }
+
+    /// Picks whichever of `light` / `dark` has the higher WCAG contrast
+    /// ratio against `self`. Useful for choosing readable foreground text.
+    ///
+    /// ```
+    /// use hgpui::{black, white, ColorExt};
+    /// let fg = hgpui::blue().contrasting_foreground(white(), black());
+    /// assert!(hgpui::blue().contrast_ratio(fg) >= 4.5);
+    /// ```
+    fn contrasting_foreground(self, light: Self, dark: Self) -> Self
+    where
+        Self: Sized,
+    {
+        if self.clone().contrast_ratio(light.clone()) >= self.contrast_ratio(dark.clone()) {
+            light
+        } else {
+            dark
+        }
+    }
+
+    /// Shifts perceived lightness by `delta` in OKLCH, clamped to
+    /// `0.0..=1.0`.
+    ///
+    /// Unlike [`darken`](ColorExt::darken) / [`lighten`](ColorExt::lighten),
+    /// this preserves perceived hue and chroma, so the same delta looks
+    /// consistent across different hues.
+    ///
+    /// The result may fall outside the sRGB gamut for large deltas and is
+    /// clipped on conversion back.
+    fn adjust_lightness(self, delta: f32) -> Self
+    where
+        Self: Sized,
+    {
+        let mut o: Oklcha = self.to_rgba().into_color();
+        o.color.l = (o.color.l + delta).clamp(0.0, 1.0);
+        Self::from_rgba(o.into_color())
+    }
+
+    /// Shifts perceived chroma (colorfulness) by `delta` in OKLCH.
+    /// Negative desaturates, positive saturates, clamped at zero.
+    fn adjust_chroma(self, delta: f32) -> Self
+    where
+        Self: Sized,
+    {
+        let mut o: Oklcha = self.to_rgba().into_color();
+        o.color.chroma = (o.color.chroma + delta).max(0.0);
+        Self::from_rgba(o.into_color())
+    }
+
+    /// Rotates hue by `degrees`, wrapping around the color wheel. Uses HSL
+    /// hue, matching the rest of the API.
+    fn spin(self, degrees: f32) -> Self
+    where
+        Self: Sized,
+    {
+        let mut hsla = self.to_hsla();
+        hsla.color.hue = hsla.color.hue + degrees;
+        Self::from_rgba(hsla_to_rgba(hsla))
+    }
+
+    /// Linearly interpolates between `self` and `other` by `t`, clamped to
+    /// `0.0..=1.0`. Alpha is interpolated too.
+    ///
+    /// ```
+    /// use hgpui::{black, white, ColorExt};
+    /// let gray = white().mix(black(), 0.5);
+    /// assert_eq!(gray, hgpui::rgb(0x808080));
+    /// ```
+    fn mix(self, other: Self, t: f32) -> Self
+    where
+        Self: Sized,
+    {
+        let a = self.to_rgba();
+        let b = other.to_rgba();
+        Self::from_rgba(Mix::mix(a, b, t.clamp(0.0, 1.0)))
+    }
+
+    /// Grayscale copy with the same YIQ brightness and alpha.
+    fn grayscale(self) -> Self
+    where
+        Self: Sized,
+    {
+        let b = self.clone().perceived_brightness();
+        let mut c = self.to_rgba();
+        c.color.red = b;
+        c.color.green = b;
+        c.color.blue = b;
+        Self::from_rgba(c)
+    }
+
+    /// Inverts each RGB channel (`1.0 - channel`), keeping alpha. This is
+    /// an sRGB-space inversion, not a perceptual one.
+    fn invert(self) -> Self
+    where
+        Self: Sized,
+    {
+        let mut c = self.to_rgba();
+        c.color.red = 1.0 - c.color.red;
+        c.color.green = 1.0 - c.color.green;
+        c.color.blue = 1.0 - c.color.blue;
+        Self::from_rgba(c)
+    }
 }
 
-/// YIQ perceived brightness (the formula behind `tinycolor`'s `isDark()`).
+/// YIQ perceived brightness, the formula behind `tinycolor`'s `isDark()`.
+/// Kept separate from [`ColorExt::relative_luminance`] so the two are never
+/// confused.
 fn rgba_brightness(color: Rgba) -> f32 {
     0.299 * color.color.red + 0.587 * color.color.green + 0.114 * color.color.blue
 }
 
 impl ColorExt for Rgba {
+    fn from_rgba(rgba: Rgba) -> Self {
+        rgba
+    }
+
     fn blend(&self, other: &Self) -> Self {
         use palette::blend::{BlendWith, Equations, Parameter};
         let blend_mode =
@@ -400,7 +562,12 @@ impl ColorExt for Rgba {
         self.perceived_brightness() < 0.5
     }
 }
+
 impl ColorExt for Hsla {
+    fn from_rgba(rgba: Rgba) -> Self {
+        rgb_to_hsla(rgba)
+    }
+
     fn blend(&self, other: &Self) -> Self {
         let this: Rgba = (*self).into_color();
         let other: Rgba = (*other).into_color();

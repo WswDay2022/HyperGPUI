@@ -13,7 +13,7 @@ workspace = true
 path = "src/gpui_platform.rs"
 
 [features]
-default = []
+default = ["font-kit"]
 font-kit = ["hgpui_macos/font-kit"]
 test-support = ["hgpui/test-support", "hgpui_macos/test-support"]
 screen-capture = [

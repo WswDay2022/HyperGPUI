@@ -4608,7 +4608,16 @@ impl Window {
 
         let visible_bounds_snapped = self.snap_bounds(visible_bounds);
 
-        let sub_tile = if visible_bounds == image_bounds {
+        // Use epsilon comparison to avoid creating sub-tiles due to floating-point precision issues.
+        // When visible_bounds and image_bounds are nearly equal (e.g., from ObjectFit::Contain),
+        // the ratios should be 1.0 but may have tiny precision errors.
+        const EPSILON: f32 = 1e-4;
+        let bounds_equal = (visible_bounds.origin.x.0 - image_bounds.origin.x.0).abs() < EPSILON
+            && (visible_bounds.origin.y.0 - image_bounds.origin.y.0).abs() < EPSILON
+            && (visible_bounds.size.width.0 - image_bounds.size.width.0).abs() < EPSILON
+            && (visible_bounds.size.height.0 - image_bounds.size.height.0).abs() < EPSILON;
+
+        let sub_tile = if bounds_equal {
             tile
         } else {
             let x_offset_ratio =
@@ -4623,10 +4632,14 @@ impl Window {
             let tile_width = tile.bounds.size.width.0;
             let tile_height = tile.bounds.size.height.0;
 
-            let sub_origin_x = tile_origin_x + (x_offset_ratio * tile_width as f32).round() as i32;
-            let sub_origin_y = tile_origin_y + (y_offset_ratio * tile_height as f32).round() as i32;
-            let sub_width = (width_ratio * tile_width as f32).round() as i32;
-            let sub_height = (height_ratio * tile_height as f32).round() as i32;
+            // Use floor for origin and ceil for size to ensure the sub-tile fully covers
+            // the visible area, avoiding 1-pixel border artifacts at atlas texture edges.
+            let sub_origin_x = tile_origin_x + (x_offset_ratio * tile_width as f32).floor() as i32;
+            let sub_origin_y = tile_origin_y + (y_offset_ratio * tile_height as f32).floor() as i32;
+            let sub_width = ((x_offset_ratio + width_ratio) * tile_width as f32).ceil() as i32
+                - sub_origin_x;
+            let sub_height = ((y_offset_ratio + height_ratio) * tile_height as f32).ceil() as i32
+                - sub_origin_y;
 
             let max_x = tile_origin_x + tile_width;
             let max_y = tile_origin_y + tile_height;

@@ -57,6 +57,171 @@ impl WgpuContext {
         Self::new_with_options(instance, surface, compositor_gpu, true, extra_requirements)
     }
 
+    /// Creates a new WgpuContext with lazy GL initialization.
+    /// On non-Windows platforms, this first tries Vulkan, and only falls back to GL
+    /// if no Vulkan adapter can successfully configure the surface.
+    /// This avoids loading Mesa's GL stack (libEGL, libgallium, libLLVM) unnecessarily.
+    /// On Windows, it uses the provided instance (which should be DX12).
+    #[cfg(not(target_family = "wasm"))]
+    pub fn new_with_lazy_gl(
+        instance: wgpu::Instance,
+        surface: &wgpu::Surface<'_>,
+        compositor_gpu: Option<CompositorGpuHint>,
+        reject_software: bool,
+        extra_requirements: Option<&WgpuDeviceRequirements>,
+    ) -> anyhow::Result<Self> {
+        let device_id_filter = match std::env::var("ZED_DEVICE_ID") {
+            Ok(val) => parse_pci_id(&val)
+                .context("Failed to parse device ID from `ZED_DEVICE_ID` environment variable")
+                .log_err(),
+            Err(std::env::VarError::NotPresent) => None,
+            err => {
+                err.context("Failed to read value of `ZED_DEVICE_ID` environment variable")
+                    .log_err();
+                None
+            }
+        };
+
+        // On non-Windows platforms, try Vulkan first, then fall back to GL.
+        // This avoids loading Mesa's GL stack unnecessarily when Vulkan works.
+        #[cfg(not(target_os = "windows"))]
+        {
+            // First attempt: Vulkan only
+            log::info!("Attempting GPU initialization with Vulkan backend...");
+            let vulkan_instance = Self::instance_with_backends(
+                surface.display_handle().unwrap(),
+                wgpu::Backends::VULKAN,
+            );
+
+            match hgpui::block_on(Self::select_adapter_and_device(
+                &vulkan_instance,
+                device_id_filter,
+                surface,
+                compositor_gpu.as_ref(),
+                reject_software,
+                extra_requirements,
+            )) {
+                Ok((adapter, device, queue, dual_source_blending, color_texture_format)) => {
+                    log::info!(
+                        "Selected GPU adapter (Vulkan): {:?} ({:?})",
+                        adapter.get_info().name,
+                        adapter.get_info().backend
+                    );
+                    let device_lost = Arc::new(AtomicBool::new(false));
+                    device.set_device_lost_callback({
+                        let device_lost = Arc::clone(&device_lost);
+                        move |reason, message| {
+                            log::error!("wgpu device lost: reason={reason:?}, message={message}");
+                            if reason != wgpu::DeviceLostReason::Destroyed {
+                                device_lost.store(true, Ordering::Relaxed);
+                            }
+                        }
+                    });
+                    return Ok(Self {
+                        instance: vulkan_instance,
+                        adapter,
+                        device: Arc::new(device),
+                        queue: Arc::new(queue),
+                        dual_source_blending,
+                        color_texture_format,
+                        device_lost,
+                    });
+                }
+                Err(e) => {
+                    log::info!(
+                        "Vulkan initialization failed: {}. Falling back to GL backend...",
+                        e
+                    );
+                }
+            }
+
+            // Fallback: GL backend
+            log::info!("Attempting GPU initialization with GL backend...");
+            let gl_instance = Self::instance_with_backends(
+                surface.display_handle().unwrap(),
+                wgpu::Backends::GL,
+            );
+
+            let (adapter, device, queue, dual_source_blending, color_texture_format) =
+                hgpui::block_on(Self::select_adapter_and_device(
+                    &gl_instance,
+                    device_id_filter,
+                    surface,
+                    compositor_gpu.as_ref(),
+                    reject_software,
+                    extra_requirements,
+                ))?;
+
+            log::info!(
+                "Selected GPU adapter (GL fallback): {:?} ({:?})",
+                adapter.get_info().name,
+                adapter.get_info().backend
+            );
+
+            let device_lost = Arc::new(AtomicBool::new(false));
+            device.set_device_lost_callback({
+                let device_lost = Arc::clone(&device_lost);
+                move |reason, message| {
+                    log::error!("wgpu device lost: reason={reason:?}, message={message}");
+                    if reason != wgpu::DeviceLostReason::Destroyed {
+                        device_lost.store(true, Ordering::Relaxed);
+                    }
+                }
+            });
+
+            Ok(Self {
+                instance: gl_instance,
+                adapter,
+                device: Arc::new(device),
+                queue: Arc::new(queue),
+                dual_source_blending,
+                color_texture_format,
+                device_lost,
+            })
+        }
+
+        // On Windows, just use the provided instance (DX12)
+        #[cfg(target_os = "windows")]
+        {
+            let (adapter, device, queue, dual_source_blending, color_texture_format) =
+                hgpui::block_on(Self::select_adapter_and_device(
+                    &instance,
+                    device_id_filter,
+                    surface,
+                    compositor_gpu.as_ref(),
+                    reject_software,
+                    extra_requirements,
+                ))?;
+
+            log::info!(
+                "Selected GPU adapter: {:?} ({:?})",
+                adapter.get_info().name,
+                adapter.get_info().backend
+            );
+
+            let device_lost = Arc::new(AtomicBool::new(false));
+            device.set_device_lost_callback({
+                let device_lost = Arc::clone(&device_lost);
+                move |reason, message| {
+                    log::error!("wgpu device lost: reason={reason:?}, message={message}");
+                    if reason != wgpu::DeviceLostReason::Destroyed {
+                        device_lost.store(true, Ordering::Relaxed);
+                    }
+                }
+            });
+
+            return Ok(Self {
+                instance,
+                adapter,
+                device: Arc::new(device),
+                queue: Arc::new(queue),
+                dual_source_blending,
+                color_texture_format,
+                device_lost,
+            });
+        }
+    }
+
     #[cfg(not(target_family = "wasm"))]
     fn new_with_options(
         instance: wgpu::Instance,
@@ -65,6 +230,7 @@ impl WgpuContext {
         reject_software: bool,
         extra_requirements: Option<&WgpuDeviceRequirements>,
     ) -> anyhow::Result<Self> {
+        // This is kept for backward compatibility, but new code should use new_with_lazy_gl
         let device_id_filter = match std::env::var("ZED_DEVICE_ID") {
             Ok(val) => parse_pci_id(&val)
                 .context("Failed to parse device ID from `ZED_DEVICE_ID` environment variable")
@@ -209,11 +375,26 @@ impl WgpuContext {
 
     #[cfg(not(target_family = "wasm"))]
     pub fn instance(display: Box<dyn wgpu::wgt::WgpuHasDisplayHandle>) -> wgpu::Instance {
-        #[cfg(not(target_os = "windows"))]
-        let backends = wgpu::Backends::VULKAN | wgpu::Backends::GL;
-        #[cfg(target_os = "windows")]
-        let backends = wgpu::Backends::DX12;
+        Self::instance_with_backends(display, Self::preferred_backends())
+    }
 
+    /// Returns the preferred backends for the current platform.
+    /// On Windows, only DX12 is used.
+    /// On other platforms, we prefer Vulkan first, with GL as a fallback.
+    #[cfg(not(target_family = "wasm"))]
+    fn preferred_backends() -> wgpu::Backends {
+        #[cfg(target_os = "windows")]
+        return wgpu::Backends::DX12;
+        #[cfg(not(target_os = "windows"))]
+        return wgpu::Backends::VULKAN | wgpu::Backends::GL;
+    }
+
+    /// Creates an instance with specific backends.
+    #[cfg(not(target_family = "wasm"))]
+    fn instance_with_backends(
+        display: Box<dyn wgpu::wgt::WgpuHasDisplayHandle>,
+        backends: wgpu::Backends,
+    ) -> wgpu::Instance {
         wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends,
             flags: wgpu::InstanceFlags::default(),

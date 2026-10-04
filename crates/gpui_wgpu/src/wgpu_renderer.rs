@@ -335,10 +335,11 @@ impl WgpuRenderer {
                 context.check_compatible_with_surface(&surface)?;
                 context
             }
-            None => ctx_ref.insert(WgpuContext::new(
-                instance,
+            None => ctx_ref.insert(WgpuContext::new_with_lazy_gl(
+                WgpuContext::instance(Box::new(window.clone())),
                 &surface,
                 compositor_gpu,
+                false, // reject_software = false (default behavior)
                 extra_requirements.as_ref(),
             )?),
         };

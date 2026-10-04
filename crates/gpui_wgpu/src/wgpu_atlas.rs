@@ -97,6 +97,7 @@ impl WgpuAtlas {
         let mut lock = self.0.lock();
         lock.device = context.device.clone();
         lock.queue = context.queue.clone();
+        lock.max_texture_size = context.device.limits().max_texture_dimension_2d;
         lock.color_texture_format = context.color_texture_format();
         lock.storage = WgpuAtlasStorage::default();
         lock.tiles_by_key.clear();
