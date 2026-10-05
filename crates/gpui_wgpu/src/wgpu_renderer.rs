@@ -50,6 +50,23 @@ impl From<Bounds<ScaledPixels>> for PodBounds {
     }
 }
 
+/// Per-frame draw statistics for profiling overdraw
+#[derive(Debug, Default, Clone, Copy)]
+pub struct FrameDrawStats {
+    pub total_batches: usize,
+    pub total_draw_calls: usize,
+    pub quads: usize,
+    pub shadows: usize,
+    pub paths: usize,
+    pub underlines: usize,
+    pub monochrome_sprites: usize,
+    pub subpixel_sprites: usize,
+    pub polychrome_sprites: usize,
+    pub surfaces: usize,
+    pub backdrop_filters: usize,
+    pub filter_boundaries: usize,
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct SurfaceParams {
@@ -266,6 +283,8 @@ pub struct WgpuRenderer {
     device_lost: std::sync::Arc<std::sync::atomic::AtomicBool>,
     surface_configured: bool,
     needs_redraw: bool,
+    /// Per-frame draw statistics for profiling overdraw
+    frame_stats: FrameDrawStats,
 }
 
 impl WgpuRenderer {
@@ -643,6 +662,7 @@ impl WgpuRenderer {
             device_lost: context.device_lost_flag(),
             surface_configured: true,
             needs_redraw: false,
+            frame_stats: FrameDrawStats::default(),
         })
     }
 
@@ -1370,7 +1390,15 @@ impl WgpuRenderer {
         self.max_texture_size
     }
 
+    /// Returns the draw statistics from the last frame.
+    pub fn frame_stats(&self) -> FrameDrawStats {
+        self.frame_stats
+    }
+
     pub fn draw(&mut self, scene: &Scene) -> bool {
+        // Reset per-frame stats
+        self.frame_stats = FrameDrawStats::default();
+
         // Bail out early if the surface has been unconfigured (e.g. during
         // Android background/rotation transitions).  Attempting to acquire
         // a texture from an unconfigured surface can block indefinitely on
@@ -1497,6 +1525,18 @@ impl WgpuRenderer {
             );
         }
 
+        // Create viewport bounds for frustum culling (in ScaledPixels, which are device pixels)
+        let viewport_bounds = Bounds {
+            origin: Point {
+                x: ScaledPixels(0.0),
+                y: ScaledPixels(0.0),
+            },
+            size: Size {
+                width: ScaledPixels(self.surface_config.width as f32),
+                height: ScaledPixels(self.surface_config.height as f32),
+            },
+        };
+
         loop {
             let mut instance_offset: u64 = 0;
             // Reset the blur-params bump cursor each (re)render of the scene.
@@ -1556,24 +1596,41 @@ impl WgpuRenderer {
                     ..Default::default()
                 });
 
+                self.frame_stats.total_batches = scene.batches().count();
+
                 for batch in scene.batches() {
                     let ok = match batch {
                         PrimitiveBatch::Quads(range) => {
-                            self.draw_quads(&scene.quads[range], &mut instance_offset, &mut pass)
+                            let quads = &scene.quads[range];
+                            let visible_quads: Vec<_> = quads.iter().filter(|q| q.bounds.intersects(&viewport_bounds)).cloned().collect();
+                            self.frame_stats.quads += visible_quads.len();
+                            if !visible_quads.is_empty() {
+                                self.draw_quads(&visible_quads, &mut instance_offset, &mut pass)
+                            } else {
+                                true
+                            }
                         }
-                        PrimitiveBatch::Shadows(range) => self.draw_shadows(
-                            &scene.shadows[range],
-                            &mut instance_offset,
-                            &mut pass,
-                        ),
+                        PrimitiveBatch::Shadows(range) => {
+                            let shadows = &scene.shadows[range];
+                            let visible_shadows: Vec<_> = shadows.iter().filter(|s| s.bounds.intersects(&viewport_bounds)).cloned().collect();
+                            self.frame_stats.shadows += visible_shadows.len();
+                            if !visible_shadows.is_empty() {
+                                self.draw_shadows(&visible_shadows, &mut instance_offset, &mut pass)
+                            } else {
+                                true
+                            }
+                        }
                         PrimitiveBatch::Paths(range) => {
                             let paths = &scene.paths[range];
-                            if paths.is_empty() {
+                            let visible_paths: Vec<_> = paths.iter().filter(|p| p.bounds.intersects(&viewport_bounds)).cloned().collect();
+                            self.frame_stats.paths += visible_paths.len();
+                            if visible_paths.is_empty() {
                                 continue;
                             }
 
                             drop(pass);
 
+                            self.frame_stats.total_draw_calls += 1;
                             let did_draw = self.draw_paths_to_intermediate(
                                 &mut encoder,
                                 paths,
@@ -1605,59 +1662,86 @@ impl WgpuRenderer {
                                 false
                             }
                         }
-                        PrimitiveBatch::Underlines(range) => self.draw_underlines(
-                            &scene.underlines[range],
-                            &mut instance_offset,
-                            &mut pass,
-                        ),
-                        PrimitiveBatch::MonochromeSprites { texture_id, range } => self
-                            .draw_monochrome_sprites(
-                                &scene.monochrome_sprites[range],
-                                texture_id,
-                                &mut instance_offset,
-                                &mut pass,
-                            ),
-                        PrimitiveBatch::SubpixelSprites { texture_id, range } => self
-                            .draw_subpixel_sprites(
-                                &scene.subpixel_sprites[range],
-                                texture_id,
-                                &mut instance_offset,
-                                &mut pass,
-                            ),
-                        PrimitiveBatch::PolychromeSprites { texture_id, range } => self
-                            .draw_polychrome_sprites(
-                                &scene.polychrome_sprites[range],
-                                texture_id,
-                                &mut instance_offset,
-                                &mut pass,
-                            ),
+                        PrimitiveBatch::Underlines(range) => {
+                            let underlines = &scene.underlines[range];
+                            let visible_underlines: Vec<_> = underlines.iter().filter(|u| u.bounds.intersects(&viewport_bounds)).cloned().collect();
+                            self.frame_stats.underlines += visible_underlines.len();
+                            if !visible_underlines.is_empty() {
+                                self.draw_underlines(&visible_underlines, &mut instance_offset, &mut pass)
+                            } else {
+                                true
+                            }
+                        }
+                        PrimitiveBatch::MonochromeSprites { texture_id, range } => {
+                            let sprites = &scene.monochrome_sprites[range];
+                            let visible_sprites: Vec<_> = sprites.iter().filter(|s| s.bounds.intersects(&viewport_bounds)).cloned().collect();
+                            self.frame_stats.monochrome_sprites += visible_sprites.len();
+                            if !visible_sprites.is_empty() {
+                                self.draw_monochrome_sprites(&visible_sprites, texture_id, &mut instance_offset, &mut pass)
+                            } else {
+                                true
+                            }
+                        }
+                        PrimitiveBatch::SubpixelSprites { texture_id, range } => {
+                            let sprites = &scene.subpixel_sprites[range];
+                            let visible_sprites: Vec<_> = sprites.iter().filter(|s| s.bounds.intersects(&viewport_bounds)).cloned().collect();
+                            self.frame_stats.subpixel_sprites += visible_sprites.len();
+                            if !visible_sprites.is_empty() {
+                                self.draw_subpixel_sprites(&visible_sprites, texture_id, &mut instance_offset, &mut pass)
+                            } else {
+                                true
+                            }
+                        }
+                        PrimitiveBatch::PolychromeSprites { texture_id, range } => {
+                            let sprites = &scene.polychrome_sprites[range];
+                            let visible_sprites: Vec<_> = sprites.iter().filter(|s| s.bounds.intersects(&viewport_bounds)).cloned().collect();
+                            self.frame_stats.polychrome_sprites += visible_sprites.len();
+                            if !visible_sprites.is_empty() {
+                                self.draw_polychrome_sprites(&visible_sprites, texture_id, &mut instance_offset, &mut pass)
+                            } else {
+                                true
+                            }
+                        }
                         PrimitiveBatch::Surfaces(range) => {
-                            self.draw_surfaces(&scene.surfaces[range], &mut pass)
+                            let surfaces = &scene.surfaces[range];
+                            let visible_surfaces: Vec<_> = surfaces.iter().filter(|s| s.bounds.intersects(&viewport_bounds)).cloned().collect();
+                            self.frame_stats.surfaces += visible_surfaces.len();
+                            if !visible_surfaces.is_empty() {
+                                self.draw_surfaces(&visible_surfaces, &mut pass)
+                            } else {
+                                true
+                            }
                         }
                         PrimitiveBatch::BackdropFilters(range) => {
-                            // Interrupt the current pass, blur the content painted so far behind
-                            // each backdrop's rounded rect, then resume drawing on top.
-                            drop(pass);
-                            for filter in &scene.backdrop_filters[range] {
-                                self.draw_backdrop_filter(&mut encoder, filter, &current_target);
+                            let filters = &scene.backdrop_filters[range];
+                            let visible_filters: Vec<_> = filters.iter().filter(|f| f.bounds.intersects(&viewport_bounds)).cloned().collect();
+                            self.frame_stats.backdrop_filters += visible_filters.len();
+                            if !visible_filters.is_empty() {
+                                // Interrupt the current pass, blur the content painted so far behind
+                                // each backdrop's rounded rect, then resume drawing on top.
+                                drop(pass);
+                                for filter in &visible_filters {
+                                    self.draw_backdrop_filter(&mut encoder, filter, &current_target);
+                                }
+                                pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                    label: Some("main_pass_continued"),
+                                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                        view: &current_target,
+                                        resolve_target: None,
+                                        ops: wgpu::Operations {
+                                            load: wgpu::LoadOp::Load,
+                                            store: wgpu::StoreOp::Store,
+                                        },
+                                        depth_slice: None,
+                                    })],
+                                    depth_stencil_attachment: None,
+                                    ..Default::default()
+                                });
                             }
-                            pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                                label: Some("main_pass_continued"),
-                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                    view: &current_target,
-                                    resolve_target: None,
-                                    ops: wgpu::Operations {
-                                        load: wgpu::LoadOp::Load,
-                                        store: wgpu::StoreOp::Store,
-                                    },
-                                    depth_slice: None,
-                                })],
-                                depth_stencil_attachment: None,
-                                ..Default::default()
-                            });
                             true
                         }
                         PrimitiveBatch::FilterBoundary(ix) => {
+                            self.frame_stats.filter_boundaries += 1;
                             let boundary = scene.filter_boundaries[ix].clone();
                             if boundary.is_start {
                                 // Each isolated nesting level uses its own group texture from the
@@ -1774,13 +1858,7 @@ impl WgpuRenderer {
         pass: &mut wgpu::RenderPass<'_>,
     ) -> bool {
         let data = unsafe { Self::instance_bytes(quads) };
-        self.draw_instances(
-            data,
-            quads.len() as u32,
-            &self.resources().pipelines.quads,
-            instance_offset,
-            pass,
-        )
+        self.draw_instances(data, quads.len() as u32, &self.resources().pipelines.quads, instance_offset, pass)
     }
 
     fn draw_shadows(
@@ -1790,13 +1868,7 @@ impl WgpuRenderer {
         pass: &mut wgpu::RenderPass<'_>,
     ) -> bool {
         let data = unsafe { Self::instance_bytes(shadows) };
-        self.draw_instances(
-            data,
-            shadows.len() as u32,
-            &self.resources().pipelines.shadows,
-            instance_offset,
-            pass,
-        )
+        self.draw_instances(data, shadows.len() as u32, &self.resources().pipelines.shadows, instance_offset, pass)
     }
 
     fn draw_underlines(
@@ -1806,13 +1878,7 @@ impl WgpuRenderer {
         pass: &mut wgpu::RenderPass<'_>,
     ) -> bool {
         let data = unsafe { Self::instance_bytes(underlines) };
-        self.draw_instances(
-            data,
-            underlines.len() as u32,
-            &self.resources().pipelines.underlines,
-            instance_offset,
-            pass,
-        )
+        self.draw_instances(data, underlines.len() as u32, &self.resources().pipelines.underlines, instance_offset, pass)
     }
 
     fn draw_monochrome_sprites(
@@ -1824,14 +1890,7 @@ impl WgpuRenderer {
     ) -> bool {
         let tex_info = self.atlas.get_texture_info(texture_id);
         let data = unsafe { Self::instance_bytes(sprites) };
-        self.draw_instances_with_texture(
-            data,
-            sprites.len() as u32,
-            &tex_info.view,
-            &self.resources().pipelines.mono_sprites,
-            instance_offset,
-            pass,
-        )
+        self.draw_instances_with_texture(data, sprites.len() as u32, &tex_info.view, &self.resources().pipelines.mono_sprites, instance_offset, pass)
     }
 
     fn draw_subpixel_sprites(
@@ -1842,21 +1901,14 @@ impl WgpuRenderer {
         pass: &mut wgpu::RenderPass<'_>,
     ) -> bool {
         let tex_info = self.atlas.get_texture_info(texture_id);
-        let data = unsafe { Self::instance_bytes(sprites) };
         let resources = self.resources();
         let pipeline = resources
             .pipelines
             .subpixel_sprites
             .as_ref()
             .unwrap_or(&resources.pipelines.mono_sprites);
-        self.draw_instances_with_texture(
-            data,
-            sprites.len() as u32,
-            &tex_info.view,
-            pipeline,
-            instance_offset,
-            pass,
-        )
+        let data = unsafe { Self::instance_bytes(sprites) };
+        self.draw_instances_with_texture(data, sprites.len() as u32, &tex_info.view, pipeline, instance_offset, pass)
     }
 
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
@@ -2226,14 +2278,7 @@ impl WgpuRenderer {
     ) -> bool {
         let tex_info = self.atlas.get_texture_info(texture_id);
         let data = unsafe { Self::instance_bytes(sprites) };
-        self.draw_instances_with_texture(
-            data,
-            sprites.len() as u32,
-            &tex_info.view,
-            &self.resources().pipelines.poly_sprites,
-            instance_offset,
-            pass,
-        )
+        self.draw_instances_with_texture(data, sprites.len() as u32, &tex_info.view, &self.resources().pipelines.poly_sprites, instance_offset, pass)
     }
 
     fn draw_instances(
@@ -2265,6 +2310,7 @@ impl WgpuRenderer {
         pass.set_bind_group(0, &resources.globals_bind_group, &[]);
         pass.set_bind_group(1, &bind_group, &[]);
         pass.draw(0..4, 0..instance_count);
+        // Note: draw calls counted in caller to avoid double-counting for batched draws
         true
     }
 
