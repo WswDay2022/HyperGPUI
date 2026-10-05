@@ -217,7 +217,7 @@ impl Render for AnimatedListExample {
                     })
                     .rows({
                         let rows = rows.clone();
-                        move |range, _window, _cx| {
+                        move |range, _, _| {
                             range.map(|index| row_body(&rows[index])).collect()
                         }
                     }),

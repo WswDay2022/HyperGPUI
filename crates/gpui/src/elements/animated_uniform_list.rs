@@ -160,7 +160,7 @@ pub const DEFAULT_ROW_DURATION: Duration = Duration::from_millis(150);
 
 /// How many items beyond the viewport are tracked, so an item that is about to scroll in is
 /// already following the list.
-const TRACKING_MARGIN: usize = 8;
+const DEFAULT_TRACKING_MARGIN: usize = 8;
 
 /// Creates an animated [`uniform_list`](crate::uniform_list).
 ///
@@ -183,6 +183,7 @@ pub fn animated_uniform_list<K, R>(
         leaving: None,
         leave: None,
         style: StyleRefinement::default(),
+        tracking_margin: DEFAULT_TRACKING_MARGIN,
     }
 }
 
@@ -200,6 +201,7 @@ pub struct AnimatedUniformListBuilder<K, R> {
     leaving: Option<LeavingHandle<K>>,
     leave: Option<LeaveStyle>,
     style: StyleRefinement,
+    tracking_margin: usize,
 }
 
 impl<K, R> Styled for AnimatedUniformListBuilder<K, R> {
@@ -250,6 +252,7 @@ where
             enter: self.enter,
             leaving: self.leaving,
             leave: self.leave,
+            tracking_margin: self.tracking_margin,
             style: self.style,
             list: None,
         }
@@ -313,6 +316,15 @@ where
         self.anchor = anchor;
         self
     }
+
+    /// How many items beyond the viewport to track for smooth entry/exit animations.
+    ///
+    /// Defaults to 8. Increasing this renders more items outside the viewport, which can
+    /// improve visual continuity when scrolling fast, at the cost of more work per frame.
+    pub fn tracking_margin(mut self, tracking_margin: usize) -> Self {
+        self.tracking_margin = tracking_margin;
+        self
+    }
 }
 
 /// The list element. See [`animated_uniform_list`].
@@ -328,6 +340,7 @@ pub struct AnimatedUniformList<K, R> {
     enter: Option<EnterStyle>,
     leaving: Option<LeavingHandle<K>>,
     leave: Option<LeaveStyle>,
+    tracking_margin: usize,
     style: StyleRefinement,
     /// Assembled during `request_layout`, painted again in `prepaint`/`paint`.
     list: Option<AnyElement>,
@@ -385,6 +398,7 @@ where
                 duration: self.duration,
                 easing: self.easing.as_ref(),
                 anchor: self.anchor,
+                tracking_margin: self.tracking_margin,
                 // Without a leave style there is nothing to do with a queued item, but the
                 // queue still has to be drained so it doesn't grow.
                 leaving: match (&self.leaving, &self.leave) {
@@ -581,6 +595,8 @@ struct FrameInput<'a, K> {
     duration: Duration,
     easing: &'a dyn Fn(f32) -> f32,
     anchor: bool,
+    /// How many items beyond the viewport to track for smooth entry/exit animations.
+    tracking_margin: usize,
     /// Newly removed items queued by the application.
     leaving: Option<&'a LeavingHandle<K>>,
     /// [`App::reduce_motion`]: settle everything immediately instead of animating.
@@ -666,6 +682,7 @@ impl<K: Hash + Eq + Clone> ListState<K> {
             duration,
             easing,
             anchor,
+            tracking_margin,
             leaving,
             reduce_motion,
             now,
@@ -745,9 +762,9 @@ impl<K: Hash + Eq + Clone> ListState<K> {
         let effective_offset = anchored_offset.unwrap_or(offset.y);
         let effective_top =
             top_index_for(point(offset.x, effective_offset), row_height, count);
-        let span = (viewport_height / row_height).ceil() as usize + 2 * TRACKING_MARGIN;
-        let first = effective_top.saturating_sub(TRACKING_MARGIN);
-        let last = (effective_top + span.max(TRACKING_MARGIN)).min(count);
+        let span = (viewport_height / row_height).ceil() as usize + 2 * tracking_margin;
+        let first = effective_top.saturating_sub(tracking_margin);
+        let last = (effective_top + span.max(tracking_margin)).min(count);
 
         let previous = std::mem::take(&mut self.tracked);
         // A key that was not tracked on the previous frame is a genuinely new item — items that
@@ -951,6 +968,7 @@ mod tests {
                 duration: DURATION,
                 easing: &ease_out_cubic,
                 anchor: true,
+                tracking_margin: DEFAULT_TRACKING_MARGIN,
                 leaving: Some(&self.leaving),
                 reduce_motion: self.reduce_motion,
                 now: self.now,

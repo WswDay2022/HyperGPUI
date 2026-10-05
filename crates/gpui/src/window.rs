@@ -2108,6 +2108,7 @@ impl Window {
         self.focus = Some(handle.id);
         self.focus_generation = self.focus_generation.wrapping_add(1);
         self.clear_pending_keystrokes();
+        self.invalidate_character_coordinates();
 
         // Avoid re-entrant entity updates by deferring observer notifications to the end of the
         // current effect cycle, and only for this window.
@@ -2133,6 +2134,7 @@ impl Window {
             self.focus_generation = self.focus_generation.wrapping_add(1);
         }
         self.focus = None;
+        self.invalidate_character_coordinates();
         self.refresh();
     }
 
