@@ -323,7 +323,7 @@ impl Render for AnimatedListExample {
                     .smooth_scroll(true)
                     .leaving(&self.leaving)
                     // Removed rows fade out where they were, over the rows closing up.
-                    .leave(|row, delta, _time| {
+                    .leave(|row, delta, _time, _window, _cx| {
                         div()
                             .opacity(1. - delta)
                             .translate_y(px(-6.) * delta)
@@ -331,7 +331,7 @@ impl Render for AnimatedListExample {
                             .into_any_element()
                     })
                     // New rows fade and slide up into place.
-                    .enter(|row, delta, _time| {
+                    .enter(|row, delta, _time, _window, _cx| {
                         div()
                             .opacity(delta)
                             .translate_y(px(6.) * (1. - delta))

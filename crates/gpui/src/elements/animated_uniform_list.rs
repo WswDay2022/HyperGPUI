@@ -81,7 +81,7 @@ use crate::{
 ///   opacity, offsets and the like;
 /// - `time` is the plain, linear time, for when you want a *different* curve for one property
 ///   (`delta` for the fade, your own curve over `time` for the movement, say).
-pub type EnterStyle = Rc<dyn Fn(AnyElement, f32, f32) -> AnyElement>;
+pub type EnterStyle = Rc<dyn Fn(AnyElement, f32, f32, &mut Window, &mut App) -> AnyElement>;
 
 /// Wraps a row for the leave animation. Same two numbers as [`EnterStyle`].
 pub type LeaveStyle = EnterStyle;
@@ -281,7 +281,7 @@ where
     /// paint offsets only).
     pub fn enter(
         mut self,
-        enter: impl Fn(AnyElement, f32, f32) -> AnyElement + 'static,
+        enter: impl Fn(AnyElement, f32, f32, &mut Window, &mut App) -> AnyElement + 'static,
     ) -> Self {
         self.enter = Some(Rc::new(enter));
         self
@@ -304,7 +304,7 @@ where
     /// so painting it back into being at `delta = 0` looks continuous.
     pub fn leave(
         mut self,
-        leave: impl Fn(AnyElement, f32, f32) -> AnyElement + 'static,
+        leave: impl Fn(AnyElement, f32, f32, &mut Window, &mut App) -> AnyElement + 'static,
     ) -> Self {
         self.leave = Some(Rc::new(leave));
         self
@@ -466,7 +466,7 @@ where
                 .map(|(row, (offset, enter_t))| {
                     let mut row = row.into_any_element();
                     if let (Some(style), Some((delta, time))) = (enter_style.as_ref(), enter_t) {
-                        row = style(row, delta, time);
+                        row = style(row, delta, time, window, cx);
                     }
                     if offset == Pixels::ZERO {
                         row
@@ -517,7 +517,7 @@ where
                 let mut overlay = div().absolute().inset_0();
                 for (row, painted_y, delta, time) in rows {
                     let element = (row)(window, cx);
-                    let element = leave_style(element, delta, time);
+                    let element = leave_style(element, delta, time, window, cx);
                     overlay = overlay.child(
                         div()
                             .absolute()
@@ -1410,7 +1410,7 @@ mod rendering_tests {
                     .h(px(200.))
                     .p(px(16.))
                     .leaving(&self.leaving)
-                    .leave(|row, delta, _time| {
+                    .leave(|row, delta, _time, _window, _cx| {
                         div().child(row).opacity(1. - delta).into_any_element()
                     })
                     .count(count)
@@ -1572,7 +1572,7 @@ mod live_tests {
                 animated_uniform_list("items", &self.scroll)
                     .h(px(400.))
                     .leaving(&self.leaving)
-                    .leave(|row, delta, _time| {
+                    .leave(|row, delta, _time, _window, _cx| {
                         div().opacity(1. - delta).child(row).into_any_element()
                     })
                     .count(count)

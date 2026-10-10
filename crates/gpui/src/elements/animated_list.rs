@@ -166,13 +166,13 @@ where
     }
 
     /// Styles a row as it enters, with `t` going `0.0 -> 1.0`. Only new rows animate in.
-    pub fn enter(mut self, enter: impl Fn(AnyElement, f32, f32) -> AnyElement + 'static) -> Self {
+    pub fn enter(mut self, enter: impl Fn(AnyElement, f32, f32, &mut Window, &mut App) -> AnyElement + 'static) -> Self {
         self.enter = Some(Rc::new(enter));
         self
     }
 
     /// Styles a row as it leaves, with `t` going `0.0 -> 1.0`, painted where it was last seen.
-    pub fn leave(mut self, leave: impl Fn(AnyElement, f32, f32) -> AnyElement + 'static) -> Self {
+    pub fn leave(mut self, leave: impl Fn(AnyElement, f32, f32, &mut Window, &mut App) -> AnyElement + 'static) -> Self {
         self.leave = Some(Rc::new(leave));
         self
     }
@@ -328,7 +328,7 @@ where
         if let Some(leave_style) = self.leave.clone() {
             for (row, painted, delta, time) in leaving {
                 let element = (row)(window, cx);
-                let element = leave_style(element, delta, time);
+                let element = leave_style(element, delta, time, window, cx);
                 container = container.child(LeavingRow {
                     painted,
                     child: Some(element.into_any_element()),
@@ -458,7 +458,7 @@ where
             state.update(cx, |state, _| state.enter_progress(snap, now, duration, easing.as_ref()));
         if let (Some(style), Some((delta, time))) = (self.enter.clone(), enter_t) {
             let child = std::mem::replace(&mut self.child, div().into_any_element());
-            self.child = style(child, delta, time);
+            self.child = style(child, delta, time, window, cx);
             window.request_animation_frame();
         }
 
@@ -939,11 +939,11 @@ mod rendering_tests {
             div().size_full().child(
                 animated_list("rows")
                     .count(count)
-                    .enter(move |element, _delta, _time| {
+                    .enter(move |element, _delta, _time, _window, _cx| {
                         enters.set(enters.get() + 1);
                         element
                     })
-                    .leave(move |element, _delta, _time| {
+                    .leave(move |element, _delta, _time, _window, _cx| {
                         leaves.set(leaves.get() + 1);
                         element
                     })
@@ -1057,7 +1057,7 @@ mod rendering_tests {
                 .gap(px(10.))
                 .items_end()
                 .leaving(&self.leaving)
-                .leave(|row, delta, _time| div().child(row).opacity(1. - delta).into_any_element())
+                .leave(|row, delta, _time, _window, _cx| div().child(row).opacity(1. - delta).into_any_element())
                 .count(count)
                 .key_of({
                     let keys = keys.clone();

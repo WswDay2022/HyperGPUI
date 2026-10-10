@@ -197,14 +197,14 @@ impl Render for AnimatedListExample {
                     .duration(SLIDE)
                     .smooth_scroll(true)
                     .leaving(&self.leaving)
-                    .leave(|row, delta, _time| {
+                    .leave(|row, delta, _time, _window, _cx| {
                         div()
                             .opacity(1. - delta)
                             .translate_y(px(-6.) * delta)
                             .child(row)
                             .into_any_element()
                     })
-                    .enter(|row, delta, _time| {
+                    .enter(|row, delta, _time, _window, _cx| {
                         div()
                             .opacity(delta)
                             .translate_y(px(6.) * (1. - delta))
