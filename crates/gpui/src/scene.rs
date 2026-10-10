@@ -217,6 +217,78 @@ impl Scene {
         // the start (false = 0) ahead of the end (true = 1) so the pair stays well-formed.
         self.filter_boundaries
             .sort_by_key(|boundary| (boundary.order, !boundary.is_start));
+        // The quads are in painter's order now, which is the order this pass reasons about.
+        self.collapse_covered_outlines();
+    }
+
+    /// Applies each rounded outline's antialiased coverage once, however many layers repaint it.
+    ///
+    /// A rounded `overflow_hidden` container paints its own rounded background *and* clips every
+    /// layer inside it to that same rounded rect, so the band along the outline is covered once
+    /// per layer. Stacked coverages compose as `1 - (1 - c)^n` rather than `c`: each extra layer
+    /// pushes the band's partial pixels towards full coverage and towards the filling colour.
+    /// At a small radius that is what turns the arc into a straight diagonal — the band is only
+    /// two or three partial pixels wide to begin with — and at any radius it leaves a rim that
+    /// reads as darker than the fill on a dark fill and lighter on a light one.
+    ///
+    /// This pass leaves each outline's band to the topmost layer that covers all of it, whose
+    /// colour is what belongs on top there anyway, and marks every other layer that repaints
+    /// the same outline with [`Quad::suppress_partial_coverage`].
+    fn collapse_covered_outlines(&mut self) {
+        let mut groups: Vec<(RoundedOutline, Vec<usize>)> = Vec::new();
+        for (index, quad) in self.quads.iter().enumerate() {
+            for outline in quad.painted_rounded_outlines() {
+                match groups.iter_mut().find(|(key, _)| *key == outline) {
+                    Some((_, members)) => members.push(index),
+                    None => groups.push((outline, vec![index])),
+                }
+            }
+        }
+
+        let mut suppress = Vec::new();
+        for (index, quad) in self.quads.iter().enumerate() {
+            let outlines = quad.painted_rounded_outlines().collect::<Vec<_>>();
+            if outlines.is_empty() {
+                continue;
+            }
+            let effective = effective_bounds(quad);
+            let paints_whole_outline = outlines
+                .iter()
+                .all(|outline| contains_rect(effective, outline.bounds));
+
+            // A quad can repaint two outlines — its own and its content mask's — and
+            // suppressing it drops both bands, so both of them have to be covered later.
+            let redundant = outlines.iter().all(|outline| {
+                let later: Vec<usize> = groups
+                    .iter()
+                    .find(|(key, _)| key == outline)
+                    .map(|(_, members)| {
+                        members
+                            .iter()
+                            .copied()
+                            .filter(|other| *other > index)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                later.into_iter().any(|other| {
+                    let other = &self.quads[other];
+                    if !paints_anything(other) {
+                        return false;
+                    }
+                    if paints_whole_outline {
+                        owns_outline_band(other, *outline)
+                    } else {
+                        contains_rect(effective_bounds(other), effective)
+                    }
+                })
+            });
+            if redundant {
+                suppress.push(index);
+            }
+        }
+        for index in suppress {
+            self.quads[index].suppress_partial_coverage = 1;
+        }
     }
 
     #[cfg_attr(
@@ -721,6 +793,18 @@ impl PrimitiveBatch {
 pub struct Quad {
     pub order: DrawOrder,
     pub border_style: BorderStyle,
+    /// Non-zero when this quad paints only the part of itself that is fully covered, dropping
+    /// the antialiased band along its outline.
+    ///
+    /// Set by [`Scene::collapse_covered_outlines`] on every layer whose rounded outline is
+    /// repainted by a later layer that covers it. Antialiased coverage composites as
+    /// `1 - (1 - c)^n` over `n` stacked layers, so without this a rounded clip whose corner is
+    /// crossed by more than one layer loses the partial pixels that carry the arc's curvature —
+    /// a small radius flattens into a straight diagonal, and the band is pulled towards the
+    /// fill colour as a dark (or light) rim. Leaving the band to the topmost covering layer
+    /// applies its coverage exactly once.
+    pub suppress_partial_coverage: u32,
+    pub pad: u32, // align to 8 bytes
     pub bounds: Bounds<ScaledPixels>,
     pub content_mask: ContentMask<ScaledPixels>,
     pub background: Background,
@@ -731,10 +815,151 @@ pub struct Quad {
     pub transformation: TransformationMatrix,
 }
 
+impl Quad {
+    /// The rounded outlines this quad repaints the antialiased band of: its own, when it is
+    /// rounded, and its content mask's, when that is rounded. See
+    /// [`Scene::collapse_covered_outlines`].
+    fn painted_rounded_outlines(&self) -> impl Iterator<Item = RoundedOutline> + '_ {
+        [
+            rounded_outline(self.bounds, self.corner_radii),
+            rounded_outline(self.content_mask.bounds, self.content_mask.corner_radii),
+        ]
+        .into_iter()
+        .flatten()
+    }
+}
+
 impl From<Quad> for Primitive {
     fn from(quad: Quad) -> Self {
         Primitive::Quad(quad)
     }
+}
+
+/// A rounded rectangle whose antialiased outline several layers can repaint: a rounded quad
+/// paints its own, and every quad clipped by a rounded content mask paints the mask's. Both
+/// describe the same arc, so the scene has to choose one of them to apply its coverage.
+#[derive(Copy, Clone, PartialEq)]
+struct RoundedOutline {
+    bounds: Bounds<ScaledPixels>,
+    radii: Corners<ScaledPixels>,
+}
+
+/// The outline for `bounds`/`radii`, or `None` when the rectangle is square — a square edge
+/// needs no such bookkeeping, because its coverage is only partial when the transform takes it
+/// off the pixel grid, and then there is no second layer repainting the very same pixels.
+fn rounded_outline(
+    bounds: Bounds<ScaledPixels>,
+    radii: Corners<ScaledPixels>,
+) -> Option<RoundedOutline> {
+    let rounded = radii.top_left.0 != 0.0
+        || radii.top_right.0 != 0.0
+        || radii.bottom_left.0 != 0.0
+        || radii.bottom_right.0 != 0.0;
+    rounded.then_some(RoundedOutline { bounds, radii })
+}
+
+/// The region a quad actually paints, before its own coverage: its bounds clipped by its content
+/// mask. A border strip's `bounds` are the whole quad's and only its mask is one band of it, so
+/// this is what separates "paints the whole outline" from "paints a slice of it".
+fn effective_bounds(quad: &Quad) -> Bounds<ScaledPixels> {
+    quad.bounds.intersect(&quad.content_mask.bounds)
+}
+
+/// Whether `outer` contains `inner`.
+fn contains_rect(outer: Bounds<ScaledPixels>, inner: Bounds<ScaledPixels>) -> bool {
+    outer.origin.x <= inner.origin.x
+        && outer.origin.y <= inner.origin.y
+        && outer.bottom_right().x >= inner.bottom_right().x
+        && outer.bottom_right().y >= inner.bottom_right().y
+}
+
+/// Whether the quad is a border-only quad whose ring goes all the way around its outline — what
+/// `paint_quad` emits as four strips when a rounded quad has a border but no fill.
+///
+/// No single strip covers the outline, but the four of them tile a ring several pixels wide,
+/// which always contains the one-pixel antialiased band. Treating that as covering the band is
+/// what lets a container's background step aside for its border instead of painting the band
+/// underneath it a second time.
+fn is_full_border_ring(quad: &Quad) -> bool {
+    quad.background.is_transparent()
+        && quad.border_color.a > 0.0
+        && quad.border_widths.top.0 > 0.0
+        && quad.border_widths.right.0 > 0.0
+        && quad.border_widths.bottom.0 > 0.0
+        && quad.border_widths.left.0 > 0.0
+}
+
+/// Whether the quad paints all of the outline's antialiased band: either its own region covers
+/// the whole outline, or it is a full border ring around it.
+fn owns_outline_band(quad: &Quad, outline: RoundedOutline) -> bool {
+    if !paints_anything(quad) {
+        return false;
+    }
+    (is_full_border_ring(quad)
+        && quad.bounds == outline.bounds
+        && quad.corner_radii == outline.radii)
+        || covers_outline(quad, outline)
+}
+
+/// Whether the quad puts anything on the screen. A transparent quad with no border still
+/// reaches the scene (the border-strip path emits one), and leaving an outline's band to a
+/// layer that paints nothing would leave a hole in it.
+fn paints_anything(quad: &Quad) -> bool {
+    if !quad.background.is_transparent() {
+        return true;
+    }
+    let widths = quad.border_widths;
+    quad.border_color.a > 0.0
+        && (widths.top.0 > 0.0 || widths.right.0 > 0.0 || widths.bottom.0 > 0.0 || widths.left.0 > 0.0)
+}
+
+/// Whether the quad's own painted region contains all of `outline`'s rounded region, so its
+/// coverage across the outline's band is at least the outline's own there.
+///
+/// Deliberately conservative in one direction only: a false negative leaves that band painted
+/// once per layer, which is the behaviour before this pass; a false positive would leave part
+/// of it unpainted.
+fn covers_outline(quad: &Quad, outline: RoundedOutline) -> bool {
+    let outer = outline.bounds;
+    // The quad's *effective* region, so a quad whose mask clips it to a slice of the outline is
+    // not mistaken for one that paints all of it.
+    let inner = effective_bounds(quad);
+    if inner.origin.x > outer.origin.x
+        || inner.origin.y > outer.origin.y
+        || inner.bottom_right().x < outer.bottom_right().x
+        || inner.bottom_right().y < outer.bottom_right().y
+    {
+        return false;
+    }
+    let radii = quad.corner_radii;
+    let square = radii.top_left.0 == 0.0
+        && radii.top_right.0 == 0.0
+        && radii.bottom_left.0 == 0.0
+        && radii.bottom_right.0 == 0.0;
+    if square {
+        // A plain rectangle contains every rounded rectangle inside it.
+        return true;
+    }
+    if inner == outer {
+        // The same rectangle: this quad's arcs reach at least as far out as the outline's when
+        // its radii are no larger, corner for corner.
+        return radii.top_left.0 <= outline.radii.top_left.0
+            && radii.top_right.0 <= outline.radii.top_right.0
+            && radii.bottom_left.0 <= outline.radii.bottom_left.0
+            && radii.bottom_right.0 <= outline.radii.bottom_right.0;
+    }
+    // A strictly larger rectangle: its arcs reach into the outline only if it is not grown past
+    // them on every side.
+    let pad = radii
+        .top_left
+        .0
+        .max(radii.top_right.0)
+        .max(radii.bottom_left.0)
+        .max(radii.bottom_right.0);
+    inner.origin.x <= ScaledPixels(outer.origin.x.0 - pad)
+        && inner.origin.y <= ScaledPixels(outer.origin.y.0 - pad)
+        && inner.bottom_right().x >= ScaledPixels(outer.bottom_right().x.0 + pad)
+        && inner.bottom_right().y >= ScaledPixels(outer.bottom_right().y.0 + pad)
 }
 
 #[derive(Debug, Copy, Clone)]

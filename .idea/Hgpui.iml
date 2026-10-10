@@ -26,6 +26,7 @@
       <sourceFolder url="file://$MODULE_DIR$/crates/gpui_windows/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/gpui_zed_util/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/tooling/perf/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/gpui/benches" isTestSource="true" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>
     <orderEntry type="inheritedJdk" />

@@ -395,7 +395,6 @@ pub(crate) struct LineLayoutCache {
     platform_text_system: Arc<dyn PlatformTextSystem>,
 }
 
-#[derive(Default)]
 struct FrameCache {
     lines: FxHashMap<Arc<CacheKey>, Arc<LineLayout>>,
     wrapped_lines: FxHashMap<Arc<CacheKey>, Arc<WrappedLineLayout>>,
@@ -412,6 +411,28 @@ struct FrameCache {
     wrapped_lines_by_hash: FxHashMap<Arc<HashedCacheKey>, Arc<WrappedLineLayout>>,
     used_lines_by_hash: Vec<Arc<HashedCacheKey>>,
     used_wrapped_lines_by_hash: Vec<Arc<HashedCacheKey>>,
+}
+
+impl FrameCache {
+    /// Create a new FrameCache with pre-allocated capacities to avoid rehashing during hot path.
+    fn new() -> Self {
+        Self {
+            lines: FxHashMap::with_capacity_and_hasher(1024, Default::default()),
+            wrapped_lines: FxHashMap::with_capacity_and_hasher(256, Default::default()),
+            used_lines: Vec::with_capacity(1024),
+            used_wrapped_lines: Vec::with_capacity(256),
+            lines_by_hash: FxHashMap::with_capacity_and_hasher(512, Default::default()),
+            wrapped_lines_by_hash: FxHashMap::with_capacity_and_hasher(128, Default::default()),
+            used_lines_by_hash: Vec::with_capacity(512),
+            used_wrapped_lines_by_hash: Vec::with_capacity(128),
+        }
+    }
+}
+
+impl Default for FrameCache {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[derive(Clone, Default)]

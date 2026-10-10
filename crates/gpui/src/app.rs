@@ -803,7 +803,7 @@ pub struct App {
     // We need to ensure the leak detector drops last, after all tasks, callbacks and things have been dropped.
     // Otherwise it may report false positives.
     #[cfg(any(test, feature = "leak-detection"))]
-    _ref_counts: Arc<RwLock<EntityRefCounts>>,
+    _ref_counts: Arc<EntityRefCounts>,
 }
 
 impl App {
@@ -891,8 +891,8 @@ impl App {
 
                 #[cfg(any(test, feature = "test-support", debug_assertions))]
                 name: None,
-                element_arena: RefCell::new(Arena::new(1024 * 1024)),
-                event_arena: Arena::new(1024 * 1024),
+                element_arena: RefCell::new(Arena::with_config(crate::DEFAULT_ARENA_CHUNK_SIZE, true)),
+                event_arena: Arena::new(crate::DEFAULT_ARENA_CHUNK_SIZE),
 
                 #[cfg(any(test, feature = "leak-detection"))]
                 _ref_counts,

@@ -3147,6 +3147,876 @@ mod tests {
         Ok(())
     }
 
+    // =====================================================================================
+    // Corner / antialiasing precision probe
+    // =====================================================================================
+
+    /// Supersampled analytic coverage of an axis-aligned rounded rect at a pixel centre.
+    /// `x`/`y` outside the rect return 0; the corner arcs are exact quarter circles.
+    fn analytic_rounded_coverage(
+        px: f32,
+        py: f32,
+        (x0, y0, x1, y1): (f32, f32, f32, f32),
+        radius: f32,
+    ) -> f32 {
+        const N: u32 = 16;
+        let mut hits = 0.0f32;
+        for i in 0..N {
+            for j in 0..N {
+                let x = px + (i as f32 + 0.5) / N as f32;
+                let y = py + (j as f32 + 0.5) / N as f32;
+                let cx = x.clamp(x0 + radius, x1 - radius);
+                let cy = y.clamp(y0 + radius, y1 - radius);
+                let (dx, dy) = (x - cx, y - cy);
+                if dx * dx + dy * dy <= radius * radius {
+                    hits += 1.0;
+                }
+            }
+        }
+        hits / (N * N) as f32
+    }
+
+    /// The shader's own coverage model, evaluated exactly the way `quad_fragment` does it: the
+    /// rounded-rect distance field at the pixel centre, its *central* difference across that
+    /// pixel (half a pixel either side, which is what the shader samples), and
+    /// `saturate(0.5 - d / |grad|)`. Identity transform, so one local unit is one pixel.
+    ///
+    /// If this stops matching what the GPU reads back, the shader and the model have diverged —
+    /// which is what tells a wrong formula apart from a wrong distance field.
+    fn shader_model_coverage(px: u32, py: u32, radius: f32, w: f32, h: f32) -> f32 {
+        let distance = |x: f32, y: f32| {
+            let (cx, cy) = (x - w / 2.0, y - h / 2.0);
+            let (qx, qy) = (cx.abs() - w / 2.0 + radius, cy.abs() - h / 2.0 + radius);
+            if radius == 0.0 {
+                qx.max(qy)
+            } else {
+                qx.max(0.0).hypot(qy.max(0.0)) + qx.max(qy).min(0.0) - radius
+            }
+        };
+        let (x, y) = (px as f32 + 0.5, py as f32 + 0.5);
+        let slope_x = distance(x + 0.5, y) - distance(x - 0.5, y);
+        let slope_y = distance(x, y + 0.5) - distance(x, y - 0.5);
+        let per_pixel = (slope_x * slope_x + slope_y * slope_y).sqrt().max(1e-6);
+        (0.5 - distance(x, y) / per_pixel).clamp(0.0, 1.0)
+    }
+
+    struct ProbeRig {
+        device: ID3D11Device,
+        context: ID3D11DeviceContext,
+        texture: ID3D11Texture2D,
+        rtv: ID3D11RenderTargetView,
+        staging: ID3D11Texture2D,
+        globals: ID3D11Buffer,
+        viewport: D3D11_VIEWPORT,
+        pipeline: PipelineState<Quad>,
+    }
+
+    impl ProbeRig {
+        fn new() -> Result<Option<Self>> {
+            let Some((device, context)) = create_warp_device() else {
+                return Ok(None);
+            };
+            let (texture, rtv, staging) = make_render_target(&device)?;
+            let globals_params = GlobalParams {
+                gamma_ratios: [1.0, 1.0, 1.0, 1.0],
+                viewport_size: [TEST_SIZE as f32, TEST_SIZE as f32],
+                grayscale_enhanced_contrast: 0.0,
+                subpixel_enhanced_contrast: 0.0,
+                is_bgr: 0,
+                _pad: [0; 3],
+            };
+            let globals = unsafe {
+                let desc = D3D11_BUFFER_DESC {
+                    ByteWidth: std::mem::size_of::<GlobalParams>() as u32,
+                    Usage: D3D11_USAGE_DYNAMIC,
+                    BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
+                    CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
+                    ..Default::default()
+                };
+                let mut buffer = None;
+                device.CreateBuffer(&desc, None, Some(&mut buffer))?;
+                buffer.unwrap()
+            };
+            update_buffer(&context, &globals, &[globals_params])?;
+            let blend = create_blend_state(&device)?;
+            let pipeline = PipelineState::<Quad>::new(
+                &device,
+                "test_corner_probe",
+                ShaderModule::Quad,
+                4,
+                blend,
+            )?;
+            let viewport = D3D11_VIEWPORT {
+                TopLeftX: 0.0,
+                TopLeftY: 0.0,
+                Width: TEST_SIZE as f32,
+                Height: TEST_SIZE as f32,
+                MinDepth: 0.0,
+                MaxDepth: 1.0,
+            };
+            Ok(Some(Self {
+                device,
+                context,
+                texture,
+                rtv,
+                staging,
+                globals,
+                viewport,
+                pipeline,
+            }))
+        }
+
+        /// Draws `quads` as one instanced draw onto a cleared target (`clear` is RGBA float
+        /// order — the B8G8R8A8 memory layout stores it as B,G,R,A).
+        fn draw(&mut self, quads: &[Quad], clear: [f32; 4]) -> Result<()> {
+            self.pipeline
+                .update_buffer(&self.device, &self.context, quads)?;
+            unsafe {
+                self.context.ClearRenderTargetView(&self.rtv, &clear);
+                self.context.OMSetRenderTargets(
+                    Some(slice::from_ref(&Some(self.rtv.clone()))),
+                    None,
+                );
+            }
+            self.pipeline.draw_range(
+                &self.device,
+                &self.context,
+                &[self.viewport],
+                &[Some(self.globals.clone())],
+                4,
+                0,
+                quads.len() as u32,
+            )?;
+            dump_device_errors(&self.device);
+            Ok(())
+        }
+
+        /// The green channel of a pixel, 0..=1. White fills make this the coverage.
+        fn coverage(&self, x: u32, y: u32) -> f32 {
+            self.pixel_byte(x, y) as f32 / 255.0
+        }
+
+        fn pixel_byte(&self, x: u32, y: u32) -> i32 {
+            let px = read_pixel(&self.context, &self.texture, &self.staging, x, y)
+                .unwrap_or_else(|err| panic!("readback of ({x}, {y}) failed: {err}"));
+            px[1] as i32
+        }
+    }
+
+    /// Renders the corner cases that used to go wrong and checks them against the analytic
+    /// coverage, a model of the shader's own formula, and two coverage invariants. The numbers
+    /// are printed so a failure says where the error is, not merely that there is one.
+    ///
+    /// What each section pins down:
+    /// - S1/S2: a rounded corner's arc, per radius, against the exact area coverage — and the
+    ///   same corner under stacked clipped layers, with and without the scene pass's
+    ///   `suppress_partial_coverage` flag.
+    /// - S3/S4: a straight edge's coverage under transforms, swept across a whole pixel. A
+    ///   correct one-pixel ramp always sums to exactly one pixel.
+    /// - S5: the rendered area under transforms, which is `w * h - (4 - pi) r^2` times the
+    ///   transform's determinant however the shape is rotated, skewed or scaled.
+    #[test]
+    fn hlsl_antialiasing_precision() -> Result<()> {
+        let Some(mut rig) = ProbeRig::new()? else {
+            eprintln!("[corner-probe] WARP device unavailable, skipping");
+            return Ok(());
+        };
+        let full_mask = ContentMask {
+            bounds: bounds(
+                point(ScaledPixels(0.0), ScaledPixels(0.0)),
+                size(ScaledPixels(64.0), ScaledPixels(64.0)),
+            ),
+            corner_radii: Corners::default(),
+        };
+        let full = bounds(
+            point(ScaledPixels(0.0), ScaledPixels(0.0)),
+            size(ScaledPixels(64.0), ScaledPixels(64.0)),
+        );
+        let uniform = |r: f32| Corners {
+            top_left: ScaledPixels(r),
+            top_right: ScaledPixels(r),
+            bottom_left: ScaledPixels(r),
+            bottom_right: ScaledPixels(r),
+        };
+
+        println!("\n=== S1: corner profile, identity, top-left 10x10 (measured / analytic) ===");
+        for radius in [2.0f32, 4.0, 8.0, 16.0] {
+            let quad = Quad {
+                bounds: full,
+                content_mask: full_mask.clone(),
+                background: Background::from(rgba(0xffffffff)),
+                corner_radii: uniform(radius),
+                ..Default::default()
+            };
+            rig.draw(&[quad], [0.0, 0.0, 0.0, 1.0])?;
+            println!("-- radius {radius} --");
+            let mut worst = (0.0f32, 0u32, 0u32);
+            for y in 0..10u32 {
+                let mut row = String::new();
+                for x in 0..10u32 {
+                    let m = rig.coverage(x, y);
+                    let a = analytic_rounded_coverage(
+                        x as f32,
+                        y as f32,
+                        (0.0, 0.0, 64.0, 64.0),
+                        radius,
+                    );
+                    let err = (m - a).abs();
+                    if err > worst.0 {
+                        worst = (err, x, y);
+                    }
+                    row.push_str(&format!("{:3}/{:3} ", (m * 255.0) as i32, (a * 255.0) as i32));
+                }
+                println!("y={y:2} {row}");
+            }
+            println!(
+                "   worst |measured-analytic| = {:.3} at ({}, {})",
+                worst.0, worst.1, worst.2
+            );
+            assert!(
+                worst.0 <= 0.09,
+                "radius {radius}: the corner is {:.3} off the analytic coverage at ({}, {})",
+                worst.0,
+                worst.1,
+                worst.2
+            );
+            println!("   per-pixel: measured / shader-model / analytic");
+            for y in 0..6u32 {
+                let mut row = String::new();
+                for x in 0..6u32 {
+                    let m = rig.coverage(x, y);
+                    let model = shader_model_coverage(x, y, radius, 64.0, 64.0);
+                    let a = analytic_rounded_coverage(
+                        x as f32,
+                        y as f32,
+                        (0.0, 0.0, 64.0, 64.0),
+                        radius,
+                    );
+                    row.push_str(&format!(
+                        "{:3}/{:3}/{:3} ",
+                        (m * 255.0) as i32,
+                        (model * 255.0).round() as i32,
+                        (a * 255.0) as i32
+                    ));
+                }
+                println!("   y={y} {row}");
+            }
+        }
+
+        // ---------------------------------------------------------------------------------
+        // S2: rounded clip with layering — a rounded parent plus a square child clipped by
+        // the parent's rounded mask. A single quad's own SDF is the ground truth for the same
+        // geometry, so any difference at the arc is the layering artefact.
+        // ---------------------------------------------------------------------------------
+        println!("\n=== S2: layered rounded clip, byte values on a 191-grey backdrop ===");
+        println!("(single quad = ground truth, `layered` = rounded parent + square child)");
+        let backdrop = [0.75, 0.75, 0.75, 1.0];
+        let fill = Background::from(rgba(0x404040ff));
+        let radius = 8.0f32;
+        let corner = bounds(
+            point(ScaledPixels(8.0), ScaledPixels(8.0)),
+            size(ScaledPixels(48.0), ScaledPixels(48.0)),
+        );
+        let rounded = Corners {
+            top_left: ScaledPixels(radius),
+            top_right: ScaledPixels(radius),
+            bottom_left: ScaledPixels(radius),
+            bottom_right: ScaledPixels(radius),
+        };
+        let plain_mask = ContentMask {
+            bounds: full,
+            corner_radii: Corners::default(),
+        };
+
+        let single = Quad {
+            bounds: corner,
+            content_mask: plain_mask.clone(),
+            background: fill,
+            corner_radii: rounded,
+            ..Default::default()
+        };
+        rig.draw(&[single.clone()], backdrop)?;
+        let single_grid = read_grid(&rig, 6, 6, 14);
+        print_grid("single", &single_grid);
+
+        let parent = single.clone();
+        let child = Quad {
+            bounds: corner,
+            content_mask: ContentMask {
+                bounds: corner,
+                corner_radii: rounded,
+            },
+            background: fill,
+            corner_radii: Corners::default(),
+            ..Default::default()
+        };
+        rig.draw(&[parent, child], backdrop)?;
+        let layered_grid = read_grid(&rig, 6, 6, 14);
+        print_grid("layered", &layered_grid);
+        print_delta_grid("layered - single", &single_grid, &layered_grid);
+
+        // Same, but the child *is* rounded with the parent's radius, so the child's own SDF
+        // and the clip describe the same arc (the `mask_matches_own` skip does not apply
+        // because the child's corner_radii were substituted for the mask's).
+        let rounded_child = Quad {
+            corner_radii: rounded,
+            ..child.clone()
+        };
+        rig.draw(&[parent.clone(), rounded_child], backdrop)?;
+        let rounded_child_grid = read_grid(&rig, 6, 6, 14);
+        print_grid("layered-round", &rounded_child_grid);
+        print_delta_grid("layered-round - single", &single_grid, &rounded_child_grid);
+
+        // What the scene pass produces for the same two layers: the container's background is
+        // flagged to paint only its fully covered interior, leaving the outline's band to the
+        // child. The result must match a single layer's arc.
+        let collapsed_parent = Quad {
+            suppress_partial_coverage: 1,
+            ..parent.clone()
+        };
+        rig.draw(&[collapsed_parent, child.clone()], backdrop)?;
+        let collapsed_grid = read_grid(&rig, 6, 6, 14);
+        print_grid("layered, collapsed", &collapsed_grid);
+        print_delta_grid("collapsed - single", &single_grid, &collapsed_grid);
+        // Within a level: the two paths derive the field's gradient from different samples, so
+        // they can land a single step apart on the arc.
+        for (collapsed_row, single_row) in collapsed_grid.iter().zip(&single_grid) {
+            for (collapsed, single) in collapsed_row.iter().zip(single_row) {
+                assert!(
+                    (collapsed - single).abs() <= 1,
+                    "the collapsed stack must reproduce a single layer's arc \
+                     (got {collapsed}, want {single})"
+                );
+            }
+        }
+
+        // The same comparison across radii: small radii keep all of the corner's curvature in
+        // two or three partial pixels, so flattening those into a hard step is what makes a
+        // small radius read as a straight diagonal.
+        println!("\n-- corner arc profile by radius (row y=8, x=8..15 | column x=8, y=8..15) --");
+        for r in [2.0f32, 3.0, 4.0, 6.0, 12.0] {
+            let radii = Corners {
+                top_left: ScaledPixels(r),
+                top_right: ScaledPixels(r),
+                bottom_left: ScaledPixels(r),
+                bottom_right: ScaledPixels(r),
+            };
+            let lone = Quad {
+                corner_radii: radii,
+                ..single.clone()
+            };
+            rig.draw(&[lone], backdrop)?;
+            let row_single: Vec<i32> = (8..16u32).map(|x| rig.pixel_byte(x, 8)).collect();
+            let col_single: Vec<i32> = (8..16u32).map(|y| rig.pixel_byte(8, y)).collect();
+
+            let p = Quad {
+                corner_radii: radii,
+                ..single.clone()
+            };
+            let c = Quad {
+                corner_radii: radii,
+                content_mask: ContentMask {
+                    bounds: corner,
+                    corner_radii: radii,
+                },
+                ..single.clone()
+            };
+            rig.draw(&[p, c], backdrop)?;
+            let row_layered: Vec<i32> = (8..16u32).map(|x| rig.pixel_byte(x, 8)).collect();
+            let col_layered: Vec<i32> = (8..16u32).map(|y| rig.pixel_byte(8, y)).collect();
+
+            let fmt = |v: &[i32]| {
+                v.iter()
+                    .map(|n| format!("{n:5}"))
+                    .collect::<String>()
+            };
+            println!("radius {r:>4}");
+            println!("   row  single  {}", fmt(&row_single));
+            println!("   row  layered {}", fmt(&row_layered));
+            println!("   col  single  {}", fmt(&col_single));
+            println!("   col  layered {}", fmt(&col_layered));
+
+            // Stacking depth: each additional clipped layer re-applies the same arc coverage,
+            // so the partial pixels compound towards the fill (1-(1-c)^n instead of c). The
+            // `collapsed` row is the same stack with the scene pass's flag on every layer but
+            // the topmost — which is what `Scene::collapse_covered_outlines` produces.
+            for depth in [2usize, 3, 4] {
+                let layers = |suppress_below: bool| -> Vec<Quad> {
+                    (0..depth)
+                        .map(|i| Quad {
+                            corner_radii: if i == 0 { radii } else { Corners::default() },
+                            suppress_partial_coverage: if suppress_below && i + 1 < depth {
+                                1
+                            } else {
+                                0
+                            },
+                            content_mask: ContentMask {
+                                bounds: corner,
+                                corner_radii: radii,
+                            },
+                            ..single.clone()
+                        })
+                        .collect()
+                };
+                rig.draw(&layers(false), backdrop)?;
+                let row: Vec<i32> = (8..16u32).map(|x| rig.pixel_byte(x, 8)).collect();
+                println!("   row  n={depth}     {}", fmt(&row));
+                rig.draw(&layers(true), backdrop)?;
+                let row: Vec<i32> = (8..16u32).map(|x| rig.pixel_byte(x, 8)).collect();
+                println!("   row  n={depth} coll {}", fmt(&row));
+            }
+        }
+
+        // ---------------------------------------------------------------------------------
+        // S2b: the same corner with a border. `paint_quad` splits a border-only quad into four
+        // strips, and the scene pass must leave each strip its own stretch of the band while the
+        // fill gives up the whole of it — otherwise the strips suppress each other and bite
+        // notches out of the corners.
+        // ---------------------------------------------------------------------------------
+        println!("\n=== S2b: bordered rounded box — fill (suppressed) + four border strips ===");
+        let widths = Edges {
+            top: ScaledPixels(4.0),
+            right: ScaledPixels(4.0),
+            bottom: ScaledPixels(4.0),
+            left: ScaledPixels(4.0),
+        };
+        let strip_masks = |side: usize| {
+            // Mirrors `Window::paint_quad`'s strip split for a 48x48 quad with 4px borders and
+            // an 8px radius: the inset is the border width, or the radius, whichever is larger,
+            // plus one pixel of antialiasing slack.
+            let (x0, y0, x1, y1) = (8.0, 8.0, 56.0, 56.0);
+            let (ix0, iy0, ix1, iy1) = (x0 + 5.0, y0 + 9.0, x1 - 5.0, y1 - 9.0);
+            let (ax0, ay0, ax1, ay1) = match side {
+                0 => (x0, y0, x1, iy0),
+                1 => (x0, iy1, x1, y1),
+                2 => (x0, iy0, ix0, iy1),
+                _ => (ix1, iy0, x1, iy1),
+            };
+            ContentMask {
+                bounds: bounds(
+                    point(ScaledPixels(ax0), ScaledPixels(ay0)),
+                    size(ScaledPixels(ax1 - ax0), ScaledPixels(ay1 - ay0)),
+                ),
+                corner_radii: Corners::default(),
+            }
+        };
+        let bordered_single = Quad {
+            suppress_partial_coverage: 0,
+            ..single.clone()
+        };
+        rig.draw(&[bordered_single], backdrop)?;
+        let border_reference = read_grid(&rig, 6, 6, 14);
+
+        let bordered_fill = Quad {
+            suppress_partial_coverage: 1,
+            ..single.clone()
+        };
+        let strips: Vec<Quad> = (0..4)
+            .map(|side| Quad {
+                content_mask: strip_masks(side),
+                background: Background::from(transparent_black()),
+                border_color: hgpui::rgb_to_hsla(rgba(0x404040ff)).into(),
+                border_widths: widths,
+                ..single.clone()
+            })
+            .collect();
+        rig.draw(&[bordered_fill.clone()], backdrop)?;
+        print_grid("bordered: fill only (suppressed)", &read_grid(&rig, 6, 6, 14));
+        rig.draw(&strips, backdrop)?;
+        print_grid("bordered: strips only", &read_grid(&rig, 6, 6, 14));
+        let mut bordered: Vec<Quad> = vec![bordered_fill];
+        bordered.extend(strips);
+        rig.draw(&bordered, backdrop)?;
+        let border_grid = read_grid(&rig, 6, 6, 14);
+        print_grid("bordered (fill + strips)", &border_grid);
+        print_delta_grid("bordered - single", &border_reference, &border_grid);
+        // Not byte-exact: the fill's band is left to the strips, which reach the arc through the
+        // border ring's own coverage, and that differs from the fill's by a few levels on two or
+        // three arc pixels. What this guards is the band being left *unpainted* — the strip
+        // suppression bug — which shows up as a gap of tens of levels, not five.
+        for (bordered_row, single_row) in border_grid.iter().zip(&border_reference) {
+            for (bordered, single) in bordered_row.iter().zip(single_row) {
+                assert!(
+                    (bordered - single).abs() <= 6,
+                    "a bordered rounded box must paint the same shape as a single layer \
+                     (got {bordered}, want {single})"
+                );
+            }
+        }
+
+        // ---------------------------------------------------------------------------------
+        // S2c: the IshiTone close button. A gold quad whose *only* rounded corner is the
+        // top-right one and whose *only* border is a 1px bottom border (black at 30%) — which is
+        // what `.rounded_tr(r)` + `.border_b(px(1.))` + `.border_color(rgba(0x4D))` produce.
+        // ---------------------------------------------------------------------------------
+        println!("\n=== S2c: rounded_tr + bottom-only border (the IshiTone close button) ===");
+        let white = [1.0, 1.0, 1.0, 1.0];
+        let gold = Background::from(rgba(0xd6a60dff));
+        let tr_only = Corners {
+            top_left: ScaledPixels(0.0),
+            top_right: ScaledPixels(7.0),
+            bottom_right: ScaledPixels(0.0),
+            bottom_left: ScaledPixels(0.0),
+        };
+        let bottom_only = Edges {
+            top: ScaledPixels(0.0),
+            right: ScaledPixels(0.0),
+            bottom: ScaledPixels(1.0),
+            left: ScaledPixels(0.0),
+        };
+        let button_bounds = bounds(
+            point(ScaledPixels(8.0), ScaledPixels(10.0)),
+            size(ScaledPixels(40.0), ScaledPixels(40.0)),
+        );
+        let button = Quad {
+            bounds: button_bounds,
+            content_mask: plain_mask.clone(),
+            background: gold,
+            corner_radii: tr_only,
+            border_widths: bottom_only,
+            border_color: hgpui::rgb_to_hsla(rgba(0x0000004d)).into(),
+            ..Default::default()
+        };
+        rig.draw(&[button.clone()], white)?;
+        println!("-- button: no border, radius 7 (reference) --");
+        let bare = Quad {
+            border_widths: Edges::default(),
+            ..button.clone()
+        };
+        rig.draw(&[bare], white)?;
+        for y in 8..21u32 {
+            let mut row = String::new();
+            for x in 40..52u32 {
+                let px = read_pixel(&rig.context, &rig.texture, &rig.staging, x, y).unwrap();
+                row.push_str(&format!("{:02X}{:02X}{:02X} ", px[2], px[1], px[0]));
+            }
+            println!("   y={y:2} {row}");
+        }
+        println!("-- button: 1px bottom border, black@30% --");
+        rig.draw(&[button], white)?;
+        for y in 8..21u32 {
+            let mut row = String::new();
+            for x in 40..52u32 {
+                let px = read_pixel(&rig.context, &rig.texture, &rig.staging, x, y).unwrap();
+                row.push_str(&format!("{:02X}{:02X}{:02X} ", px[2], px[1], px[0]));
+            }
+            println!("   y={y:2} {row}");
+        }
+
+        // ---------------------------------------------------------------------------------
+        // S2d: IshiTone's window corner. A dark backdrop (the parallax background image) fills
+        // the window and is clipped by the window's rounded(8) mask; the close button — gold,
+        // `rounded_tr(windowRadius)`, flush with that same corner — sits on top of it.
+        // ---------------------------------------------------------------------------------
+        println!("\n=== S2d: window corner — dark backdrop + flush rounded_tr button ===");
+        let root = bounds(
+            point(ScaledPixels(8.0), ScaledPixels(10.0)),
+            size(ScaledPixels(40.0), ScaledPixels(40.0)),
+        );
+        let root_radius = 8.0f32;
+        let window_mask = ContentMask {
+            bounds: root,
+            corner_radii: Corners {
+                top_left: ScaledPixels(root_radius),
+                top_right: ScaledPixels(root_radius),
+                bottom_right: ScaledPixels(root_radius),
+                bottom_left: ScaledPixels(root_radius),
+            },
+        };
+        // The background image, as the renderer sees it: an unrounded quad filling the root,
+        // clipped by the root's rounded mask, wearing the image's top-right foliage colour.
+        let image_quad = Quad {
+            bounds: root,
+            content_mask: window_mask.clone(),
+            background: Background::from(rgba(0x283828ff)),
+            corner_radii: Corners::default(),
+            ..Default::default()
+        };
+        let close_button = Quad {
+            bounds: bounds(
+                point(ScaledPixels(37.0), ScaledPixels(10.0)),
+                size(ScaledPixels(11.0), ScaledPixels(11.0)),
+            ),
+            content_mask: window_mask.clone(),
+            background: Background::from(rgba(0xd6a60dff)),
+            corner_radii: Corners {
+                top_left: ScaledPixels(0.0),
+                top_right: ScaledPixels(root_radius),
+                bottom_right: ScaledPixels(0.0),
+                bottom_left: ScaledPixels(0.0),
+            },
+            ..Default::default()
+        };
+        rig.draw(&[image_quad.clone()], white)?;
+        println!("-- backdrop only (clipped by the rounded mask) --");
+        for y in 8..16u32 {
+            let mut row = String::new();
+            for x in 40..52u32 {
+                let px = read_pixel(&rig.context, &rig.texture, &rig.staging, x, y).unwrap();
+                row.push_str(&format!("{:02X}{:02X}{:02X} ", px[2], px[1], px[0]));
+            }
+            println!("   y={y:2} {row}");
+        }
+        for radius in [8.0f32, 10.0, 6.0] {
+            let button = Quad {
+                corner_radii: Corners {
+                    top_left: ScaledPixels(0.0),
+                    top_right: ScaledPixels(radius),
+                    bottom_right: ScaledPixels(0.0),
+                    bottom_left: ScaledPixels(0.0),
+                },
+                ..close_button.clone()
+            };
+            rig.draw(&[image_quad.clone(), button], white)?;
+            println!("-- backdrop + flush button,  button radius {radius} (root is 8) --");
+            for y in 8..16u32 {
+                let mut row = String::new();
+                for x in 40..52u32 {
+                    let px = read_pixel(&rig.context, &rig.texture, &rig.staging, x, y).unwrap();
+                    row.push_str(&format!("{:02X}{:02X}{:02X} ", px[2], px[1], px[0]));
+                }
+                println!("   y={y:2} {row}");
+            }
+        }
+
+        // ---------------------------------------------------------------------------------
+        // S3: how wide is a straight edge's coverage ramp under a transform? A correct
+        // one-pixel ramp shows exactly one partial pixel; a wider or narrower ramp shows up
+        // as extra partial pixels (blur) or none at all (aliasing).
+        // ---------------------------------------------------------------------------------
+        println!("\n=== S3: straight-edge AA ramp under transforms ===");
+        println!("(ideal: exactly one partial pixel per edge; 191 = backdrop, 64 = fill)");
+        let center = point(ScaledPixels(32.0), ScaledPixels(32.0));
+        let pivot = |m: TransformationMatrix| {
+            TransformationMatrix::unit()
+                .translate(center)
+                .compose(m)
+                .translate(point(ScaledPixels(-32.0), ScaledPixels(-32.0)))
+        };
+        // A narrow bar whose left edge lands at x = 28.25 (untransformed) and whose top edge
+        // lands at y = 8.0. The scan crosses the *left* edge (x 24..34 at mid height) and the
+        // *top* edge (y 4..14 at mid width).
+        let bar = |transform: TransformationMatrix, radii: Corners<ScaledPixels>| Quad {
+            bounds: bounds(
+                point(ScaledPixels(28.25), ScaledPixels(8.0)),
+                size(ScaledPixels(8.0), ScaledPixels(48.0)),
+            ),
+            content_mask: plain_mask.clone(),
+            background: fill,
+            corner_radii: radii,
+            transformation: transform,
+            ..Default::default()
+        };
+        let sharp: Corners<ScaledPixels> = Corners::default();
+        let soft: Corners<ScaledPixels> = Corners {
+            top_left: ScaledPixels(3.0),
+            top_right: ScaledPixels(3.0),
+            bottom_left: ScaledPixels(3.0),
+            bottom_right: ScaledPixels(3.0),
+        };
+        for (label, transform) in [
+            ("identity", TransformationMatrix::unit()),
+            ("translate(0.5,0)", TransformationMatrix::unit().translate(point(
+                ScaledPixels(0.5),
+                ScaledPixels(0.0),
+            ))),
+            ("scale(2,2)", pivot(TransformationMatrix::unit().scale(size(2.0, 2.0)))),
+            ("scale(6,1)", pivot(TransformationMatrix::unit().scale(size(6.0, 1.0)))),
+            ("scale(1,6)", pivot(TransformationMatrix::unit().scale(size(1.0, 6.0)))),
+            ("rotate(30)", pivot(TransformationMatrix::unit().rotate(hgpui::radians(0.5236)))),
+        ] {
+            for (kind, radii) in [("unrounded(fast path)", sharp), ("radius 3(sdf path)", soft)] {
+                rig.draw(&[bar(transform, radii)], backdrop)?;
+                let row: Vec<String> = (24..35u32)
+                    .map(|x| format!("{:4}", rig.pixel_byte(x, 32)))
+                    .collect();
+                let col: Vec<String> = (4..15u32)
+                    .map(|y| format!("{:4}", rig.pixel_byte(52, y)))
+                    .collect();
+                println!("-- {label} / {kind} --");
+                println!("   left  edge, y=32, x=24..34: {}", row.join(""));
+                println!("   top   edge, x=52, y= 4..14: {}", col.join(""));
+            }
+        }
+
+        // A correct antialiased edge conserves coverage: the two pixels straddling the edge
+        // always sum to exactly one pixel of fill, whatever the sub-pixel offset. The edge
+        // here is the quad's own straight left edge, swept across a whole pixel in 0.1 steps.
+        // A 1px border in the fill colour keeps the SDF path live (the no-AA fast path is
+        // skipped once a border is present), so this measures the SDF AA, not the fast path.
+        println!("\n=== S4: sub-pixel edge sweep — summed coverage of the two edge pixels ===");
+        println!("(1.000 everywhere is the correct answer; 1px border in the fill colour)");
+        let one_px = Edges {
+            top: ScaledPixels(1.0),
+            right: ScaledPixels(1.0),
+            bottom: ScaledPixels(1.0),
+            left: ScaledPixels(1.0),
+        };
+        for (label, radius, borders) in [
+            ("radius 3, 1px border", soft, one_px),
+            ("radius 3, no border ", soft, Edges::default()),
+        ] {
+            let mut line = String::new();
+            let mut sums = Vec::new();
+            for step in 0..10 {
+                let offset = step as f32 / 10.0;
+                let quad = Quad {
+                    bounds: bounds(
+                        point(ScaledPixels(28.0 + offset), ScaledPixels(8.0)),
+                        size(ScaledPixels(8.0), ScaledPixels(48.0)),
+                    ),
+                    content_mask: plain_mask.clone(),
+                    background: fill,
+                    border_color: hgpui::rgb_to_hsla(rgba(0x404040ff)).into(),
+                    border_widths: borders,
+                    corner_radii: radius,
+                    ..Default::default()
+                };
+                rig.draw(&[quad], backdrop)?;
+                // Pixels 27..29 straddle the swept edge; convert each byte back to coverage.
+                let sum: f32 = (26..30u32)
+                    .map(|x| {
+                        let byte = rig.pixel_byte(x, 32) as f32;
+                        (191.0 - byte) / 127.0
+                    })
+                    .sum();
+                sums.push(sum);
+                line.push_str(&format!("{sum:6.3}"));
+            }
+            println!("   {label}  offsets 0.0..0.9:{line}");
+            for (step, sum) in sums.iter().enumerate() {
+                let ideal = 2.0 - step as f32 / 10.0;
+                assert!(
+                    (sum - ideal).abs() <= 0.01,
+                    "{label}: the edge at sub-pixel offset {step} covers {sum:.3} pixels, \
+                     not {ideal:.3} — an antialiased edge has to conserve coverage"
+                );
+            }
+        }
+
+        // A transform must not change how much of the screen the shape covers. Summing the
+        // coverage of the whole target gives the shape's rendered area, which is invariant:
+        // 4x12 = 48 px² here, whatever the transform. Any drift is antialiasing that lost (or
+        // invented) fractional coverage.
+        println!("\n=== S5: rendered area under transforms ===");
+        println!("(ideal = (48 - (4 - pi) r^2) * |det|: the corner arcs cut a quarter circle) ");
+        let tiny_radius: Corners<ScaledPixels> = Corners {
+            top_left: ScaledPixels(1.0),
+            top_right: ScaledPixels(1.0),
+            bottom_left: ScaledPixels(1.0),
+            bottom_right: ScaledPixels(1.0),
+        };
+        let total = |rig: &ProbeRig| -> f32 {
+            let mut sum = 0.0f32;
+            for y in 0..TEST_SIZE {
+                for x in 0..TEST_SIZE {
+                    sum += (191.0 - rig.pixel_byte(x, y) as f32) / 127.0;
+                }
+            }
+            sum
+        };
+        let tiny = bounds(
+            point(ScaledPixels(30.0), ScaledPixels(26.0)),
+            size(ScaledPixels(4.0), ScaledPixels(12.0)),
+        );
+        for (label, transform) in [
+            ("identity      ", TransformationMatrix::unit()),
+            (
+                "translate(.37) ",
+                TransformationMatrix::unit().translate(point(ScaledPixels(0.37), ScaledPixels(0.11))),
+            ),
+            ("scale(2,2)    ", pivot(TransformationMatrix::unit().scale(size(2.0, 2.0)))),
+            ("scale(6,1)    ", pivot(TransformationMatrix::unit().scale(size(6.0, 1.0)))),
+            ("scale(1,4)    ", pivot(TransformationMatrix::unit().scale(size(1.0, 4.0)))),
+            ("rotate(30)    ", pivot(TransformationMatrix::unit().rotate(hgpui::radians(0.5236)))),
+            ("skewX(0.4)    ", pivot(TransformationMatrix {
+                rotation_scale: [[1.0, 0.4], [0.0, 1.0]],
+                translation: [0.0, 0.0],
+            })),
+        ] {
+            let m = transform.rotation_scale;
+            let det = (m[0][0] * m[1][1] - m[0][1] * m[1][0]).abs();
+            for (kind, borders, radii) in [
+                ("no border   ", Edges::default(), sharp),
+                ("1px border  ", one_px, tiny_radius),
+                ("radius 1    ", Edges::default(), tiny_radius),
+            ] {
+                let quad = Quad {
+                    bounds: tiny,
+                    content_mask: plain_mask.clone(),
+                    background: fill,
+                    border_color: hgpui::rgb_to_hsla(rgba(0x404040ff)).into(),
+                    border_widths: borders,
+                    corner_radii: radii,
+                    transformation: transform,
+                    ..Default::default()
+                };
+                rig.draw(&[quad], backdrop)?;
+                let area = total(&rig);
+                let radius = small_radius_of(radii);
+                // Each corner's arc removes a quarter of the `(2r)^2` corner square, i.e.
+                // `(4 - pi) r^2` over the four of them, and the transform scales the whole area
+                // by its determinant.
+                let ideal = (48.0 - (4.0 - std::f32::consts::PI) * radius * radius) * det;
+                println!(
+                    "   {label} / {kind} area = {area:7.3}  (ideal {ideal:7.3}, error {:+7.3})",
+                    area - ideal
+                );
+                assert!(
+                    (area - ideal).abs() <= 1.5 + 0.001 * ideal,
+                    "{label} / {kind}: rendered {area:.3} px^2 against an ideal {ideal:.3}"
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    /// The radius the `S5` probe used for a corner set (all four are equal there).
+    fn small_radius_of(radii: Corners<ScaledPixels>) -> f32 {
+        radii.top_left.0
+    }
+
+    /// Reads a `w`x`h` block of the target, in bytes, as rows of integers.
+    fn read_grid(rig: &ProbeRig, x: u32, y: u32, extent: u32) -> Vec<Vec<i32>> {
+        (0..extent)
+            .map(|row| {
+                (0..extent)
+                    .map(|col| rig.pixel_byte(x + col, y + row))
+                    .collect()
+            })
+            .collect()
+    }
+
+    fn print_grid(label: &str, grid: &[Vec<i32>]) {
+        println!("-- {label} --");
+        for (y, row) in grid.iter().enumerate() {
+            let cells: Vec<String> = row.iter().map(|v| format!("{v:4}")).collect();
+            println!("y={y:2} {}", cells.join(""));
+        }
+    }
+
+    fn print_delta_grid(label: &str, a: &[Vec<i32>], b: &[Vec<i32>]) {
+        let mut worst = (0i32, 0usize, 0usize);
+        for (y, row) in b.iter().enumerate() {
+            for (x, value) in row.iter().enumerate() {
+                let d = value - a[y][x];
+                if d.abs() > worst.0.abs() {
+                    worst = (d, x, y);
+                }
+            }
+        }
+        println!("-- {label} -- (worst {:+} at ({}, {}))", worst.0, worst.1, worst.2);
+        for (y, row) in b.iter().enumerate() {
+            let cells: Vec<String> = row
+                .iter()
+                .enumerate()
+                .map(|(x, value)| format!("{:4}", value - a[y][x]))
+                .collect();
+            println!("y={y:2} {}", cells.join(""));
+        }
+    }
+
     /// The checkerboard pattern must antialias its cell edges: with the pattern offset by half
     /// a cell, every vertical cell boundary sits on a pixel center, so a row scan across the
     /// boundary must contain blended pixels instead of a binary on/off staircase.

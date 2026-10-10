@@ -2,7 +2,7 @@ use crate::{App, AppContext, GpuiBorrow, VisualContext, Window, seal::Sealed};
 use anyhow::{Context as _, Result};
 use collections::FxHashSet;
 use derive_more::{Deref, DerefMut};
-use parking_lot::{RwLock, RwLockUpgradableReadGuard};
+use parking_lot::Mutex;
 use slotmap::{KeyData, SecondaryMap, SlotMap};
 use std::{
     any::{Any, TypeId, type_name},
@@ -56,15 +56,16 @@ impl Display for EntityId {
 pub(crate) struct EntityMap {
     entities: SecondaryMap<EntityId, Box<dyn Any>>,
     pub accessed_entities: RefCell<FxHashSet<EntityId>>,
-    ref_counts: Arc<RwLock<EntityRefCounts>>,
+    ref_counts: Arc<EntityRefCounts>,
 }
 
 #[doc(hidden)]
 pub(crate) struct EntityRefCounts {
-    counts: SlotMap<EntityId, AtomicUsize>,
-    dropped_entity_ids: Vec<EntityId>,
+    // SlotMap with atomic refcounts - lock-free reads, Mutex only for structural changes
+    counts: Mutex<SlotMap<EntityId, AtomicUsize>>,
+    dropped_entity_ids: Mutex<Vec<EntityId>>,
     #[cfg(any(test, feature = "leak-detection"))]
-    leak_detector: LeakDetector,
+    leak_detector: Mutex<LeakDetector>,
 }
 
 impl EntityMap {
@@ -72,20 +73,20 @@ impl EntityMap {
         Self {
             entities: SecondaryMap::new(),
             accessed_entities: RefCell::new(FxHashSet::default()),
-            ref_counts: Arc::new(RwLock::new(EntityRefCounts {
-                counts: SlotMap::with_key(),
-                dropped_entity_ids: Vec::new(),
+            ref_counts: Arc::new(EntityRefCounts {
+                counts: Mutex::new(SlotMap::with_key()),
+                dropped_entity_ids: Mutex::new(Vec::new()),
                 #[cfg(any(test, feature = "leak-detection"))]
-                leak_detector: LeakDetector {
+                leak_detector: Mutex::new(LeakDetector {
                     next_handle_id: 0,
                     entity_handles: HashMap::default(),
-                },
-            })),
+                }),
+            }),
         }
     }
 
     #[doc(hidden)]
-    pub fn ref_counts_drop_handle(&self) -> Arc<RwLock<EntityRefCounts>> {
+    pub fn ref_counts_drop_handle(&self) -> Arc<EntityRefCounts> {
         self.ref_counts.clone()
     }
 
@@ -96,7 +97,7 @@ impl EntityMap {
     /// entities created after the snapshot are still alive.
     #[cfg(any(test, feature = "leak-detection"))]
     pub fn leak_detector_snapshot(&self) -> LeakDetectorSnapshot {
-        self.ref_counts.read().leak_detector.snapshot()
+        self.ref_counts.leak_detector.lock().snapshot()
     }
 
     /// Asserts that no entities created after `snapshot` still have alive handles.
@@ -104,15 +105,12 @@ impl EntityMap {
     /// See [`LeakDetector::assert_no_new_leaks`] for details.
     #[cfg(any(test, feature = "leak-detection"))]
     pub fn assert_no_new_leaks(&self, snapshot: &LeakDetectorSnapshot) {
-        self.ref_counts
-            .read()
-            .leak_detector
-            .assert_no_new_leaks(snapshot)
+        self.ref_counts.leak_detector.lock().assert_no_new_leaks(snapshot)
     }
 
     /// Reserve a slot for an entity, which you can subsequently use with `insert`.
     pub fn reserve<T: 'static>(&self) -> Slot<T> {
-        let id = self.ref_counts.write().counts.insert(1.into());
+        let id = self.ref_counts.counts.lock().insert(1.into());
         Slot(Entity::new(id, Arc::downgrade(&self.ref_counts)))
     }
 
@@ -182,13 +180,14 @@ impl EntityMap {
     }
 
     pub fn take_dropped(&mut self) -> Vec<(EntityId, Box<dyn Any>)> {
-        let mut ref_counts = &mut *self.ref_counts.write();
-        let dropped_entity_ids = ref_counts.dropped_entity_ids.drain(..);
+        let mut dropped_entity_ids = self.ref_counts.dropped_entity_ids.lock();
+        let dropped_entity_ids = dropped_entity_ids.drain(..);
         let mut accessed_entities = self.accessed_entities.get_mut();
+        let mut counts = self.ref_counts.counts.lock();
 
         dropped_entity_ids
             .filter_map(|entity_id| {
-                let count = ref_counts.counts.remove(entity_id).unwrap();
+                let count = counts.remove(entity_id).unwrap();
                 debug_assert_eq!(
                     count.load(SeqCst),
                     0,
@@ -246,7 +245,7 @@ pub(crate) struct Slot<T>(Entity<T>);
 pub struct AnyEntity {
     pub(crate) entity_id: EntityId,
     pub(crate) entity_type: TypeId,
-    entity_map: Weak<RwLock<EntityRefCounts>>,
+    entity_map: Weak<EntityRefCounts>,
     #[cfg(any(test, feature = "leak-detection"))]
     handle_id: HandleId,
 }
@@ -255,7 +254,7 @@ impl AnyEntity {
     fn new(
         id: EntityId,
         entity_type: TypeId,
-        entity_map: Weak<RwLock<EntityRefCounts>>,
+        entity_map: Weak<EntityRefCounts>,
         #[cfg(any(test, feature = "leak-detection"))] type_name: &'static str,
     ) -> Self {
         Self {
@@ -266,8 +265,8 @@ impl AnyEntity {
                 .clone()
                 .upgrade()
                 .unwrap()
-                .write()
                 .leak_detector
+                .lock()
                 .handle_created(id, Some(type_name)),
             entity_map,
         }
@@ -311,9 +310,8 @@ impl AnyEntity {
 impl Clone for AnyEntity {
     fn clone(&self) -> Self {
         if let Some(entity_map) = self.entity_map.upgrade() {
-            let entity_map = entity_map.read();
-            let count = entity_map
-                .counts
+            let counts = entity_map.counts.lock();
+            let count = counts
                 .get(self.entity_id)
                 .expect("detected over-release of a entity");
             let prev_count = count.fetch_add(1, SeqCst);
@@ -329,8 +327,8 @@ impl Clone for AnyEntity {
                 .entity_map
                 .upgrade()
                 .unwrap()
-                .write()
                 .leak_detector
+                .lock()
                 .handle_created(self.entity_id, None),
         }
     }
@@ -339,26 +337,21 @@ impl Clone for AnyEntity {
 impl Drop for AnyEntity {
     fn drop(&mut self) {
         if let Some(entity_map) = self.entity_map.upgrade() {
-            let entity_map = entity_map.upgradable_read();
-            let count = entity_map
-                .counts
+            let counts = entity_map.counts.lock();
+            let count = counts
                 .get(self.entity_id)
                 .expect("detected over-release of a handle.");
             let prev_count = count.fetch_sub(1, SeqCst);
             assert_ne!(prev_count, 0, "Detected over-release of a entity.");
             if prev_count == 1 {
                 // We were the last reference to this entity, so we can remove it.
-                let mut entity_map = RwLockUpgradableReadGuard::upgrade(entity_map);
-                entity_map.dropped_entity_ids.push(self.entity_id);
+                entity_map.dropped_entity_ids.lock().push(self.entity_id);
             }
         }
 
         #[cfg(any(test, feature = "leak-detection"))]
         if let Some(entity_map) = self.entity_map.upgrade() {
-            entity_map
-                .write()
-                .leak_detector
-                .handle_released(self.entity_id, self.handle_id)
+            entity_map.leak_detector.lock().handle_released(self.entity_id, self.handle_id)
         }
     }
 }
@@ -422,7 +415,7 @@ impl<T> Sealed for Entity<T> {}
 
 impl<T: 'static> Entity<T> {
     #[inline]
-    fn new(id: EntityId, entity_map: Weak<RwLock<EntityRefCounts>>) -> Self
+    fn new(id: EntityId, entity_map: Weak<EntityRefCounts>) -> Self
     where
         T: 'static,
     {
@@ -569,7 +562,7 @@ impl<T: 'static> PartialOrd for Entity<T> {
 pub struct AnyWeakEntity {
     pub(crate) entity_id: EntityId,
     entity_type: TypeId,
-    entity_ref_counts: Weak<RwLock<EntityRefCounts>>,
+    entity_ref_counts: Weak<EntityRefCounts>,
 }
 
 impl AnyWeakEntity {
@@ -584,22 +577,22 @@ impl AnyWeakEntity {
         let ref_count = self
             .entity_ref_counts
             .upgrade()
-            .and_then(|ref_counts| Some(ref_counts.read().counts.get(self.entity_id)?.load(SeqCst)))
+            .and_then(|ref_counts| Some(ref_counts.counts.lock().get(self.entity_id)?.load(SeqCst)))
             .unwrap_or(0);
         ref_count > 0
     }
 
     /// Upgrade this weak entity reference to a strong reference.
     pub fn upgrade(&self) -> Option<AnyEntity> {
-        let ref_counts = &self.entity_ref_counts.upgrade()?;
-        let ref_counts = ref_counts.read();
-        let ref_count = ref_counts.counts.get(self.entity_id)?;
+        let ref_counts = self.entity_ref_counts.upgrade()?;
+        let counts = ref_counts.counts.lock();
+        let ref_count = counts.get(self.entity_id)?;
 
         if atomic_incr_if_not_zero(ref_count) == 0 {
             // entity_id is in dropped_entity_ids
             return None;
         }
-        drop(ref_counts);
+        drop(counts);
 
         Some(AnyEntity {
             entity_id: self.entity_id,
@@ -610,8 +603,8 @@ impl AnyWeakEntity {
                 .entity_ref_counts
                 .upgrade()
                 .unwrap()
-                .write()
                 .leak_detector
+                .lock()
                 .handle_created(self.entity_id, None),
         })
     }
@@ -648,14 +641,14 @@ impl AnyWeakEntity {
         self.entity_ref_counts
             .upgrade()
             .unwrap()
-            .write()
             .leak_detector
+            .lock()
             .assert_released(self.entity_id);
 
         if self
             .entity_ref_counts
             .upgrade()
-            .and_then(|ref_counts| Some(ref_counts.read().counts.get(self.entity_id)?.load(SeqCst)))
+            .and_then(|ref_counts| Some(ref_counts.counts.lock().get(self.entity_id)?.load(SeqCst)))
             .is_some()
         {
             panic!(

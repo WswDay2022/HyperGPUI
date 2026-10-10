@@ -6,9 +6,10 @@
 //! GPU-side `Quad`/`Shadow` structs (matrices and vectors inside structured buffers pack
 //! differently than in cbuffers) so we can verify they match the Rust `repr(C)` layouts:
 //!
-//! - `Quad`: 208 bytes; `transformation.rotation_scale` at offset 184, `translation` at 200 —
+//! - `Quad`: 216 bytes; `transformation.rotation_scale` at offset 192, `translation` at 208 —
 //!   `Background` grew to 76 bytes when the radial gradient's `radial_size` keyword was added, so
-//!   every field after it shifted +4
+//!   every field after it shifted +4, and `suppress_partial_coverage`/`pad` added another +8 at
+//!   the front
 //! - `Shadow`: 128 bytes; `content_mask_corner_radii` at 56 — after Rust's `ContentMask<P>`
 //!   change added rounded `corner_radii`, every struct inserts a `Corners` field right after
 //!   its `Bounds content_mask`, so all later fields shift +16 (Shadow `radii` was 40, now 56)
@@ -148,9 +149,11 @@ fn rust_scene_layout_matches_shaders() {
         "Background must stay a multiple of 8 bytes so `Quad::transformation` keeps its alignment"
     );
     assert_eq!(size_of::<hgpui::Background>(), 80);
-    assert_eq!(size_of::<hgpui::Quad>(), 208);
-    assert_eq!(offset_of!(hgpui::Quad, background), 56);
-    assert_eq!(offset_of!(hgpui::Quad, transformation), 184);
+    assert_eq!(size_of::<hgpui::Quad>(), 216);
+    assert_eq!(offset_of!(hgpui::Quad, suppress_partial_coverage), 8);
+    assert_eq!(offset_of!(hgpui::Quad, bounds), 16);
+    assert_eq!(offset_of!(hgpui::Quad, background), 64);
+    assert_eq!(offset_of!(hgpui::Quad, transformation), 192);
     assert_eq!(
         offset_of!(hgpui::Quad, transformation) % 8,
         0,

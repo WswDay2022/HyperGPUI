@@ -15,6 +15,7 @@ use crate::{
     PlatformHeadlessRenderer, PlatformTextSystem, Render, Reservation, Task, TestPlatform,
     VisualContext, Window, WindowBounds, WindowHandle, WindowOptions,
     app::GpuiBorrow,
+    http_client,
     profiler::{self, FrameTiming, FrameTimingCollector},
 };
 

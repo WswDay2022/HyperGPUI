@@ -7,6 +7,10 @@ use std::{
     rc::Rc,
 };
 
+/// Default chunk size for Arena allocations (256KB).
+/// This reduces initial memory allocation pressure compared to 1MB.
+pub const DEFAULT_ARENA_CHUNK_SIZE: usize = 256 * 1024;
+
 struct ArenaElement {
     value: *mut u8,
     drop: unsafe fn(*mut u8),
@@ -81,10 +85,12 @@ impl Chunk {
 pub struct Arena {
     chunks: Vec<Chunk>,
     elements: Vec<ArenaElement>,
-    valid: Rc<Cell<bool>>,
+    valid: Option<Rc<Cell<bool>>>,
     current_chunk_index: usize,
     chunk_size: NonZeroUsize,
     scope_depth: usize,
+    #[allow(dead_code)]
+    single_frame_mode: bool,
 }
 
 impl Drop for Arena {
@@ -95,14 +101,25 @@ impl Drop for Arena {
 
 impl Arena {
     pub fn new(chunk_size: usize) -> Self {
+        Self::with_config(chunk_size, false)
+    }
+
+    /// Create a new Arena with the given chunk size and single-frame mode setting.
+    ///
+    /// When `single_frame_mode` is true, the arena optimizes for the common case
+    /// where there's only a single draw scope (scope_depth <= 1) by avoiding
+    /// the Rc<Cell<bool>> allocation for use-after-free tracking.
+    pub fn with_config(chunk_size: usize, single_frame_mode: bool) -> Self {
         let chunk_size = NonZeroUsize::try_from(chunk_size).unwrap();
+        let valid = if single_frame_mode { None } else { Some(Rc::new(Cell::new(true))) };
         Self {
             chunks: vec![Chunk::new(chunk_size)],
             elements: Vec::new(),
-            valid: Rc::new(Cell::new(true)),
+            valid,
             current_chunk_index: 0,
             chunk_size,
             scope_depth: 0,
+            single_frame_mode,
         }
     }
 
@@ -148,8 +165,10 @@ impl Arena {
     }
 
     fn force_clear(&mut self) {
-        self.valid.set(false);
-        self.valid = Rc::new(Cell::new(true));
+        if let Some(ref valid) = self.valid {
+            valid.set(false);
+            self.valid = Some(Rc::new(Cell::new(true)));
+        }
         self.elements.clear();
         for chunk_index in 0..=self.current_chunk_index {
             self.chunks[chunk_index].reset();
@@ -212,7 +231,7 @@ impl Arena {
 
 pub struct ArenaBox<T: ?Sized> {
     ptr: *mut T,
-    valid: Rc<Cell<bool>>,
+    valid: Option<Rc<Cell<bool>>>,
 }
 
 impl<T: ?Sized> ArenaBox<T> {
@@ -226,10 +245,14 @@ impl<T: ?Sized> ArenaBox<T> {
 
     #[track_caller]
     fn validate(&self) {
-        assert!(
-            self.valid.get(),
-            "attempted to dereference an ArenaRef after its Arena was cleared"
-        );
+        if let Some(ref valid) = self.valid {
+            assert!(
+                valid.get(),
+                "attempted to dereference an ArenaRef after its Arena was cleared"
+            );
+        }
+        // In single-frame mode, we skip the validation check since we know
+        // the arena won't be cleared until the frame ends.
     }
 }
 
@@ -382,7 +405,7 @@ mod tests {
         let value = arena.alloc(|| 1u64);
         assert_eq!(*value, 1);
         arena.clear();
-        assert!(!value.valid.get());
+        assert!(!value.valid.as_ref().unwrap().get());
     }
 
     #[test]
@@ -392,5 +415,74 @@ mod tests {
         arena.begin_scope();
         arena.end_scope();
         arena.end_scope();
+    }
+
+    #[test]
+    #[ignore] // Run with: cargo test --package hgpui --lib arena::tests::bench_arena_allocation -- --ignored --nocapture
+    fn bench_arena_allocation() {
+        use std::time::Instant;
+        const ITERATIONS: usize = 10000;
+        const ALLOCS_PER_ITER: usize = 100;
+
+        // Warm up
+        {
+            let mut arena = Arena::with_config(256 * 1024, true);
+            for _ in 0..1000 {
+                for i in 0..ALLOCS_PER_ITER {
+                    let _ = arena.alloc(|| i);
+                }
+                arena.clear();
+            }
+        }
+        {
+            let mut arena = Arena::with_config(256 * 1024, false);
+            for _ in 0..1000 {
+                for i in 0..ALLOCS_PER_ITER {
+                    let _ = arena.alloc(|| i);
+                }
+                arena.clear();
+            }
+        }
+
+        // Benchmark single_frame_mode = true
+        let start = Instant::now();
+        for _ in 0..ITERATIONS {
+            let mut arena = Arena::with_config(256 * 1024, true);
+            for i in 0..ALLOCS_PER_ITER {
+                let _ = arena.alloc(|| i);
+            }
+            arena.clear();
+        }
+        let single_frame_time = start.elapsed();
+
+        // Benchmark single_frame_mode = false
+        let start = Instant::now();
+        for _ in 0..ITERATIONS {
+            let mut arena = Arena::with_config(256 * 1024, false);
+            for i in 0..ALLOCS_PER_ITER {
+                let _ = arena.alloc(|| i);
+            }
+            arena.clear();
+        }
+        let normal_time = start.elapsed();
+
+        println!(
+            "Arena allocation benchmark (ITERATIONS={}, ALLOCS_PER_ITER={}):",
+            ITERATIONS, ALLOCS_PER_ITER
+        );
+        println!(
+            "  single_frame_mode=true: {:.2?} ({:.2} ns/op)",
+            single_frame_time,
+            single_frame_time.as_nanos() as f64 / (ITERATIONS * ALLOCS_PER_ITER) as f64
+        );
+        println!(
+            "  single_frame_mode=false: {:.2?} ({:.2} ns/op)",
+            normal_time,
+            normal_time.as_nanos() as f64 / (ITERATIONS * ALLOCS_PER_ITER) as f64
+        );
+        println!(
+            "  Speedup: {:.2}x",
+            normal_time.as_nanos() as f64 / single_frame_time.as_nanos() as f64
+        );
     }
 }

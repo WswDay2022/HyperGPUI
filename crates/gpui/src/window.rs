@@ -269,7 +269,7 @@ slotmap::new_key_type! {
 thread_local! {
     /// Fallback arena used when no app-specific arena is active.
     /// In production, each window draw sets CURRENT_ELEMENT_ARENA to the app's arena.
-    pub(crate) static ELEMENT_ARENA: RefCell<Arena> = RefCell::new(Arena::new(1024 * 1024));
+    pub(crate) static ELEMENT_ARENA: RefCell<Arena> = RefCell::new(Arena::with_config(crate::DEFAULT_ARENA_CHUNK_SIZE, true));
 
     /// Points to the current App's element arena during draw operations.
     /// This allows multiple test Apps to have isolated arenas, preventing
@@ -4139,6 +4139,8 @@ impl Window {
         let snapped_border_widths = self.snap_border_widths(quad.border_widths);
         let quad = Quad {
             order: 0,
+            suppress_partial_coverage: 0,
+            pad: 0,
             bounds: snapped_bounds,
             content_mask: self.snapped_content_mask(),
             background: quad.background.opacity(opacity),
@@ -7391,10 +7393,175 @@ mod tests {
             .unwrap();
     }
 
+    struct RoundedClipProbe;
+
+    impl Render for RoundedClipProbe {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(
+                div()
+                    .m_4()
+                    .size(px(40.))
+                    .rounded_lg()
+                    .overflow_hidden()
+                    .background(rgba(0x404040ff))
+                    .child(div().size_full().background(rgba(0x404040ff))),
+            )
+        }
+    }
+
+    /// Diagnostic: dumps every quad a rounded `overflow_hidden` container with a background and
+    /// a same-size child puts into the scene, so the shader-side pair that the AA probe models
+    /// is pinned to the real element tree.
+    #[hgpui::test]
+    fn probe_rounded_clip_quads(cx: &mut TestAppContext) {
+        let window = cx.add_window(|_, _| RoundedClipProbe);
+        window
+            .update(cx, |_, window, _| {
+                for (index, quad) in window.rendered_frame.scene.quads.iter().enumerate() {
+                    println!(
+                        "quad {index}: bounds={:?} radii={:?} mask={:?} mask_radii={:?} \
+                         borders={:?} transform={:?} suppress={}",
+                        quad.bounds,
+                        quad.corner_radii,
+                        quad.content_mask.bounds,
+                        quad.content_mask.corner_radii,
+                        quad.border_widths,
+                        quad.transformation,
+                        quad.suppress_partial_coverage,
+                    );
+                }
+            })
+            .unwrap();
+    }
+
+    /// A rounded `overflow_hidden` container paints its own rounded background *and* clips its
+    /// children to the same rounded rect, so both the background quad and the child quad apply
+    /// the outline's antialiased coverage and the corner is composited twice — `1 - (1 - c)^2`
+    /// instead of `c`, which flattens a small radius into a straight diagonal and leaves a rim
+    /// pulled towards the fill colour.
+    ///
+    /// The scene must leave that band to the topmost layer that covers it (the child) and tell
+    /// the background to paint only its fully covered interior.
+    #[hgpui::test]
+    fn rounded_clip_applies_its_coverage_once(cx: &mut TestAppContext) {
+        let window = cx.add_window(|_, _| RoundedClipProbe);
+        window
+            .update(cx, |_, window, _| {
+                let quads = &window.rendered_frame.scene.quads;
+                assert_eq!(quads.len(), 2, "background quad plus the same-size child");
+                let (background, child) = (&quads[0], &quads[1]);
+                assert!(
+                    background.corner_radii != Corners::default(),
+                    "the container's own background is the rounded one"
+                );
+                assert_eq!(
+                    child.content_mask.corner_radii, background.corner_radii,
+                    "the child is clipped by exactly the outline the background painted"
+                );
+                assert_eq!(
+                    background.suppress_partial_coverage, 1,
+                    "the background must leave the outline's band to the child"
+                );
+                assert_eq!(
+                    child.suppress_partial_coverage, 0,
+                    "the child owns the band, so it keeps its coverage"
+                );
+            })
+            .unwrap();
+    }
+
+    struct RoundedClipPaddedProbe;
+
+    impl Render for RoundedClipPaddedProbe {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            // The child is inset, so it never reaches the container's arc: the container's own
+            // background is the only layer painting that band and must keep its coverage.
+            div().size_full().child(
+                div()
+                    .m_4()
+                    .size(px(40.))
+                    .rounded_lg()
+                    .overflow_hidden()
+                    .background(rgba(0x404040ff))
+                    .child(div().m_2().size(px(10.)).background(rgba(0x606060ff))),
+            )
+        }
+    }
+
+    struct RoundedBorderedProbe;
+
+    impl Render for RoundedBorderedProbe {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            // A rounded box with both a fill and a border. The border is what sits on the
+            // outline there, so the fill must give up its band — but the border is split into
+            // four strips, and *those* must keep theirs: no single strip covers the outline, and
+            // suppressing them would bite notches out of the corners.
+            div().size_full().child(
+                div()
+                    .m_4()
+                    .size(px(40.))
+                    .rounded_lg()
+                    .border_2()
+                    .border_color(rgba(0x9090a0ff))
+                    .background(rgba(0x404040ff)),
+            )
+        }
+    }
+
+    #[hgpui::test]
+    fn rounded_border_ring_owns_the_band(cx: &mut TestAppContext) {
+        let window = cx.add_window(|_, _| RoundedBorderedProbe);
+        window
+            .update(cx, |_, window, _| {
+                let quads = &window.rendered_frame.scene.quads;
+                let fill = quads
+                    .iter()
+                    .find(|quad| !quad.background.is_transparent())
+                    .expect("the container's own background");
+                assert_eq!(
+                    fill.suppress_partial_coverage, 1,
+                    "the border paints the outline's band, so the fill must leave it alone"
+                );
+                let strips: Vec<_> = quads
+                    .iter()
+                    .filter(|quad| {
+                        quad.background.is_transparent() && quad.border_widths.top.0 > 0.0
+                    })
+                    .collect();
+                assert_eq!(strips.len(), 4, "a border-only quad is split into four strips");
+                for strip in strips {
+                    assert_eq!(
+                        strip.suppress_partial_coverage, 0,
+                        "each strip owns its own stretch of the band"
+                    );
+                }
+            })
+            .unwrap();
+    }
+
+    /// The counterpart to the test above: when nothing inside the container reaches its arc,
+    /// suppressing the background's band would leave the corner unpainted.
+    #[hgpui::test]
+    fn rounded_clip_keeps_its_coverage_when_nothing_covers_it(cx: &mut TestAppContext) {
+        let window = cx.add_window(|_, _| RoundedClipPaddedProbe);
+        window
+            .update(cx, |_, window, _| {
+                let quads = &window.rendered_frame.scene.quads;
+                let background = quads
+                    .iter()
+                    .find(|quad| quad.corner_radii != Corners::default())
+                    .expect("the container's rounded background");
+                assert_eq!(
+                    background.suppress_partial_coverage, 0,
+                    "an inset child does not repaint the arc, so the background must keep it"
+                );
+            })
+            .unwrap();
+    }
+
     struct CountingChildView {
         renders: Rc<Cell<usize>>,
     }
-
     impl Render for CountingChildView {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
             self.renders.set(self.renders.get() + 1);

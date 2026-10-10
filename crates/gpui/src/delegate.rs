@@ -13,7 +13,7 @@ where R::Target: Styled + Sized {
 }
 
 impl<R: ElementDelegate> ParentElement for R
-where  R::Target: ParentElement {
+where R::Target: ParentElement {
     fn extend(&mut self, elements: impl IntoIterator<Item = AnyElement>) {
         self.delegate().extend(elements)
     }

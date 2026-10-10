@@ -192,25 +192,159 @@ fn to_tile_position(unit_vertex: vec2<f32>, tile: AtlasTile) -> vec2<f32> {
   return (vec2<f32>(tile.bounds.origin) + unit_vertex * vec2<f32>(tile.bounds.size)) / atlas_size;
 }
 
+// The exact clip: the fragment is discarded at the mask's edge. This is what a primitive that
+// has no cut of its own must use — the path rasterizer draws through this and nothing else, so
+// padding it here would let every path and SVG leak a pixel out of every clip.
 fn distance_from_clip_rect_impl(position: vec2<f32>, clip_bounds: Bounds) -> vec4<f32> {
     let tl = position - clip_bounds.origin;
     let br = clip_bounds.origin + clip_bounds.size - position;
     return vec4<f32>(tl.x, br.x, tl.y, br.y);
 }
 
-fn distance_from_clip_rect(unit_vertex: vec2<f32>, bounds: Bounds, clip_bounds: Bounds) -> vec4<f32> {
-    let position = unit_vertex * vec2<f32>(bounds.size) + bounds.origin;
-    return distance_from_clip_rect_impl(position, clip_bounds);
+// The same, a margin looser. `content_mask_coverage` cuts the mask's *whole* outline again in
+// the fragment — with a one-pixel ramp, so the edge follows the arc instead of the pixel grid —
+// and this clip is then only the coarse cull that keeps fragments far outside from being shaded
+// at all. Only the primitives that apply that cut may use this, or the margin becomes a hole.
+fn distance_from_clip_rect_aa_impl(position: vec2<f32>, clip_bounds: Bounds) -> vec4<f32> {
+    return distance_from_clip_rect_impl(position, clip_bounds) + AA_MARGIN;
 }
 
-// Antialiasing for distances measured in the primitive's local (untransformed) space. The
-// local distance is converted to screen-pixel units using the screen-space gradient of the
-// interpolated local position (a varying, so the derivative is defined in every lane), and
-// the one-pixel coverage ramp stays exactly one pixel wide under any transform — scale and
-// skew no longer soften or harden the edge.
-fn local_aa_coverage(signed_distance: f32, local_position: vec2<f32>) -> f32 {
-    let local_per_pixel = 0.5 * (length(dpdx(local_position)) + length(dpdy(local_position)));
-    return saturate(0.5 - signed_distance / max(local_per_pixel, 1e-5));
+fn distance_from_clip_rect(unit_vertex: vec2<f32>, bounds: Bounds, clip_bounds: Bounds) -> vec4<f32> {
+    let position = unit_vertex * vec2<f32>(bounds.size) + bounds.origin;
+    return distance_from_clip_rect_aa_impl(position, clip_bounds);
+}
+
+
+// How far outside its own outline a primitive is still rasterized, in device pixels. The
+// rasterizer only emits fragments for pixels whose *centre* is inside the primitive, so a
+// shader that shapes its own edge from a signed distance field — as every shader here does —
+// can otherwise only ever *shrink* coverage: an edge landing in the far half of a pixel has no
+// fragment to taper, and its partial pixel is lost outright, always in the same direction,
+// which also shifts the edge's apparent position onto the pixel grid. Expanding the geometry
+// by this much gives the distance ramp a fragment in every pixel it can reach; the ramp then
+// drives the coverage to zero on its own well inside the margin, so nothing is painted
+// outside the shape.
+const AA_MARGIN: f32 = 1.0;
+
+// Per-axis expansion, in a primitive's local units, that widens its local rect by `AA_MARGIN`
+// device pixels on every side. `m` maps local units to device pixels with its columns the
+// images of the local axes, so the local rect has to grow by `AA_MARGIN * |axis y| / |det|`
+// along x for the edges that run along y to move `AA_MARGIN` pixels outward (and the mirror
+// expression along y).
+fn aa_margin_local(m: mat2x2<f32>) -> vec2<f32> {
+    let axes = transpose(m);
+    let lengths = vec2<f32>(length(axes[0]), length(axes[1]));
+    let det = abs(axes[0].x * axes[1].y - axes[0].y * axes[1].x);
+    return AA_MARGIN * lengths.yx / max(det, 1e-3);
+}
+
+// Coverage of a distance field, one device pixel wide, from the field's value at the pixel
+// centre and its change across that pixel along each screen axis.
+//
+// Dividing the distance by `|grad|` turns it into pixels measured from the pixel centre, and
+// integrating a straight edge across a pixel gives exactly `saturate(0.5 - pixels)`. The
+// gradient has to be the field's *screen-space* gradient for that to hold under a transform:
+// the caller measures it by sampling the same field one pixel apart, using the interpolated
+// local position's own derivatives as the step.
+//
+// Those samples straddle the pixel centre, which is what keeps this accurate where the field
+// curves: a one-sided difference over a whole pixel reads the slope tens of percent low at a
+// corner of a pixel or two radius, and the widened ramp it produces then swallows the arc.
+fn sdf_coverage(centre: f32, slope_x: f32, slope_y: f32) -> f32 {
+    let per_pixel = max(length(vec2<f32>(slope_x, slope_y)), 1e-6);
+    return saturate(0.5 - centre / per_pixel);
+}
+
+// --- exact area coverage for a rounded corner --- //
+//
+// The one-pixel ramp above is exact for a straight edge but only first order where the boundary
+// curves, and a corner's arc is exactly that: measured against a 32x32 supersampled reference it
+// is off by up to 0.06 of a pixel (15 levels of 255) — a corner a shade too full, which is the
+// "not as smooth as CSS" complaint. Skia's CPU rasterizer resolves curves by area rather than by
+// a ramp (`SkScan_AAAPath.cpp`: "we analytically compute the coverage of this horizontal strip
+// ... ground-truth coverages"), and the one curve a rounded rectangle has is in closed form.
+//
+// A pixel's coverage is the area of the pixel inside the shape, and the shape near a corner is
+// the rectangle minus the notch the arc cuts out of the corner's `radius x radius` square. The
+// rectangle's coverage is exact per axis (a half-plane over a pixel is a ramp). The notch is that
+// square clipped to the pixel, minus the area of the same box inside the disc — the circle's
+// antiderivative, with the box split at the disc's axes because the disc's area is even in both.
+
+// `integral from 0 to x of sqrt(r^2 - t^2) dt`: the area under the circle's upper half out to x.
+fn circle_area_to(x: f32, r: f32) -> f32 {
+    let reach = clamp(x, 0.0, r);
+    let half_width = sqrt(max(r * r - reach * reach, 0.0));
+    // `max(r, ...)`: a zero radius must not turn the division into a NaN, and its term is zero
+    // anyway.
+    let angle = asin(clamp(reach / max(r, 1e-6), -1.0, 1.0));
+    return 0.5 * (reach * half_width + r * r * angle);
+}
+
+// The area of [0, x] x [0, y] inside the disc of radius r centred at the origin: the circle's
+// half-width integrated along x, clipped to the box's height.
+fn disc_area_first_quadrant(x: f32, y: f32, r: f32) -> f32 {
+    let reach = clamp(x, 0.0, r);
+    let height = clamp(y, 0.0, r);
+    // Past this point the circle's half-width is below the box's top, so the integrand is the
+    // box's height rather than the circle.
+    let pinch = sqrt(max(r * r - height * height, 0.0));
+    let flat = min(pinch, reach);
+    return height * flat + (circle_area_to(reach, r) - circle_area_to(flat, r));
+}
+
+// The area of the axis-aligned box [lo, hi] inside the disc of radius r centred at the origin,
+// for a box anywhere in the plane. `disc_area_first_quadrant` only measures boxes that start at
+// the axes, so the box is split there first — keeping each piece's distance from the axis, which
+// is what decides whether it is anywhere near the disc — and each piece is then the four-corner
+// sum of that cumulative area. A piece that does not reach its side of the axis has both its ends
+// at zero, and its four-corner sum cancels to nothing.
+fn disc_area_box(lo: vec2<f32>, hi: vec2<f32>, r: f32) -> f32 {
+    let x_neg = vec2<f32>(max(-min(hi.x, 0.0), 0.0), max(-lo.x, 0.0));
+    let x_pos = vec2<f32>(max(lo.x, 0.0), max(hi.x, 0.0));
+    let y_neg = vec2<f32>(max(-min(hi.y, 0.0), 0.0), max(-lo.y, 0.0));
+    let y_pos = vec2<f32>(max(lo.y, 0.0), max(hi.y, 0.0));
+    return
+        // x below the axis, y below the axis
+        disc_area_first_quadrant(x_neg.y, y_neg.y, r)
+        - disc_area_first_quadrant(x_neg.x, y_neg.y, r)
+        - disc_area_first_quadrant(x_neg.y, y_neg.x, r)
+        + disc_area_first_quadrant(x_neg.x, y_neg.x, r)
+        // x below the axis, y above it
+        + disc_area_first_quadrant(x_neg.y, y_pos.y, r)
+        - disc_area_first_quadrant(x_neg.x, y_pos.y, r)
+        - disc_area_first_quadrant(x_neg.y, y_pos.x, r)
+        + disc_area_first_quadrant(x_neg.x, y_pos.x, r)
+        // x above the axis, y below it
+        + disc_area_first_quadrant(x_pos.y, y_neg.y, r)
+        - disc_area_first_quadrant(x_pos.x, y_neg.y, r)
+        - disc_area_first_quadrant(x_pos.y, y_neg.x, r)
+        + disc_area_first_quadrant(x_pos.x, y_neg.x, r)
+        // x above the axis, y above it
+        + disc_area_first_quadrant(x_pos.y, y_pos.y, r)
+        - disc_area_first_quadrant(x_pos.x, y_pos.y, r)
+        - disc_area_first_quadrant(x_pos.y, y_pos.x, r)
+        + disc_area_first_quadrant(x_pos.x, y_pos.x, r);
+}
+
+// The exact coverage of a pixel at `corner_to_point` (the point relative to the corner, both
+// components <= 0 inside the quad, as the quad's SDF mirrors it) by a quad whose corner has the
+// given radius. `step` is one screen pixel in the quad's local units, per axis — valid only when
+// the transform maps the pixel to an axis-aligned box, which is why callers check that first.
+fn rounded_corner_coverage(corner_to_point: vec2<f32>, step: vec2<f32>, radius: f32) -> f32 {
+    // The rectangle, whose two straight edges are exact per axis.
+    let rect = clamp(0.5 - corner_to_point.x / step.x, 0.0, 1.0)
+        * clamp(0.5 - corner_to_point.y / step.y, 0.0, 1.0);
+    // The pixel's box in this mirrored space, clipped to the square the arc is inscribed in —
+    // only there does the rounding cut anything.
+    let half = 0.5 * step;
+    var lo = max(corner_to_point - half, vec2<f32>(-radius));
+    let hi = min(corner_to_point + half, vec2<f32>(0.0));
+    lo = min(lo, hi);
+    let box_area = (hi.x - lo.x) * (hi.y - lo.y);
+    // The arc's centre is the corner of that square; shift it to the disc's origin.
+    let disc_area = disc_area_box(lo + vec2<f32>(radius), hi + vec2<f32>(radius), radius);
+    // Both areas are in local units squared and the pixel is `step` of them per side.
+    return clamp(rect - (box_area - disc_area) / (step.x * step.y), 0.0, 1.0);
 }
 
 // https://gamedev.stackexchange.com/questions/92015/optimized-linear-to-srgb-glsl
@@ -393,19 +527,48 @@ fn quad_sdf_impl(corner_center_to_point: vec2<f32>, corner_radius: f32) -> f32 {
     }
 }
 
+// The quad's own outline as a distance field of a point in its local space. The corner radius
+// is supplied rather than picked here so that the samples `fs_quad` takes around the pixel
+// centre all describe one corner's field - `pick_corner_radius` switches quadrant at the
+// centre lines, where the radii of neighbouring corners may differ.
+fn quad_own_sdf(point: vec2<f32>, half_size: vec2<f32>, corner_radius: f32) -> f32 {
+    let corner_to_point = abs(point - half_size) - half_size;
+    return quad_sdf_impl(corner_to_point + corner_radius, corner_radius);
+}
+
+// The border's inner edge as a distance field of a point in the quad's local space, mirroring
+// the branch `fs_quad` picks at the pixel centre (0 straight, 1 provably outside, 2 circular,
+// 3 ellipse) so the samples around the centre stay on one continuous field.
+fn quad_inner_sdf(point: vec2<f32>, half_size: vec2<f32>, corner_radius: f32,
+                  reduced_border: vec2<f32>, outer_sdf: f32, branch: u32) -> f32 {
+    let corner_to_point = abs(point - half_size) - half_size;
+    if (branch == 0u) {
+        let straight = corner_to_point + reduced_border;
+        return -max(straight.x, straight.y);
+    } else if (branch == 1u) {
+        return -1.0;
+    } else if (branch == 2u) {
+        return -(outer_sdf + reduced_border.x);
+    } else {
+        let ellipse_radii = max(vec2<f32>(0.0), corner_radius - reduced_border);
+        return quarter_ellipse_sdf(corner_to_point + corner_radius, ellipse_radii);
+    }
+}
+
 // Abstract away the final color transformation based on the
 // target alpha compositing mode.
-// Rounded content-mask coverage: the vertex shader already clipped the mask's straight edges
-// (via `clip_distances`), so only the mask's rounded-corner arcs are cut here. The mask-equals-
-// own case (`owns_cutout` with a mask identical to the element's own rounded cutout) is skipped
-// because the element's own SDF would otherwise cut the same edge twice.
+// Content-mask coverage, as an alpha multiplier.
+//
+// The whole mask — straight edges as well as rounded corners — is shaped here from its
+// distance field, so an edge that does not land on the pixel grid tapers over exactly one
+// pixel instead of being cut off hard. `clip_distances` still culls the primitive, but it is
+// padded by `AA_MARGIN` (see `distance_from_clip_rect_impl`) and never decides the edge.
+//
+// The mask-equals-own case (`owns_cutout` with a mask identical to the element's own rounded
+// cutout) is skipped because the element's own SDF would otherwise cut the same edge twice.
 fn content_mask_coverage(mask_point: vec2<f32>, mask_bounds: Bounds, mask_radii: Corners,
                          own_origin: vec2<f32>, own_size: vec2<f32>, own_radii: Corners,
                          owns_cutout: bool) -> f32 {
-    if (mask_radii.top_left == 0.0 && mask_radii.top_right == 0.0 &&
-            mask_radii.bottom_left == 0.0 && mask_radii.bottom_right == 0.0) {
-        return 1.0;
-    }
     if (owns_cutout &&
             all(mask_bounds.origin == own_origin) &&
             all(mask_bounds.size == own_size) &&
@@ -414,6 +577,22 @@ fn content_mask_coverage(mask_point: vec2<f32>, mask_bounds: Bounds, mask_radii:
             mask_radii.bottom_left == own_radii.bottom_left &&
             mask_radii.bottom_right == own_radii.bottom_right) {
         return 1.0;
+    }
+    // Inside a rounded corner's quadrant the cut is the pixel's exact area, the same as the
+    // quad's own corner — a clip that lags the shape it clips by four levels of 255 is visible
+    // as the shape overflowing its own container at the corners. The mask lives in scene space,
+    // which *is* device pixels, so a pixel there is always a unit axis-aligned box and this is
+    // always available. (Do not instead average `0.5 - d` over quarter-pixel samples to "smooth"
+    // it: that ramp is the fraction of a one-pixel box *centred on the sample*, so a shifted
+    // sample undershoots — a pixel the mask fully covers would come out at 0.875 — and the mask
+    // would eat into everything it clips.)
+    let mask_half_size = mask_bounds.size / 2.0;
+    let mask_center_to_point = mask_point - (mask_bounds.origin + mask_half_size);
+    let mask_corner_radius = pick_corner_radius(mask_center_to_point, mask_radii);
+    let mask_corner_to_point = abs(mask_center_to_point) - mask_half_size;
+    if (mask_corner_to_point.x + mask_corner_radius >= 0.0 &&
+            mask_corner_to_point.y + mask_corner_radius >= 0.0) {
+        return rounded_corner_coverage(mask_corner_to_point, vec2<f32>(1.0), mask_corner_radius);
     }
     return saturate(0.5 - quad_sdf(mask_point, mask_bounds, mask_radii));
 }
@@ -489,6 +668,46 @@ fn gradient_ramp_color(background: Background, t: f32, position: vec2<f32>,
     return color;
 }
 
+// Stripe pattern (background tag 2): the signed distance from `pt` to the nearest stripe edge,
+// measured across the stripes. `period` is the stripe period and `half_stripe` half the painted
+// stripe's width, both in the pattern's own (local) units.
+fn stripe_sdf(pt: vec2<f32>, origin: vec2<f32>, rotation: mat2x2<f32>, period: f32,
+              half_stripe: f32) -> f32 {
+    let rotated = rotation * (pt - origin);
+    let wrapped = rotated.x % period;
+    return min(wrapped, period - wrapped) - half_stripe;
+}
+
+// Checkerboard (background tag 3): the signed distance from `pt` to the nearest cell edge, in
+// local units. The coloured cells are half the board, so the field is symmetric.
+fn checker_sdf(pt: vec2<f32>, origin: vec2<f32>, cell: f32) -> f32 {
+    let cell_position = fract((pt - origin) / cell);
+    let edge = min(cell_position, vec2<f32>(1.0) - cell_position);
+    return min(edge.x, edge.y) * cell;
+}
+
+// Coverage of a pattern at `pt`, one screen pixel wide. `pixel_x`/`pixel_y` are one screen pixel
+// expressed in the pattern's own space, taken by the caller from the interpolated local
+// position's derivatives, so a scaled or skewed pattern keeps a one-pixel ramp like everything
+// else. The samples straddle the pixel centre for the reason in `sdf_coverage`: a stripe is only
+// a few pixels wide, so a one-sided slope reads far too low.
+fn stripe_coverage(pt: vec2<f32>, origin: vec2<f32>, rotation: mat2x2<f32>, period: f32,
+                   half_stripe: f32, pixel_x: vec2<f32>, pixel_y: vec2<f32>) -> f32 {
+    let centre = stripe_sdf(pt, origin, rotation, period, half_stripe);
+    // Not `sdf_coverage`: a pattern's field is symmetric about the very edge the coverage is
+    // about, so its derivative reads zero there and the ramp would collapse to a hard step.
+    // How far a screen pixel moves in the pattern's space never vanishes.
+    let per_pixel = max(0.5 * (length(pixel_x) + length(pixel_y)), 1e-5);
+    return saturate(0.5 - centre / per_pixel);
+}
+
+fn checker_coverage(pt: vec2<f32>, origin: vec2<f32>, cell: f32,
+                    pixel_x: vec2<f32>, pixel_y: vec2<f32>) -> f32 {
+    let centre = checker_sdf(pt, origin, cell);
+    let per_pixel = max(0.5 * (length(pixel_x) + length(pixel_y)), 1e-5);
+    return saturate(0.5 - centre / per_pixel);
+}
+
 fn gradient_color(background: Background, position: vec2<f32>, bounds: Bounds,
     solid_color: vec4<f32>, color0: vec4<f32>, color1: vec4<f32>) -> vec4<f32> {
     var background_color = vec4<f32>(0.0);
@@ -537,12 +756,10 @@ fn gradient_color(background: Background, position: vec2<f32>, bounds: Bounds,
                 cos(stripe_angle), -sin(stripe_angle),
                 sin(stripe_angle), cos(stripe_angle)
             );
-            let relative_position = position - bounds.origin;
-            let rotated_point = rotation * relative_position;
-            let pattern = rotated_point.x % pattern_period;
-            let distance = min(pattern, pattern_period - pattern) - pattern_period * (pattern_width / pattern_height) * 0.5;
+            let half_stripe = pattern_period * (pattern_width / pattern_height) * 0.5;
             background_color = solid_color;
-            background_color.a *= local_aa_coverage(distance, position);
+            background_color.a *= stripe_coverage(position, bounds.origin, rotation,
+                pattern_period, half_stripe, dpdx(position), dpdy(position));
         }
         case 3u: {
             // checkerboard
@@ -555,10 +772,8 @@ fn gradient_color(background: Background, position: vec2<f32>, bounds: Bounds,
 
             // Antialias the cell edges, or the alternating squares show hard diagonal
             // staircases wherever they meet at an angle.
-            let cell_position = fract(relative_position / size);
-            let cell_edge_distance = min(cell_position, vec2<f32>(1.0) - cell_position) * size;
-            let cell_coverage =
-                local_aa_coverage(min(cell_edge_distance.x, cell_edge_distance.y), position);
+            let cell_coverage = checker_coverage(position, bounds.origin, size,
+                dpdx(position), dpdy(position));
 
             background_color = solid_color;
             background_color.a *= saturate(should_be_colored) * cell_coverage;
@@ -603,6 +818,11 @@ fn gradient_color(background: Background, position: vec2<f32>, bounds: Bounds,
 struct Quad {
     order: u32,
     border_style: u32,
+    // Non-zero when the quad paints only its fully covered interior — a later layer repaints
+    // the same outline, so the antialiased band is left to it. See
+    // `Scene::collapse_covered_outlines`.
+    suppress_partial_coverage: u32,
+    pad: u32,
     bounds: Bounds,
     content_mask: Bounds,
     content_mask_corner_radii: Corners,
@@ -610,8 +830,8 @@ struct Quad {
     border_color: Hsla,
     corner_radii: Corners,
     border_widths: Edges,
-    // Must match the Rust `scene::Quad` layout (200 bytes, repr(C)):
-    // `transformation` sits at byte offset 176 (mat2x2<f32> aligns to 8).
+    // Must match the Rust `scene::Quad` layout (216 bytes, repr(C)):
+    // `transformation` sits at byte offset 192 (mat2x2<f32> aligns to 8).
     transformation: TransformationMatrix,
 }
 @group(1) @binding(0) var<storage, read> b_quads: array<Quad>;
@@ -636,7 +856,11 @@ fn vs_quad(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index) insta
     let quad = b_quads[instance_id];
 
     var out = QuadVarying();
-    let local_position = unit_vertex * vec2<f32>(quad.bounds.size) + quad.bounds.origin;
+    // Grow the local rect so the rasterizer still emits fragments for the pixels the coverage
+    // ramp reaches outside the outline (see `AA_MARGIN`).
+    let margin = aa_margin_local(quad.transformation.rotation_scale);
+    let local_position = unit_vertex * (vec2<f32>(quad.bounds.size) + 2.0 * margin)
+        + (quad.bounds.origin - margin);
     // Apply the transform around the quad's center, matching `CssTransform::to_matrix` on the
     // Rust side. The Rust side stores the matrix row-major, so transpose to column-major first.
     let transformed_position =
@@ -661,7 +885,7 @@ fn vs_quad(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index) insta
     let mask_is_own = all(quad.content_mask.origin == quad.bounds.origin) &&
         all(quad.content_mask.size == quad.bounds.size);
     out.clip_distances = select(
-        distance_from_clip_rect_impl(transformed_position, quad.content_mask),
+        distance_from_clip_rect_aa_impl(transformed_position, quad.content_mask),
         vec4<f32>(1.0),
         mask_is_own);
     return out;
@@ -697,20 +921,6 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
         quad.corner_radii.bottom_left == 0.0 &&
         quad.corner_radii.top_right == 0.0 &&
         quad.corner_radii.bottom_right == 0.0;
-
-    // Fast path when the quad is not rounded and doesn't have any border. Rotation and skew
-    // are excluded: their rasterized edges are not axis-aligned, so they need the SDF-based
-    // coverage this path skips (scale/translate keep crisp snapped edges either way).
-    let axis_aligned = quad.transformation.rotation_scale[0][1] == 0.0 &&
-        quad.transformation.rotation_scale[1][0] == 0.0;
-    if (quad.border_widths.top == 0.0 &&
-            quad.border_widths.left == 0.0 &&
-            quad.border_widths.right == 0.0 &&
-            quad.border_widths.bottom == 0.0 &&
-            unrounded && axis_aligned) {
-        return blend_color(background_color, mask_coverage);
-    }
-
     let size = quad.bounds.size;
     let half_size = size / 2.0;
     let point = input.local_position - quad.bounds.origin;
@@ -720,8 +930,68 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
     // minimum distance between the center of the pixel and the edge.
     let antialias_threshold = 0.5;
 
-    // Radius of the nearest corner
+    // Vector from the corner of the quad bounds to the point, after mirroring
+    // the point into the bottom right quadrant. Both components are <= 0.
+    let corner_to_point = abs(center_to_point) - half_size;
+
+    // Radius of the nearest corner, and the vector from the point to the centre of its circle,
+    // also mirrored into the bottom right quadrant.
     let corner_radius = pick_corner_radius(center_to_point, quad.corner_radii);
+    let corner_center_to_point = corner_to_point + corner_radius;
+
+    // One screen pixel, expressed in the quad's local space. The interpolated local position is
+    // linear in the pixel coordinates, so these derivatives are exact for the affine transform a
+    // quad carries - including rotation, skew and non-uniform scale, where the two steps differ
+    // in both length and direction. Taken here, before any branch: a derivative needs the whole
+    // 2x2 quad's lanes still live.
+    let pixel_x = dpdx(input.local_position);
+    let pixel_y = dpdy(input.local_position);
+
+    // Signed distance of the point to the outside edge of the quad's border, and the quad's own
+    // coverage of it. The coverage samples the same field half a pixel either side of the
+    // centre, which is what keeps the ramp one pixel wide where the field curves.
+    //
+    // Inside a rounded corner's quadrant the coverage is the pixel's exact area instead: that is
+    // where the boundary curves, and the ramp is only first order there (see
+    // `rounded_corner_coverage`). It needs the pixel to be an axis-aligned box in the quad's
+    // local space, which a rotated or skewed transform does not give it.
+    let outer_sdf = quad_own_sdf(point, half_size, corner_radius);
+    let near_rounded_corner = corner_center_to_point.x >= 0.0 && corner_center_to_point.y >= 0.0;
+    let axis_aligned = quad.transformation.rotation_scale[0][1] == 0.0 &&
+        quad.transformation.rotation_scale[1][0] == 0.0;
+    var own_coverage = sdf_coverage(outer_sdf,
+        quad_own_sdf(point + 0.5 * pixel_x, half_size, corner_radius)
+            - quad_own_sdf(point - 0.5 * pixel_x, half_size, corner_radius),
+        quad_own_sdf(point + 0.5 * pixel_y, half_size, corner_radius)
+            - quad_own_sdf(point - 0.5 * pixel_y, half_size, corner_radius));
+    if (axis_aligned && near_rounded_corner) {
+        own_coverage = rounded_corner_coverage(corner_to_point,
+            vec2<f32>(length(pixel_x), length(pixel_y)), corner_radius);
+    }
+
+    var coverage = min(own_coverage, mask_coverage);
+
+    // A layer that repaints an outline another, later layer covers contributes nothing but the
+    // interior: its band would be a second application of the same coverage, and stacked
+    // coverages compose as `1 - (1 - c)^n` - the arc's partial pixels merge into a hard step,
+    // which is what flattens a small radius into a straight diagonal. See
+    // `Scene::collapse_covered_outlines`.
+    if (quad.suppress_partial_coverage != 0u) {
+        coverage = select(0.0, 1.0, coverage >= 1.0);
+    }
+
+    // Fast path when the quad is not rounded and doesn't have any border: the outer distance
+    // above is the whole story. (There is no transform-dependent variant any more - the SDF
+    // coverage is exact for axis-aligned, scaled, skewed and rotated quads alike, so a quad that
+    // is merely translated or scaled no longer needs a separate path, and the old one returned
+    // the background with no coverage at all.)
+    if (quad.border_widths.top == 0.0 &&
+            quad.border_widths.left == 0.0 &&
+            quad.border_widths.right == 0.0 &&
+            quad.border_widths.bottom == 0.0 &&
+            unrounded) {
+        return blend_color(background_color, coverage);
+    }
 
     // Width of the nearest borders
     let border = vec2<f32>(
@@ -739,14 +1009,6 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
     let reduced_border =
         vec2<f32>(select(border.x, -antialias_threshold, border.x == 0.0),
                   select(border.y, -antialias_threshold, border.y == 0.0));
-
-    // Vector from the corner of the quad bounds to the point, after mirroring
-    // the point into the bottom right quadrant. Both components are <= 0.
-    let corner_to_point = abs(center_to_point) - half_size;
-
-    // Vector from the point to the center of the rounded corner's circle, also
-    // mirrored into bottom right quadrant.
-    let corner_center_to_point = corner_to_point + corner_radius;
 
     // Whether the nearest point on the border is rounded
     let is_near_rounded_corner =
@@ -774,12 +1036,8 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
     // However, that might negatively impact performance in the case of
     // reasonable sizes for rounded corners.
     if (is_within_inner_straight_border && !is_near_rounded_corner) {
-        return blend_color(background_color, mask_coverage);
+        return blend_color(background_color, coverage);
     }
-
-    // Signed distance of the point to the outside edge of the quad's border. It
-    // is positive outside this edge, and negative inside.
-    let outer_sdf = quad_sdf_impl(corner_center_to_point, corner_radius);
 
     // Approximate signed distance of the point to the inside edge of the quad's
     // border. It is negative outside this edge (within the border), and
@@ -789,21 +1047,19 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
     // * The rounded portions with varying border width use an approximation of
     //   nearest-point-on-ellipse.
     // * When it is quickly known to be outside the edge, -1.0 is used.
-    var inner_sdf = 0.0;
+    var inner_branch = 3u;
     if (corner_center_to_point.x <= 0 || corner_center_to_point.y <= 0) {
         // Fast paths for straight borders.
-        inner_sdf = -max(straight_border_inner_corner_to_point.x,
-                         straight_border_inner_corner_to_point.y);
+        inner_branch = 0u;
     } else if (is_beyond_inner_straight_border) {
         // Fast path for points that must be outside the inner edge.
-        inner_sdf = -1.0;
+        inner_branch = 1u;
     } else if (reduced_border.x == reduced_border.y) {
         // Fast path for circular inner edge.
-        inner_sdf = -(outer_sdf + reduced_border.x);
-    } else {
-        let ellipse_radii = max(vec2<f32>(0.0), corner_radius - reduced_border);
-        inner_sdf = quarter_ellipse_sdf(corner_center_to_point, ellipse_radii);
+        inner_branch = 2u;
     }
+    let inner_sdf = quad_inner_sdf(point, half_size, corner_radius, reduced_border, outer_sdf,
+        inner_branch);
 
     // Negative when inside the border
     let border_sdf = max(inner_sdf, outer_sdf);
@@ -1006,20 +1262,27 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
             }
         }
 
-        // Blend the border on top of the background and then linearly interpolate
-        // between the two as we slide inside the background.
-        let blended_border = over(background_color, border_color);
-        color = mix(background_color, blended_border,
-                    local_aa_coverage(inner_sdf, input.local_position));
+        // Composite the border over the background, clipped to the inner edge by its coverage,
+        // instead of interpolating between the two in *straight* alpha. Interpolating drags the
+        // result towards the background's colour as the coverage falls, and a border quad's
+        // background is transparent black, so every antialiased inner edge came out dragged
+        // towards black - a dark fringe just inside each border, and a dark inner arc at every
+        // rounded corner. Scaling the border's alpha by the coverage keeps its colour and ramps
+        // only how much of it there is, which is what an antialiased edge is.
+        let blended_border = vec4<f32>(border_color.rgb,
+            border_color.a * sdf_coverage(inner_sdf,
+                quad_inner_sdf(point + 0.5 * pixel_x, half_size, corner_radius, reduced_border,
+                    quad_own_sdf(point + 0.5 * pixel_x, half_size, corner_radius), inner_branch)
+                    - quad_inner_sdf(point - 0.5 * pixel_x, half_size, corner_radius, reduced_border,
+                        quad_own_sdf(point - 0.5 * pixel_x, half_size, corner_radius), inner_branch),
+                quad_inner_sdf(point + 0.5 * pixel_y, half_size, corner_radius, reduced_border,
+                    quad_own_sdf(point + 0.5 * pixel_y, half_size, corner_radius), inner_branch)
+                    - quad_inner_sdf(point - 0.5 * pixel_y, half_size, corner_radius, reduced_border,
+                        quad_own_sdf(point - 0.5 * pixel_y, half_size, corner_radius), inner_branch)));
+        color = over(background_color, blended_border);
     }
 
-    // The quad's own coverage and the content mask are combined with `min`, not a product
-    // (see the HLSL mirror): when the mask is (nearly) coincident with the quad's own
-    // outline — the classic rounded `overflow_hidden` parent clipping a same-size child —
-    // multiplying the two partial coverages darkens the arc with a serrated fringe, while
-    // `min` keeps a single smooth one-pixel edge.
-    return blend_color(color,
-        min(local_aa_coverage(outer_sdf, input.local_position), mask_coverage));
+    return blend_color(color, coverage);
 }
 
 // Returns the dash velocity of a corner given the dash velocity of the two
@@ -1110,10 +1373,14 @@ fn vs_shadow(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index) ins
 
     var geometry: Bounds;
     if (shadow.inset != 0u) {
+        // The inset shadow is bounded by the element's outline, whose own coverage ramp
+        // (`saturate(0.5 - element_distance)` below) needs fragments on both sides of it.
         geometry = shadow.element_bounds;
+        geometry.origin -= vec2<f32>(AA_MARGIN);
+        geometry.size += 2.0 * vec2<f32>(AA_MARGIN);
     } else {
-        // Leave room for the gaussian tail outside the shadow rect.
-        let margin = 3.0 * shadow.blur_radius;
+        // Leave room for the gaussian tail outside the shadow rect, plus the coverage ramp.
+        let margin = 3.0 * shadow.blur_radius + AA_MARGIN;
         geometry = shadow.bounds;
         geometry.origin -= vec2<f32>(margin);
         geometry.size += 2.0 * vec2<f32>(margin);
@@ -1335,15 +1602,35 @@ fn vs_underline(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index) 
     let underline = b_underlines[instance_id];
 
     var out = UnderlineVarying();
-    let local_position = unit_vertex * vec2<f32>(underline.bounds.size) + underline.bounds.origin;
+    // Grow the local rect so the coverage ramp below has fragments outside the outline (see
+    // `AA_MARGIN`) - without them the rasterizer's pixel-centre rule would leave the underline's
+    // ends hard regardless of sub-pixel position.
+    let margin = aa_margin_local(underline.transformation.rotation_scale);
+    let local_position = unit_vertex * (vec2<f32>(underline.bounds.size) + 2.0 * margin)
+        + (underline.bounds.origin - margin);
     let transformed_position =
         transpose(underline.transformation.rotation_scale) * local_position + underline.transformation.translation;
     out.position = to_device_position_impl(transformed_position);
     out.color = hsla_to_rgba(underline.color);
     out.underline_id = instance_id;
-    out.clip_distances = distance_from_clip_rect_impl(transformed_position, underline.content_mask);
+    out.clip_distances = distance_from_clip_rect_aa_impl(transformed_position, underline.content_mask);
     out.local_position = local_position;
     return out;
+}
+
+// The wavy underline's stroke as a distance field of a point in the underline's local space: the
+// distance across the stroke, signed, in local units.
+fn wavy_underline_sdf(point: vec2<f32>, size: vec2<f32>, thickness: f32) -> f32 {
+    const WAVE_FREQUENCY: f32 = 2.0;
+    const WAVE_HEIGHT_RATIO: f32 = 0.8;
+    let st = point / size.y - vec2<f32>(0.0, 0.5);
+    let frequency = M_PI_F * WAVE_FREQUENCY * thickness / size.y;
+    let amplitude = (thickness * WAVE_HEIGHT_RATIO) / size.y;
+    let sine = sin(st.x * frequency) * amplitude;
+    let dSine = cos(st.x * frequency) * amplitude * frequency;
+    let distance_in_pixels = ((st.y - sine) / sqrt(1.0 + dSine * dSine)) * size.y;
+    let half_thickness = thickness * 0.5;
+    return max(-(distance_in_pixels + half_thickness), distance_in_pixels - half_thickness);
 }
 
 @fragment
@@ -1358,36 +1645,43 @@ fn fs_underline(input: UnderlineVarying) -> @location(0) vec4<f32> {
 
     let underline = b_underlines[input.underline_id];
 
-    // Rounded content-mask cutout: `vs_underline` clipped the mask's straight edges, so only
-    // its rounded-corner arcs are cut here. Underlines carry no own rounded cutout in the
-    // shader, so there is no mask-equals-own skip.
+    // One screen pixel in the underline's local space, and the underline's own rectangle. The
+    // outline is unrounded, so this is the plain box distance; it is what keeps the geometry
+    // margin from painting past the underline's ends.
+    let pixel_x = dpdx(input.local_position);
+    let pixel_y = dpdy(input.local_position);
+    let half_size = underline.bounds.size / 2.0;
+    let point = input.local_position - underline.bounds.origin;
+    let own_coverage = sdf_coverage(quad_own_sdf(point, half_size, 0.0),
+        quad_own_sdf(point + 0.5 * pixel_x, half_size, 0.0)
+            - quad_own_sdf(point - 0.5 * pixel_x, half_size, 0.0),
+        quad_own_sdf(point + 0.5 * pixel_y, half_size, 0.0)
+            - quad_own_sdf(point - 0.5 * pixel_y, half_size, 0.0));
+
+    // The mask's whole outline is cut here (`clip_distances` is padded by `AA_MARGIN` and only
+    // culls). An underline carries no rounded cutout of its own, so there is no mask-equals-own
+    // skip.
     let mask_coverage = content_mask_coverage(
         transpose(underline.transformation.rotation_scale) * input.local_position
             + underline.transformation.translation,
         underline.content_mask, underline.content_mask_corner_radii,
         underline.bounds.origin, underline.bounds.size, underline.content_mask_corner_radii,
         false);
+    let coverage = min(own_coverage, mask_coverage);
 
     if (underline.wavy == 0u)
     {
-        return blend_color(input.color, input.color.a * mask_coverage);
+        return blend_color(input.color, coverage);
     }
 
-    let half_thickness = underline.thickness * 0.5;
-
-    let st = (input.local_position - underline.bounds.origin) / underline.bounds.size.y - vec2<f32>(0.0, 0.5);
-    let frequency = M_PI_F * WAVE_FREQUENCY * underline.thickness / underline.bounds.size.y;
-    let amplitude = (underline.thickness * WAVE_HEIGHT_RATIO) / underline.bounds.size.y;
-
-    let sine = sin(st.x * frequency) * amplitude;
-    let dSine = cos(st.x * frequency) * amplitude * frequency;
-    let distance = (st.y - sine) / sqrt(1.0 + dSine * dSine);
-    let distance_in_pixels = distance * underline.bounds.size.y;
-    let distance_from_top_border = distance_in_pixels - half_thickness;
-    let distance_from_bottom_border = distance_in_pixels + half_thickness;
-    let alpha = local_aa_coverage(
-        max(-distance_from_bottom_border, distance_from_top_border), input.local_position);
-    return blend_color(input.color, min(alpha, mask_coverage) * input.color.a);
+    let thickness = underline.thickness;
+    let alpha = sdf_coverage(
+        wavy_underline_sdf(point, underline.bounds.size, thickness),
+        wavy_underline_sdf(point + 0.5 * pixel_x, underline.bounds.size, thickness)
+            - wavy_underline_sdf(point - 0.5 * pixel_x, underline.bounds.size, thickness),
+        wavy_underline_sdf(point + 0.5 * pixel_y, underline.bounds.size, thickness)
+            - wavy_underline_sdf(point - 0.5 * pixel_y, underline.bounds.size, thickness));
+    return blend_color(input.color, min(alpha, coverage));
 }
 
 // --- monochrome sprites --- //
@@ -1421,6 +1715,12 @@ fn vs_mono_sprite(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index
     let sprite = b_mono_sprites[instance_id];
 
     var out = MonoSpriteVarying();
+    // Deliberately NOT grown by `AA_MARGIN`, unlike every other primitive here. A glyph's shape is
+    // its texture's alpha, not its quad's outline, and this shader has no own-coverage term to
+    // taper the extra geometry with: the only coverage it applies is the *content mask's*, which is
+    // 1.0 across the whole interior. Growing the quad would therefore paint one more pixel of the
+    // atlas tile's edge texel at full alpha all the way around every glyph, which reads as text
+    // that is both bolder and blurrier.
     let local_position = unit_vertex * vec2<f32>(sprite.bounds.size) + sprite.bounds.origin;
     let transformed_position =
         transpose(sprite.transformation.rotation_scale) * local_position + sprite.transformation.translation;
@@ -1430,7 +1730,7 @@ fn vs_mono_sprite(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index
     out.color = hsla_to_rgba(sprite.color);
     out.sprite_id = instance_id;
     out.local_position = local_position;
-    out.clip_distances = distance_from_clip_rect_impl(transformed_position, sprite.content_mask);
+    out.clip_distances = distance_from_clip_rect_aa_impl(transformed_position, sprite.content_mask);
     return out;
 }
 
@@ -1490,11 +1790,17 @@ fn vs_poly_sprite(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index
     let sprite = b_poly_sprites[instance_id];
 
     var out = PolySpriteVarying();
-    let local_position = unit_vertex * vec2<f32>(sprite.bounds.size) + sprite.bounds.origin;
+    // Grow the sprite rect so its own corner-radius SDF and the mask's ramp have fragments
+    // outside the outline (see `AA_MARGIN`). The atlas lookup stays clamped inside the sprite's
+    // tile, so the added fragments - whose coverage is at most a fraction of a pixel - replay
+    // the tile's edge texel instead of a neighbouring tile's.
+    let margin = aa_margin_local(sprite.transformation.rotation_scale);
+    let local_position = unit_vertex * (vec2<f32>(sprite.bounds.size) + 2.0 * margin)
+        + (sprite.bounds.origin - margin);
     let transformed_position =
         transpose(sprite.transformation.rotation_scale) * local_position + sprite.transformation.translation;
     out.position = to_device_position_impl(transformed_position);
-    out.tile_position = to_tile_position(unit_vertex, sprite.tile);
+    out.tile_position = to_tile_position(saturate(unit_vertex), sprite.tile);
     out.sprite_id = instance_id;
     // A mask that coincides with the sprite's own bounds is the sprite's own cutout (see
     // `fs_poly_sprite`): the straight-edge clip would slice the transformed sprite at its
@@ -1503,7 +1809,7 @@ fn vs_poly_sprite(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index
     let mask_is_own = all(sprite.content_mask.origin == sprite.bounds.origin) &&
         all(sprite.content_mask.size == sprite.bounds.size);
     out.clip_distances = select(
-        distance_from_clip_rect_impl(transformed_position, sprite.content_mask),
+        distance_from_clip_rect_aa_impl(transformed_position, sprite.content_mask),
         vec4<f32>(1.0),
         mask_is_own);
     out.local_position = local_position;
@@ -1519,7 +1825,11 @@ fn fs_poly_sprite(input: PolySpriteVarying) -> @location(0) vec4<f32> {
     }
 
     let sprite = b_poly_sprites[input.sprite_id];
-    let distance = quad_sdf(input.local_position, sprite.bounds, sprite.corner_radii);
+    let pixel_x = dpdx(input.local_position);
+    let pixel_y = dpdy(input.local_position);
+    let half_size = sprite.bounds.size / 2.0;
+    let point = input.local_position - sprite.bounds.origin;
+    let corner_radius = pick_corner_radius(point - half_size, sprite.corner_radii);
 
     // Rounded content-mask cutout: the vertex shader clipped the mask's straight edges, so only
     // its rounded-corner arcs are cut here. A mask that coincides with the sprite's own
@@ -1539,7 +1849,11 @@ fn fs_poly_sprite(input: PolySpriteVarying) -> @location(0) vec4<f32> {
         let grayscale = dot(color.rgb, GRAYSCALE_FACTORS);
         color = vec4<f32>(vec3<f32>(grayscale), sample.a);
     }
-    return blend_color(color, sprite.opacity * min(local_aa_coverage(distance, input.local_position), mask_coverage));
+    return blend_color(color, sprite.opacity * min(sdf_coverage(quad_own_sdf(point, half_size, corner_radius),
+        quad_own_sdf(point + 0.5 * pixel_x, half_size, corner_radius)
+            - quad_own_sdf(point - 0.5 * pixel_x, half_size, corner_radius),
+        quad_own_sdf(point + 0.5 * pixel_y, half_size, corner_radius)
+            - quad_own_sdf(point - 0.5 * pixel_y, half_size, corner_radius)), mask_coverage));
 }
 
 // --- surfaces --- //
@@ -1566,7 +1880,11 @@ fn vs_surface(@builtin(vertex_index) vertex_id: u32) -> SurfaceVarying {
     var out = SurfaceVarying();
     out.position = to_device_position(unit_vertex, surface_locals.bounds);
     out.texture_position = unit_vertex;
-    out.clip_distances = distance_from_clip_rect(unit_vertex, surface_locals.bounds, surface_locals.content_mask);
+    // Exactly, not loosened: this fragment samples a texture and nothing else, so the clip is
+    // the only thing that cuts it (see `distance_from_clip_rect_impl`).
+    out.clip_distances = distance_from_clip_rect_impl(
+        unit_vertex * vec2<f32>(surface_locals.bounds.size) + surface_locals.bounds.origin,
+        surface_locals.content_mask);
     return out;
 }
 
@@ -1702,9 +2020,16 @@ fn fs_blur(input: BlurVarying) -> @location(0) vec4<f32> {
 fn vs_blur_composite(@builtin(vertex_index) vertex_id: u32) -> BlurVarying {
     let unit_vertex = vec2<f32>(f32(vertex_id & 1u), 0.5 * f32(vertex_id & 2u));
     var out = BlurVarying();
-    out.position = to_device_position(unit_vertex, blur_locals.bounds);
+    // Grow the composite quad so the rounded cut in the fragment has fragments on both sides of
+    // the outline (see `AA_MARGIN`). The fragment samples the blur by *screen position*, so the
+    // extra area needs no uv compensation, and `blur_locals.bounds` itself is left alone — it is
+    // what the cut measures from.
+    let bounds = Bounds(
+        blur_locals.bounds.origin - vec2<f32>(AA_MARGIN),
+        blur_locals.bounds.size + 2.0 * vec2<f32>(AA_MARGIN));
+    out.position = to_device_position(unit_vertex, bounds);
     out.uv = unit_vertex;
-    out.clip_distances = distance_from_clip_rect(unit_vertex, blur_locals.bounds, blur_locals.content_mask);
+    out.clip_distances = distance_from_clip_rect(unit_vertex, bounds, blur_locals.content_mask);
     return out;
 }
 

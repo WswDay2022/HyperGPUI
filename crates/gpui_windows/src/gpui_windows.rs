@@ -19,6 +19,7 @@ mod platform;
 mod system_notifications;
 mod system_settings;
 #[cfg(all(test, not(feature = "wgpu")))]
+mod corner_area_tests;
 mod shader_layout_tests;
 mod util;
 mod vsync;

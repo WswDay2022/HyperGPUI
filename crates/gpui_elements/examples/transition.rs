@@ -56,14 +56,14 @@ impl Example {
                     // `delta` and `time` both go 0 -> 1: `delta` is the eased one (used for the
                     // fade), `time` the plain one, so the slide keeps a steady speed.
                     // Entering: slide down into place. Leaving: slide up away.
-                    .enter(|child, delta, time| {
+                    .enter(|child, delta, time, _window, _cx| {
                         div()
                             .opacity(delta)
                             .translate_y(px(12.) * (1. - time))
                             .child(child)
                             .into_any_element()
                     })
-                    .leave(|child, delta, time| {
+                    .leave(|child, delta, time, _window, _cx| {
                         div()
                             .opacity(1. - delta)
                             .translate_y(px(-12.) * time)

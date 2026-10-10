@@ -14,14 +14,14 @@
 //!     .mode(TransitionMode::OutIn)
 //!     // `delta` is the eased progress, `time` the plain one, both going 0 -> 1. During a
 //!     // leave they are the *leave* progress.
-//!     .enter(|child, delta, time| {
+//!     .enter(|child, delta, time, _window, _cx| {
 //!         div()
 //!             .opacity(delta)
 //!             .translate_y(px(12.) * (1. - time))
 //!             .child(child)
 //!             .into_any_element()
 //!     })
-//!     .leave(|child, delta, time| {
+//!     .leave(|child, delta, time, _window, _cx| {
 //!         div()
 //!             .opacity(1. - delta)
 //!             .translate_y(px(-12.) * time)
@@ -150,7 +150,7 @@ impl TransitionBuilder {
     /// `0.0 -> 1.0` — see [`EnterStyle`] for what the two of them are.
     ///
     /// Without one, the child appears instantly (the progress is simply unused).
-    pub fn enter(mut self, style: impl Fn(AnyElement, f32, f32) -> AnyElement + 'static) -> Self {
+    pub fn enter(mut self, style: impl Fn(AnyElement, f32, f32, &mut Window, &mut App) -> AnyElement + 'static) -> Self {
         self.enter = Some(Rc::new(style));
         self
     }
@@ -160,7 +160,7 @@ impl TransitionBuilder {
     ///
     /// In [`TransitionMode::OutIn`] this wraps the child where it stands, in the flow; in the
     /// other modes it wraps it in an overlay painted underneath the incoming child.
-    pub fn leave(mut self, style: impl Fn(AnyElement, f32, f32) -> AnyElement + 'static) -> Self {
+    pub fn leave(mut self, style: impl Fn(AnyElement, f32, f32, &mut Window, &mut App) -> AnyElement + 'static) -> Self {
         self.leave = Some(Rc::new(style));
         self
     }
@@ -493,7 +493,7 @@ impl TransitionBuilder {
 
         if let Some(leaving) = &leaving {
             let child = leaving(window, cx);
-            let child = styled(self.leave.as_ref(), leave_t, child);
+            let child = styled(self.leave.as_ref(), leave_t, child, window, cx);
             container = container.child(div().absolute().inset_0().child(child));
         }
 
@@ -510,16 +510,16 @@ impl TransitionBuilder {
             Phase::Idle => (None, None),
         };
         container
-            .child(styled(style, progress, child))
+            .child(styled(style, progress, child, window, cx))
             .into_any_element()
     }
 }
 
 /// Applies one half's style to `child`, unless that half is missing or already over.
-fn styled(style: Option<&EnterStyle>, progress: Option<Progress>, child: AnyElement) -> AnyElement {
+fn styled(style: Option<&EnterStyle>, progress: Option<Progress>, child: AnyElement, window: &mut Window, cx: &mut App) -> AnyElement {
     match (style, progress) {
         // `(delta, time)`, both `0.0 -> 1.0`.
-        (Some(style), Some((delta, time))) if delta < 1.0 => style(child, delta, time),
+        (Some(style), Some((delta, time))) if delta < 1.0 => style(child, delta, time, window, cx),
         _ => child,
     }
 }

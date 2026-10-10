@@ -7,6 +7,7 @@ use collections::FxHashMap;
 use core::fmt;
 use derive_more::{Add, Deref, FromStr, Sub};
 use itertools::Itertools;
+use lru::LruCache;
 use palette::Hsla;
 use parking_lot::{Mutex, RwLock, RwLockUpgradableReadGuard};
 use schemars::JsonSchema;
@@ -17,6 +18,7 @@ use std::{
     cmp,
     fmt::{Debug, Display, Formatter},
     hash::{Hash, Hasher},
+    num::NonZeroUsize,
     ops::{Deref, DerefMut, Range},
     sync::Arc,
 };
@@ -48,12 +50,22 @@ pub const SUBPIXEL_VARIANTS_X: u8 = 4;
 /// Number of subpixel glyph variants along the Y axis.
 pub const SUBPIXEL_VARIANTS_Y: u8 = 1;
 
+/// Maximum number of entries in the glyph raster bounds cache before eviction.
+/// This prevents unbounded memory growth from caching every unique glyph render configuration.
+const RASTER_BOUNDS_CACHE_CAPACITY: usize = 8192;
+
+/// Maximum number of font run vectors to keep in the pool.
+const FONT_RUNS_POOL_MAX_CAPACITY: usize = 64;
+
+/// Maximum number of line wrappers per font/size to keep in the pool.
+const WRAPPER_POOL_MAX_PER_FONT: usize = 8;
+
 /// The GPUI text rendering sub system.
 pub struct TextSystem {
     platform_text_system: Arc<dyn PlatformTextSystem>,
     font_ids_by_font: RwLock<FxHashMap<Font, Result<FontId>>>,
     font_metrics: RwLock<FxHashMap<FontId, FontMetrics>>,
-    raster_bounds: RwLock<FxHashMap<RenderGlyphParams, Bounds<DevicePixels>>>,
+    raster_bounds: Mutex<LruCache<RenderGlyphParams, Bounds<DevicePixels>>>,
     wrapper_pool: Mutex<FxHashMap<FontIdWithSize, Vec<LineWrapper>>>,
     font_runs_pool: Mutex<Vec<Vec<FontRun>>>,
     fallback_font_stack: SmallVec<[Font; 2]>,
@@ -64,11 +76,14 @@ impl TextSystem {
     pub fn new(platform_text_system: Arc<dyn PlatformTextSystem>) -> Self {
         TextSystem {
             platform_text_system,
-            font_metrics: RwLock::default(),
-            raster_bounds: RwLock::default(),
-            font_ids_by_font: RwLock::default(),
-            wrapper_pool: Mutex::default(),
-            font_runs_pool: Mutex::default(),
+            // Pre-allocate cache capacities to avoid rehashing during hot path.
+            font_metrics: RwLock::new(FxHashMap::with_capacity_and_hasher(32, Default::default())),
+            raster_bounds: Mutex::new(LruCache::new(
+                NonZeroUsize::new(RASTER_BOUNDS_CACHE_CAPACITY).unwrap(),
+            )),
+            font_ids_by_font: RwLock::new(FxHashMap::with_capacity_and_hasher(64, Default::default())),
+            wrapper_pool: Mutex::new(FxHashMap::with_capacity_and_hasher(16, Default::default())),
+            font_runs_pool: Mutex::new(Vec::with_capacity(32)),
             fallback_font_stack: smallvec![
                 // TODO: Remove this when Linux have implemented setting fallbacks.
                 font(".ZedMono"),
@@ -324,15 +339,15 @@ impl TextSystem {
 
     /// Get the rasterized size and location of a specific, rendered glyph.
     pub(crate) fn raster_bounds(&self, params: &RenderGlyphParams) -> Result<Bounds<DevicePixels>> {
-        let raster_bounds = self.raster_bounds.upgradable_read();
-        if let Some(bounds) = raster_bounds.get(params) {
-            Ok(*bounds)
-        } else {
-            let mut raster_bounds = RwLockUpgradableReadGuard::upgrade(raster_bounds);
-            let bounds = self.platform_text_system.glyph_raster_bounds(params)?;
-            raster_bounds.insert(params.clone(), bounds);
-            Ok(bounds)
+        // Try to get from cache first (read path - fast, just a lock and hashmap lookup)
+        if let Some(bounds) = self.raster_bounds.lock().get(params) {
+            return Ok(*bounds);
         }
+
+        // Cache miss: compute the bounds and insert (write path)
+        let bounds = self.platform_text_system.glyph_raster_bounds(params)?;
+        self.raster_bounds.lock().put(params.clone(), bounds);
+        Ok(bounds)
     }
 
     pub(crate) fn rasterize_glyph(
@@ -651,7 +666,11 @@ impl WindowTextSystem {
             process_line(text.into(), 0, end);
         }
 
-        self.font_runs_pool.lock().push(font_runs);
+        // Limit font_runs_pool capacity to prevent unbounded growth
+        let mut pool = self.font_runs_pool.lock();
+        if pool.len() < FONT_RUNS_POOL_MAX_CAPACITY {
+            pool.push(font_runs);
+        }
 
         Ok(lines)
     }
@@ -713,7 +732,11 @@ impl WindowTextSystem {
             force_width,
         );
 
-        self.font_runs_pool.lock().push(font_runs);
+        // Limit font_runs_pool capacity to prevent unbounded growth
+        let mut pool = self.font_runs_pool.lock();
+        if pool.len() < FONT_RUNS_POOL_MAX_CAPACITY {
+            pool.push(font_runs);
+        }
 
         layout
     }
@@ -800,7 +823,11 @@ impl WindowTextSystem {
             force_width,
         );
 
-        self.font_runs_pool.lock().push(font_runs);
+        // Limit font_runs_pool capacity to prevent unbounded growth
+        let mut pool = self.font_runs_pool.lock();
+        if pool.len() < FONT_RUNS_POOL_MAX_CAPACITY {
+            pool.push(font_runs);
+        }
 
         layout
     }
@@ -866,7 +893,11 @@ impl WindowTextSystem {
             materialize_text,
         );
 
-        self.font_runs_pool.lock().push(font_runs);
+        // Limit font_runs_pool capacity to prevent unbounded growth
+        let mut pool = self.font_runs_pool.lock();
+        if pool.len() < FONT_RUNS_POOL_MAX_CAPACITY {
+            pool.push(font_runs);
+        }
 
         layout
     }
@@ -889,13 +920,16 @@ impl Drop for LineWrapperHandle {
         let mut state = self.text_system.wrapper_pool.lock();
         let mut wrapper = self.wrapper.take().unwrap();
         wrapper.set_letter_spacing(None);
-        state
+        let wrappers = state
             .get_mut(&FontIdWithSize {
                 font_id: wrapper.font_id,
                 font_size: wrapper.font_size,
             })
-            .unwrap()
-            .push(wrapper);
+            .unwrap();
+        // Limit wrapper_pool capacity per font/size to prevent unbounded growth
+        if wrappers.len() < WRAPPER_POOL_MAX_PER_FONT {
+            wrappers.push(wrapper);
+        }
     }
 }
 

@@ -98,6 +98,8 @@ sum_tree.workspace = true
 taffy = "=0.12.2"
 thiserror.workspace = true
 unicode-segmentation.workspace = true
+hashbrown.workspace = true
+lru.workspace = true
 hdrhistogram = { workspace = true, optional = true }
 waker-fn = "1.2.0"
 lyon = "1.0"

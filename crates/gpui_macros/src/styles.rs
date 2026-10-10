@@ -151,6 +151,28 @@ pub fn overflow_style_methods(input: TokenStream) -> TokenStream {
             self.style().overflow.y = Some(hgpui::Overflow::Hidden);
             self
         }
+
+        /// Sets the behavior of content that overflows the container to be shown.
+        /// [Docs](https://tailwindcss.com/docs/overflow#hiding-content-that-overflows)
+        #visibility fn overflow_shown(mut self) -> Self {
+            self.style().overflow.x = Some(hgpui::Overflow::Visible);
+            self.style().overflow.y = Some(hgpui::Overflow::Visible);
+            self
+        }
+
+        /// Sets the behavior of content that overflows the container on the X axis to be shown.
+        /// [Docs](https://tailwindcss.com/docs/overflow#hiding-content-that-overflows)
+        #visibility fn overflow_x_shown(mut self) -> Self {
+            self.style().overflow.x = Some(hgpui::Overflow::Visible);
+            self
+        }
+
+        /// Sets the behavior of content that overflows the container on the Y axis to be shown.
+        /// [Docs](https://tailwindcss.com/docs/overflow#hiding-content-that-overflows)
+        #visibility fn overflow_y_shown(mut self) -> Self {
+            self.style().overflow.y = Some(hgpui::Overflow::Visible);
+            self
+        }
     };
 
     output.into()
