@@ -1,10 +1,10 @@
 use crate::{CompositorGpuHint, WgpuAtlas, WgpuContext, WgpuDeviceRequirements};
 use bytemuck::{Pod, Zeroable};
 use hgpui::{
-    AtlasTextureId, BackdropFilter, Background, Bounds, ContentMask, DevicePixels, FilterBoundary,
-    GpuSpecs, MonochromeSprite, PaintSurface, Path, Point, PolychromeSprite, PrimitiveBatch, Quad,
-    ScaledFilter, ScaledPixels, Scene, Shadow, Size, SubpixelSprite, Underline,
-    get_gamma_correction_ratios,
+    AtlasTextureId, BackdropFilter, Background, Bounds, ContentMask, Corners, DevicePixels,
+    FilterBoundary, GpuSpecs, MonochromeSprite, PaintSurface, Path, Point, PolychromeSprite,
+    PrimitiveBatch, Quad, ScaledFilter, ScaledPixels, Scene, Shadow, Size, SubpixelSprite,
+    Underline, get_gamma_correction_ratios,
 };
 use log::warn;
 
@@ -134,7 +134,14 @@ struct PathRasterizationVertex {
     xy_position: Point<ScaledPixels>,
     st_position: Point<f32>,
     color: Background,
+    /// The path's own bounds: the gradient box. (Used to be `clipped_bounds`, which made the
+    /// gradient shift/scale whenever an ancestor clip cut the path.)
     bounds: Bounds<ScaledPixels>,
+    /// The content mask the path is painted under. The shader clips with the padded AA margin
+    /// and cuts the mask's distance field in the fragment, so rounded mask corners apply to
+    /// vector paths too.
+    content_mask: Bounds<ScaledPixels>,
+    content_mask_corner_radii: Corners<ScaledPixels>,
 }
 
 pub struct WgpuSurfaceConfig {
@@ -2413,12 +2420,13 @@ impl WgpuRenderer {
     ) -> bool {
         let mut vertices = Vec::new();
         for path in paths {
-            let bounds = path.clipped_bounds();
             vertices.extend(path.vertices.iter().map(|v| PathRasterizationVertex {
                 xy_position: v.xy_position,
                 st_position: v.st_position,
                 color: path.color,
-                bounds,
+                bounds: path.bounds,
+                content_mask: path.content_mask.bounds,
+                content_mask_corner_radii: path.content_mask.corner_radii,
             }));
         }
 
@@ -2747,5 +2755,28 @@ impl RenderingParameters {
             grayscale_enhanced_contrast,
             subpixel_enhanced_contrast,
         }
+    }
+}
+
+#[cfg(test)]
+mod path_layout_tests {
+    use super::PathRasterizationVertex;
+    use std::mem::{offset_of, size_of};
+
+    /// The WGSL `PathRasterizationVertex` must see the same field offsets as the Rust
+    /// `repr(C)` struct: 8 / 8 / 80 / 16 / 16 / 16 = 144 bytes. A drift here silently
+    /// misreads the mask and the gradient box for every path vertex.
+    #[test]
+    fn path_rasterization_vertex_layout_matches_wgsl() {
+        assert_eq!(size_of::<PathRasterizationVertex>(), 144);
+        assert_eq!(offset_of!(PathRasterizationVertex, xy_position), 0);
+        assert_eq!(offset_of!(PathRasterizationVertex, st_position), 8);
+        assert_eq!(offset_of!(PathRasterizationVertex, color), 16);
+        assert_eq!(offset_of!(PathRasterizationVertex, bounds), 96);
+        assert_eq!(offset_of!(PathRasterizationVertex, content_mask), 112);
+        assert_eq!(
+            offset_of!(PathRasterizationVertex, content_mask_corner_radii),
+            128
+        );
     }
 }

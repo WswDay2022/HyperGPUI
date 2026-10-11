@@ -34,12 +34,20 @@ fn vs_subpixel_sprite(@builtin(vertex_index) vertex_id: u32, @builtin(instance_i
     let sprite = b_subpixel_sprites[instance_id];
 
     var out = SubpixelSpriteOutput();
-    out.position = to_device_position_transformed(unit_vertex, sprite.bounds, sprite.transformation);
+    // Same transform chain as `vs_mono_sprite` in shaders.wgsl (these two helpers used to be
+    // referenced here without existing anywhere in the module, which made the combined
+    // dual-source shader fail validation at pipeline creation).
+    let local_position = unit_vertex * vec2<f32>(sprite.bounds.size) + sprite.bounds.origin;
+    let transformed_position =
+        transpose(sprite.transformation.rotation_scale) * local_position + sprite.transformation.translation;
+    out.position = to_device_position_impl(transformed_position);
     out.tile_position = to_tile_position(unit_vertex, sprite.tile);
     out.color = hsla_to_rgba(sprite.color);
     out.sprite_id = instance_id;
-    out.local_position = unit_vertex * vec2<f32>(sprite.bounds.size) + sprite.bounds.origin;
-    out.clip_distances = distance_from_clip_rect_transformed(unit_vertex, sprite.bounds, sprite.content_mask, sprite.transformation);
+    out.local_position = local_position;
+    // No AA margin for glyph sprites (see `vs_mono_sprite`); the padded clip lets the mask's
+    // own distance field taper its edges.
+    out.clip_distances = distance_from_clip_rect_aa_impl(transformed_position, sprite.content_mask);
     return out;
 }
 

@@ -96,15 +96,15 @@ impl Render for Harness {
         }
 
         builder
-            .enter(move |child, delta, time| {
+            .enter(move |child, delta, time, _, _| {
                 enter_log.enters.borrow_mut().push((delta, time));
                 div().opacity(delta).child(child).into_any_element()
             })
-            .leave(move |child, delta, time| {
+            .leave(move |child, delta, time, _, _| {
                 leave_log.leaves.borrow_mut().push((delta, time));
                 div().opacity(1.0 - delta).child(child).into_any_element()
             })
-            .child(move |_window, _cx| {
+            .child(move |_, _| {
                 log.children.borrow_mut().push(key);
                 div().child(format!("child {key}")).into_any_element()
             })

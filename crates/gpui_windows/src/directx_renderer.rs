@@ -788,7 +788,9 @@ impl DirectXRenderer {
                 xy_position: v.xy_position,
                 st_position: v.st_position,
                 color: path.color,
-                bounds: path.clipped_bounds(),
+                bounds: path.bounds,
+                content_mask: path.content_mask.bounds,
+                content_mask_corner_radii: path.content_mask.corner_radii,
             }));
         }
 
@@ -1734,7 +1736,14 @@ struct PathRasterizationSprite {
     xy_position: Point<ScaledPixels>,
     st_position: Point<f32>,
     color: Background,
+    /// The path's own bounds: the gradient box. (Used to be `clipped_bounds`, which made the
+    /// gradient shift/scale whenever an ancestor clip cut the path.)
     bounds: Bounds<ScaledPixels>,
+    /// The content mask the path is painted under. The shader clips with the padded AA margin
+    /// and cuts the mask's distance field in the fragment, so rounded mask corners apply to
+    /// vector paths too.
+    content_mask: Bounds<ScaledPixels>,
+    content_mask_corner_radii: Corners<ScaledPixels>,
 }
 
 #[derive(Clone, Copy)]
@@ -2641,18 +2650,20 @@ mod tests {
     // `#[test]` attribute and blows up `#[test]` expansion with an infinite
     // recursion. Import only what this module needs, explicitly.
     use super::{
-        create_blend_state, create_blend_state_for_path_sprite, create_blend_state_no_blend,
+        create_blend_state, create_blend_state_for_path_rasterization,
+        create_blend_state_for_path_sprite, create_blend_state_no_blend,
         corner_radii_array, create_blur_sampler, create_color_target, create_constant_buffer,
         create_fragment_shader, create_vertex_shader, update_buffer, BlurParams, GlobalParams,
-        PipelineState,
+        PathRasterizationSprite, PipelineState,
         RawShaderBytes, ShaderTarget, RENDER_TARGET_FORMAT,
     };
     use crate::directx_renderer::shader_resources::ShaderModule;
     use anyhow::Result;
     use hgpui::{
         bounds, hsla, linear_color_stop, linear_gradient, point, px, radial_gradient, rgba, size,
-        Background, Bounds, ContentMask, Corners, Edges, Quad, RadialShape, RadialSize, ScaledPixels,
-        TransformationMatrix, red, transparent_black,
+        AtlasTextureId, AtlasTextureKind, AtlasTile, Background, BorderStyle, Bounds, ColorSpace,
+        ContentMask, Corners, DevicePixels, Edges, PolychromeSprite, Quad, RadialShape, RadialSize,
+        ScaledPixels, Shadow, TileId, TransformationMatrix, red, transparent_black,
     };
     use std::slice;
     use windows::core::Interface;
@@ -2675,7 +2686,7 @@ mod tests {
                 ID3D11ShaderResourceView, ID3D11Texture2D, ID3D11VertexShader,
                 D3D11_BUFFER_DESC,
             },
-            Dxgi::Common::DXGI_SAMPLE_DESC,
+            Dxgi::Common::{DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC},
         },
     };
 
@@ -4165,6 +4176,795 @@ mod tests {
             [0, 255, 0, 255],
             "instance 1 should be solid green (B,G,R,A) — a stride mismatch reads garbage here, got {second:?}"
         );
+        Ok(())
+    }
+
+    /// The path instance struct must match the HLSL `PathRasterizationSprite` offsets exactly
+    /// (FXC reports 0/8/16/96/112/128, total 144). A drift here silently misreads the mask and
+    /// the gradient box for every path vertex.
+    #[test]
+    fn path_rasterization_sprite_layout() {
+        use std::mem::{offset_of, size_of};
+        assert_eq!(size_of::<PathRasterizationSprite>(), 144);
+        assert_eq!(offset_of!(PathRasterizationSprite, xy_position), 0);
+        assert_eq!(offset_of!(PathRasterizationSprite, st_position), 8);
+        assert_eq!(offset_of!(PathRasterizationSprite, color), 16);
+        assert_eq!(offset_of!(PathRasterizationSprite, bounds), 96);
+        assert_eq!(offset_of!(PathRasterizationSprite, content_mask), 112);
+        assert_eq!(
+            offset_of!(PathRasterizationSprite, content_mask_corner_radii),
+            128
+        );
+    }
+
+    // --- Antialiasing / clipping precision tests -------------------------------------------
+    //
+    // Every test below drives the real HLSL entry point through WARP and reads the pixels
+    // back. They pin the behaviours the precision pass fixed:
+    //   * straight edges of quads/underlines now use their distance field (the early-out no
+    //     longer fires for the whole interior, and AA_MARGIN gives the ramp fragments outside
+    //     the shape),
+    //   * mask edges are shaped by the mask's distance field on both sides of straight edges,
+    //   * vector paths honour a rounded content mask and resolve gradients against their own
+    //     bounds,
+    //   * closest-side/corner radial gradients work with an off-box centre,
+    //   * transparent-over-transparent and zero-width dashes no longer produce NaN.
+
+    fn test_viewport() -> D3D11_VIEWPORT {
+        D3D11_VIEWPORT {
+            TopLeftX: 0.0,
+            TopLeftY: 0.0,
+            Width: TEST_SIZE as f32,
+            Height: TEST_SIZE as f32,
+            MinDepth: 0.0,
+            MaxDepth: 1.0,
+        }
+    }
+
+    fn install_globals(
+        device: &ID3D11Device,
+        context: &ID3D11DeviceContext,
+    ) -> Result<ID3D11Buffer> {
+        let globals = GlobalParams {
+            gamma_ratios: [1.0, 1.0, 1.0, 1.0],
+            viewport_size: [TEST_SIZE as f32, TEST_SIZE as f32],
+            grayscale_enhanced_contrast: 0.0,
+            subpixel_enhanced_contrast: 0.0,
+            is_bgr: 0,
+            _pad: [0; 3],
+        };
+        let globals_buffer = unsafe {
+            let desc = D3D11_BUFFER_DESC {
+                ByteWidth: std::mem::size_of::<GlobalParams>() as u32,
+                Usage: D3D11_USAGE_DYNAMIC,
+                BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
+                CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
+                ..Default::default()
+            };
+            let mut buffer = None;
+            device.CreateBuffer(&desc, None, Some(&mut buffer))?;
+            buffer.unwrap()
+        };
+        update_buffer(context, &globals_buffer, &[globals])?;
+        Ok(globals_buffer)
+    }
+
+    fn viewport_mask() -> ContentMask<ScaledPixels> {
+        ContentMask {
+            bounds: bounds(
+                point(ScaledPixels(0.0), ScaledPixels(0.0)),
+                size(ScaledPixels(TEST_SIZE as f32), ScaledPixels(TEST_SIZE as f32)),
+            ),
+            corner_radii: Corners::default(),
+        }
+    }
+
+    /// A drawn test target plus the resources that must stay alive while the queued draw is
+    /// still in flight.
+    struct QuadTarget {
+        texture: ID3D11Texture2D,
+        staging: ID3D11Texture2D,
+        _pipeline: PipelineState<Quad>,
+        _globals: ID3D11Buffer,
+        _rtv: ID3D11RenderTargetView,
+    }
+
+    fn render_quad(
+        device: &ID3D11Device,
+        context: &ID3D11DeviceContext,
+        quad: Quad,
+        clear: [f32; 4],
+    ) -> Result<QuadTarget> {
+        let (texture, rtv, staging) = make_render_target(device)?;
+        let globals = install_globals(device, context)?;
+        let blend = create_blend_state(device)?;
+        let mut pipeline =
+            PipelineState::<Quad>::new(device, "test_quad_precision", ShaderModule::Quad, 4, blend)?;
+        pipeline.update_buffer(device, context, &[quad])?;
+        unsafe {
+            context.ClearRenderTargetView(&rtv, &clear);
+            context.OMSetRenderTargets(Some(slice::from_ref(&Some(rtv.clone()))), None);
+        }
+        pipeline.draw_range(device, context, &[test_viewport()], &[Some(globals.clone())], 4, 0, 1)?;
+        dump_device_errors(device);
+        Ok(QuadTarget {
+            texture,
+            staging,
+            _pipeline: pipeline,
+            _globals: globals,
+            _rtv: rtv,
+        })
+    }
+
+    fn assert_red_close(px: [u8; 4], expected: u8, what: &str) {
+        assert!(
+            (i16::from(expected) - 3..=i16::from(expected) + 3).contains(&i16::from(px[2])),
+            "{what}: expected red ~{expected}, got {px:?} (B,G,R,A)"
+        );
+    }
+
+    /// A quad whose edges land on fractional device pixels must taper over one pixel on every
+    /// straight edge. The old early-out returned coverage 1.0 for every *interior* fragment
+    /// (its condition reduced to `corner_to_point < 0`), so only the arcs were antialiased;
+    /// the margin then gives the ramp a fragment outside the shape as well.
+    #[test]
+    fn hlsl_quad_fractional_straight_edge_aa_readback() -> Result<()> {
+        let Some((device, context)) = create_warp_device() else {
+            eprintln!("[quad_fractional_aa] WARP device unavailable, skipping");
+            return Ok(());
+        };
+        // [16.25, 48.75] on both axes: every edge covers 0.75 of its boundary pixel.
+        let quad = Quad {
+            bounds: bounds(
+                point(ScaledPixels(16.25), ScaledPixels(16.25)),
+                size(ScaledPixels(32.5), ScaledPixels(32.5)),
+            ),
+            content_mask: viewport_mask(),
+            background: Background::from(rgba(0xff0000ff)),
+            ..Default::default()
+        };
+        let target = render_quad(&device, &context, quad, [0.0, 0.0, 0.0, 1.0])?;
+
+        for (x, y, what) in [
+            (16, 32, "left edge"),
+            (48, 32, "right edge"),
+            (32, 16, "top edge"),
+            (32, 48, "bottom edge"),
+        ] {
+            let px = read_pixel(&context, &target.texture, &target.staging, x, y)?;
+            // 0.75 * 255 = 191; the ramp is exact for a straight edge at unit scale.
+            assert_red_close(px, 191, what);
+        }
+        for (x, y) in [(15, 32), (49, 32), (32, 15), (32, 49)] {
+            let px = read_pixel(&context, &target.texture, &target.staging, x, y)?;
+            assert_eq!(px[2], 0, "pixel ({x}, {y}) outside the quad must stay clear, got {px:?}");
+        }
+        let center = read_pixel(&context, &target.texture, &target.staging, 32, 32)?;
+        assert_eq!(center[2], 255, "the interior must be fully covered, got {center:?}");
+        Ok(())
+    }
+
+    /// The coverage ramp must stay one *device* pixel wide under a CSS scale. A scale of 0.25
+    /// maps one device pixel to four local units; the old local-unit early-out fired at one
+    /// local unit (0.25 device pixels) inside the edge and forced full coverage there, leaving
+    /// a hard step inside the antialiased band.
+    #[test]
+    fn hlsl_quad_scaled_straight_edge_aa_readback() -> Result<()> {
+        let Some((device, context)) = create_warp_device() else {
+            eprintln!("[quad_scaled_aa] WARP device unavailable, skipping");
+            return Ok(());
+        };
+        // local [8,56] -> scene [14.3, 26.3] on both axes.
+        let quad = Quad {
+            bounds: bounds(
+                point(ScaledPixels(8.0), ScaledPixels(8.0)),
+                size(ScaledPixels(48.0), ScaledPixels(48.0)),
+            ),
+            content_mask: viewport_mask(),
+            background: Background::from(rgba(0xff0000ff)),
+            transformation: TransformationMatrix {
+                rotation_scale: [[0.25, 0.0], [0.0, 0.25]],
+                translation: [12.3, 12.3],
+            },
+            ..Default::default()
+        };
+        let target = render_quad(&device, &context, quad, [0.0, 0.0, 0.0, 1.0])?;
+
+        // On the left/top the boundary pixel's centre is 0.2 device px inside -> coverage
+        // 0.7 -> 179. On the right/bottom the centre is 0.2 px outside -> coverage 0.3 -> 77;
+        // both need the margin (an outside fragment) to exist at all.
+        for (x, y, expected, what) in [
+            (14, 20, 179, "scaled left edge"),
+            (26, 20, 77, "scaled right edge"),
+            (20, 14, 179, "scaled top edge"),
+            (20, 26, 77, "scaled bottom edge"),
+        ] {
+            let px = read_pixel(&context, &target.texture, &target.staging, x, y)?;
+            assert_red_close(px, expected, what);
+        }
+        let inside = read_pixel(&context, &target.texture, &target.staging, 20, 20)?;
+        assert_eq!(inside[2], 255, "scaled interior must be fully covered, got {inside:?}");
+        let outside = read_pixel(&context, &target.texture, &target.staging, 13, 20)?;
+        assert_eq!(outside[2], 0, "scaled left outside must stay clear, got {outside:?}");
+        Ok(())
+    }
+
+    /// A straight content-mask edge on a half pixel must taper over one pixel, exactly like a
+    /// rounded arc. The clip is padded by AA_MARGIN and the fragment applies the mask's distance
+    /// field for unrounded masks too; before this, the exact clip plus the "unrounded mask =>
+    /// coverage 1" short-circuit made every straight mask edge a hard step.
+    #[test]
+    fn hlsl_quad_mask_straight_edge_aa_readback() -> Result<()> {
+        let Some((device, context)) = create_warp_device() else {
+            eprintln!("[mask_straight_aa] WARP device unavailable, skipping");
+            return Ok(());
+        };
+        let quad = Quad {
+            bounds: bounds(
+                point(ScaledPixels(8.0), ScaledPixels(8.0)),
+                size(ScaledPixels(48.0), ScaledPixels(48.0)),
+            ),
+            // The unrounded mask's right edge sits on the centre of pixel 40.
+            content_mask: ContentMask {
+                bounds: bounds(
+                    point(ScaledPixels(8.0), ScaledPixels(8.0)),
+                    size(ScaledPixels(32.5), ScaledPixels(48.0)),
+                ),
+                corner_radii: Corners::default(),
+            },
+            background: Background::from(rgba(0xff0000ff)),
+            ..Default::default()
+        };
+        let target = render_quad(&device, &context, quad, [0.0, 0.0, 0.0, 1.0])?;
+
+        let edge = read_pixel(&context, &target.texture, &target.staging, 40, 32)?;
+        assert_red_close(edge, 128, "half-covered mask edge");
+        let outside = read_pixel(&context, &target.texture, &target.staging, 41, 32)?;
+        assert_eq!(outside[2], 0, "pixel past the mask must be clipped, got {outside:?}");
+        let inside = read_pixel(&context, &target.texture, &target.staging, 39, 32)?;
+        assert_eq!(inside[2], 255, "pixel inside the mask must be solid, got {inside:?}");
+        Ok(())
+    }
+
+    /// A wavy-free underline's ends must taper: the geometry is grown by AA_MARGIN and the
+    /// fragment cuts the extra margin with the underline's own rectangle.
+    #[test]
+    fn hlsl_underline_end_aa_readback() -> Result<()> {
+        let Some((device, context)) = create_warp_device() else {
+            eprintln!("[underline_end_aa] WARP device unavailable, skipping");
+            return Ok(());
+        };
+        let (texture, rtv, staging) = make_render_target(&device)?;
+        let globals = install_globals(&device, &context)?;
+        let blend = create_blend_state(&device)?;
+        let mut pipeline = PipelineState::<hgpui::Underline>::new(
+            &device,
+            "test_underline_precision",
+            ShaderModule::Underline,
+            4,
+            blend,
+        )?;
+        let underline = hgpui::Underline {
+            order: 0,
+            pad: 0,
+            bounds: bounds(
+                point(ScaledPixels(16.5), ScaledPixels(16.0)),
+                size(ScaledPixels(31.0), ScaledPixels(32.0)),
+            ),
+            content_mask: viewport_mask(),
+            color: red().into(),
+            thickness: ScaledPixels(0.0),
+            wavy: false.into(),
+            transformation: TransformationMatrix::unit(),
+        };
+        pipeline.update_buffer(&device, &context, &[underline])?;
+        unsafe {
+            context.ClearRenderTargetView(&rtv, &[0.0, 0.0, 0.0, 1.0]);
+            context.OMSetRenderTargets(Some(slice::from_ref(&Some(rtv.clone()))), None);
+        }
+        pipeline.draw_range(&device, &context, &[test_viewport()], &[Some(globals)], 4, 0, 1)?;
+        dump_device_errors(&device);
+
+        let left = read_pixel(&context, &texture, &staging, 16, 32)?;
+        assert_red_close(left, 128, "underline left end");
+        let right = read_pixel(&context, &texture, &staging, 47, 32)?;
+        assert_red_close(right, 128, "underline right end");
+        let middle = read_pixel(&context, &texture, &staging, 32, 32)?;
+        assert_eq!(middle[2], 255, "underline body must be solid, got {middle:?}");
+        Ok(())
+    }
+
+    /// A polychrome sprite's own corner SDF must taper on fractional edges. The quad is grown
+    /// by AA_MARGIN and the tile lookup is clamped with `saturate`, so the extra fragments
+    /// replay the edge texel with partial coverage instead of a hard snapped edge.
+    #[test]
+    fn hlsl_polychrome_sprite_fractional_edge_aa_readback() -> Result<()> {
+        let Some((device, context)) = create_warp_device() else {
+            eprintln!("[poly_edge_aa] WARP device unavailable, skipping");
+            return Ok(());
+        };
+        let (texture, rtv, staging) = make_render_target(&device)?;
+        let globals = install_globals(&device, &context)?;
+        let blend = create_blend_state(&device)?;
+        let mut pipeline = PipelineState::<PolychromeSprite>::new(
+            &device,
+            "test_poly_precision",
+            ShaderModule::PolychromeSprite,
+            64,
+            blend,
+        )?;
+
+        // A 4x4 opaque white atlas tile.
+        let pixels = [255u8; 4 * 4 * 4];
+        let atlas_srv = unsafe {
+            let desc = D3D11_TEXTURE2D_DESC {
+                Width: 4,
+                Height: 4,
+                MipLevels: 1,
+                ArraySize: 1,
+                Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+                SampleDesc: DXGI_SAMPLE_DESC {
+                    Count: 1,
+                    Quality: 0,
+                },
+                Usage: D3D11_USAGE_DEFAULT,
+                BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
+                CPUAccessFlags: 0,
+                MiscFlags: 0,
+            };
+            let data = D3D11_SUBRESOURCE_DATA {
+                pSysMem: pixels.as_ptr().cast(),
+                SysMemPitch: 4 * 4,
+                SysMemSlicePitch: 0,
+            };
+            let mut atlas = None;
+            device.CreateTexture2D(&desc, Some(&data), Some(&mut atlas))?;
+            let mut srv = None;
+            device.CreateShaderResourceView(&atlas.unwrap(), None, Some(&mut srv))?;
+            srv.unwrap()
+        };
+
+        let sprite = PolychromeSprite {
+            order: 0,
+            pad: 0,
+            grayscale: false.into(),
+            opacity: 1.0,
+            // [16.25, 48.75]: each edge covers 0.75 of its boundary pixel.
+            bounds: bounds(
+                point(ScaledPixels(16.25), ScaledPixels(16.25)),
+                size(ScaledPixels(32.5), ScaledPixels(32.5)),
+            ),
+            content_mask: viewport_mask(),
+            corner_radii: Corners::default(),
+            tile: AtlasTile {
+                texture_id: AtlasTextureId {
+                    index: 0,
+                    kind: AtlasTextureKind::Polychrome,
+                },
+                tile_id: TileId(0),
+                padding: 0,
+                bounds: bounds(
+                    point(DevicePixels(0), DevicePixels(0)),
+                    size(DevicePixels(4), DevicePixels(4)),
+                ),
+            },
+            transformation: TransformationMatrix::unit(),
+        };
+        pipeline.update_buffer(&device, &context, &[sprite])?;
+        let sampler = create_blur_sampler(&device)?;
+        let atlas_binding: Option<ID3D11ShaderResourceView> = Some(atlas_srv.clone());
+        unsafe {
+            context.ClearRenderTargetView(&rtv, &[0.0, 0.0, 0.0, 1.0]);
+            context.OMSetRenderTargets(Some(slice::from_ref(&Some(rtv.clone()))), None);
+            context.PSSetSamplers(0, Some(slice::from_ref(&sampler)));
+            context.PSSetShaderResources(0, Some(slice::from_ref(&atlas_binding)));
+        }
+        pipeline.draw(
+            &context,
+            &[test_viewport()],
+            &[Some(globals)],
+            D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP,
+            4,
+            1,
+        )?;
+        dump_device_errors(&device);
+
+        for (x, y, what) in [
+            (16, 32, "left edge"),
+            (48, 32, "right edge"),
+            (32, 16, "top edge"),
+            (32, 48, "bottom edge"),
+        ] {
+            let px = read_pixel(&context, &texture, &staging, x, y)?;
+            assert_red_close(px, 191, what);
+        }
+        let center = read_pixel(&context, &texture, &staging, 32, 32)?;
+        assert_eq!(center, [255, 255, 255, 255], "sprite body must be white, got {center:?}");
+        let outside = read_pixel(&context, &texture, &staging, 15, 32)?;
+        assert_eq!(outside, [0, 0, 0, 255], "sprite must not paint outside, got {outside:?}");
+        Ok(())
+    }
+
+    /// Renders vector-path geometry through the real path pipelines. A constant `st_position`
+    /// makes the curve field's derivative zero, which the shader treats as "solid coverage", so
+    /// the only shaping left is the content mask / gradient under test.
+    struct PathTarget {
+        texture: ID3D11Texture2D,
+        staging: ID3D11Texture2D,
+        _pipeline: PipelineState<PathRasterizationSprite>,
+        _globals: ID3D11Buffer,
+        _rtv: ID3D11RenderTargetView,
+    }
+
+    fn render_path(
+        device: &ID3D11Device,
+        context: &ID3D11DeviceContext,
+        color: Background,
+        path_bounds: Bounds<ScaledPixels>,
+        content_mask: ContentMask<ScaledPixels>,
+        st_scale: Option<f32>,
+    ) -> Result<PathTarget> {
+        let (texture, rtv, staging) = make_render_target(device)?;
+        let globals = install_globals(device, context)?;
+        let blend = create_blend_state_for_path_rasterization(device)?;
+        let mut pipeline = PipelineState::<PathRasterizationSprite>::new(
+            device,
+            "test_path_precision",
+            ShaderModule::PathRasterization,
+            6,
+            blend,
+        )?;
+        let vertex = |x: f32, y: f32| PathRasterizationSprite {
+            xy_position: point(ScaledPixels(x), ScaledPixels(y)),
+            st_position: match st_scale {
+                // st = (x/s, y/s) makes the curve field `st.y - st.x^2` the parabola
+                // y = x^2 / s through the scene, which is how the real path rasterizer feeds
+                // the exact curve into the shader.
+                Some(s) => point(x / s, y / s),
+                // A constant st is the degenerate case: alpha falls back to a solid fill.
+                None => point(0.0, 0.0),
+            },
+            color,
+            bounds: path_bounds,
+            content_mask: content_mask.bounds,
+            content_mask_corner_radii: content_mask.corner_radii,
+        };
+        // Two triangles covering the whole viewport.
+        let vertices = [
+            vertex(0.0, 0.0),
+            vertex(TEST_SIZE as f32, 0.0),
+            vertex(0.0, TEST_SIZE as f32),
+            vertex(TEST_SIZE as f32, 0.0),
+            vertex(TEST_SIZE as f32, TEST_SIZE as f32),
+            vertex(0.0, TEST_SIZE as f32),
+        ];
+        pipeline.update_buffer(device, context, &vertices)?;
+        unsafe {
+            context.ClearRenderTargetView(&rtv, &[0.0, 0.0, 0.0, 1.0]);
+            context.OMSetRenderTargets(Some(slice::from_ref(&Some(rtv.clone()))), None);
+        }
+        pipeline.draw(
+            context,
+            &[test_viewport()],
+            &[Some(globals.clone())],
+            D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
+            6,
+            1,
+        )?;
+        dump_device_errors(device);
+        Ok(PathTarget {
+            texture,
+            staging,
+            _pipeline: pipeline,
+            _globals: globals,
+            _rtv: rtv,
+        })
+    }
+
+    /// Vector paths must honour a rounded content mask. Before this fix the renderer clipped
+    /// the path to the mask's *bounding rectangle* only (and used that same rectangle as the
+    /// gradient box), so paths leaked through every rounded corner.
+    #[test]
+    fn hlsl_path_rounded_mask_readback() -> Result<()> {
+        let Some((device, context)) = create_warp_device() else {
+            eprintln!("[path_mask] WARP device unavailable, skipping");
+            return Ok(());
+        };
+        let mask = ContentMask {
+            bounds: bounds(
+                point(ScaledPixels(16.0), ScaledPixels(16.0)),
+                size(ScaledPixels(32.0), ScaledPixels(32.0)),
+            ),
+            corner_radii: Corners {
+                top_left: ScaledPixels(8.0),
+                top_right: ScaledPixels(8.0),
+                bottom_right: ScaledPixels(8.0),
+                bottom_left: ScaledPixels(8.0),
+            },
+        };
+        let target = render_path(
+            &device,
+            &context,
+            Background::from(rgba(0xff0000ff)),
+            bounds(
+                point(ScaledPixels(8.0), ScaledPixels(8.0)),
+                size(ScaledPixels(48.0), ScaledPixels(48.0)),
+            ),
+            mask,
+            None,
+        )?;
+
+        // Outside the rounded arc, inside the mask rectangle: the corner must be cut away.
+        let corner = read_pixel(&context, &target.texture, &target.staging, 16, 16)?;
+        assert_eq!(corner[2], 0, "path must not fill the mask's rounded corner, got {corner:?}");
+        // Just inside the arc: d = sqrt(2)*5.5 - 8 = -0.222 -> coverage 0.722 -> 184.
+        let arc = read_pixel(&context, &target.texture, &target.staging, 18, 18)?;
+        assert_red_close(arc, 184, "path mask arc");
+        let body = read_pixel(&context, &target.texture, &target.staging, 32, 32)?;
+        assert_eq!(body[2], 255, "path body must be solid, got {body:?}");
+        let straight = read_pixel(&context, &target.texture, &target.staging, 16, 32)?;
+        assert_eq!(straight[2], 255, "mask's straight edge pixel must stay covered, got {straight:?}");
+        Ok(())
+    }
+
+    /// A clipped path's gradient must stay anchored to the path's own bounds, not to the
+    /// intersection rectangle the old code passed as `bounds`.
+    #[test]
+    fn hlsl_path_gradient_bounds_readback() -> Result<()> {
+        let Some((device, context)) = create_warp_device() else {
+            eprintln!("[path_gradient] WARP device unavailable, skipping");
+            return Ok(());
+        };
+        let mask = ContentMask {
+            bounds: bounds(
+                point(ScaledPixels(24.0), ScaledPixels(16.0)),
+                size(ScaledPixels(16.0), ScaledPixels(32.0)),
+            ),
+            corner_radii: Corners::default(),
+        };
+        let color = linear_gradient(
+            90.0,
+            linear_color_stop(hsla(0.0, 0.0, 0.0, 1.0), 0.0),
+            linear_color_stop(hsla(0.0, 0.0, 1.0, 1.0), 1.0),
+        )
+        .color_space(ColorSpace::Srgb);
+        let target = render_path(
+            &device,
+            &context,
+            color,
+            bounds(
+                point(ScaledPixels(8.0), ScaledPixels(8.0)),
+                size(ScaledPixels(48.0), ScaledPixels(48.0)),
+            ),
+            mask,
+            None,
+        )?;
+
+        // t = (28.5 - 8) / 48 = 0.4271 -> 0.4271 * 255 = 109.
+        // (Against the clipped [24,40] box it would be (28.5-24)/16 = 0.281 -> 72.)
+        for (x, y) in [(28, 32), (28, 20), (28, 44)] {
+            let px = read_pixel(&context, &target.texture, &target.staging, x, y)?;
+            assert_red_close(px, 109, "path gradient anchored to the path bounds");
+        }
+        Ok(())
+    }
+
+    /// The path fragment's curve antialiasing must actually run. The degenerate-derivative
+    /// condition used to be inverted (`if (length(d_st_x)) -> alpha = 1`), so every normal path
+    /// painted as a solid triangle and the distance field only ran on degenerate ones (0/0).
+    /// With `st = (x/32, y/32)` the curve field's zero set is the parabola y = x^2/32.
+    #[test]
+    fn hlsl_path_curve_aa_readback() -> Result<()> {
+        let Some((device, context)) = create_warp_device() else {
+            eprintln!("[path_curve_aa] WARP device unavailable, skipping");
+            return Ok(());
+        };
+        let target = render_path(
+            &device,
+            &context,
+            Background::from(rgba(0xff0000ff)),
+            bounds(
+                point(ScaledPixels(8.0), ScaledPixels(8.0)),
+                size(ScaledPixels(48.0), ScaledPixels(48.0)),
+            ),
+            viewport_mask(),
+            Some(32.0),
+        )?;
+        // y = x^2/32 is 32 at x = 32; the filled side is y > x^2/32.
+        let inside = read_pixel(&context, &target.texture, &target.staging, 32, 40)?;
+        assert_red_close(inside, 255, "path curve: inside the parabola");
+        let outside = read_pixel(&context, &target.texture, &target.staging, 32, 20)?;
+        assert_eq!(outside[2], 0, "path curve: outside the parabola, got {outside:?}");
+        // Pixel (32, 33): st = (1.015625, 1.046875), f = -0.01538, |grad| = 0.07075 ->
+        // distance = -0.217 px -> coverage 0.717 -> 183.
+        let edge = read_pixel(&context, &target.texture, &target.staging, 32, 33)?;
+        assert_red_close(edge, 183, "path curve: antialiased edge");
+        Ok(())
+    }
+
+    /// `closest-corner` with a centre outside the box used to take a signed minimum, producing
+    /// a negative per-axis radius; the `radii > 0` guard then fell back to the last stop for
+    /// the whole element. With unsigned side distances the ellipse is sized to the nearest
+    /// corner, so the left-edge midpoint sits at t = 0.771 -> 0.25 + 0.771 * 0.75 = 0.828 -> 211.
+    /// (A closest-*side* ellipse with an off-box centre happens to be past t = 1 everywhere in
+    /// the box, so the last stop was the right answer there; closest-corner is where the
+    /// fallback was visibly wrong.)
+    #[test]
+    fn hlsl_radial_offbox_closest_corner_readback() -> Result<()> {
+        let Some((device, context)) = create_warp_device() else {
+            eprintln!("[radial_offbox] WARP device unavailable, skipping");
+            return Ok(());
+        };
+        let quad = Quad {
+            bounds: bounds(
+                point(ScaledPixels(4.0), ScaledPixels(20.0)),
+                size(ScaledPixels(56.0), ScaledPixels(24.0)),
+            ),
+            content_mask: viewport_mask(),
+            background: radial_gradient(
+                point(-0.1, 0.5),
+                linear_color_stop(hsla(0.0, 0.0, 0.25, 1.0), 0.0),
+                linear_color_stop(hsla(0.0, 0.0, 1.0, 1.0), 1.0),
+            )
+            .radial_size(RadialSize::ClosestCorner)
+            .color_space(ColorSpace::Srgb),
+            ..Default::default()
+        };
+        let target = render_quad(&device, &context, quad, [0.0, 0.0, 0.0, 1.0])?;
+        let px = read_pixel(&context, &target.texture, &target.staging, 4, 32)?;
+        assert_red_close(px, 211, "off-box closest-corner radial gradient");
+        Ok(())
+    }
+
+    /// A transparent background over a transparent border is 0/0 in straight-alpha `over`.
+    /// The guard must keep the NaN out of the framebuffer: the clear colour has to survive.
+    #[test]
+    fn hlsl_transparent_border_over_readback() -> Result<()> {
+        let Some((device, context)) = create_warp_device() else {
+            eprintln!("[transparent_over] WARP device unavailable, skipping");
+            return Ok(());
+        };
+        let quad = Quad {
+            bounds: bounds(
+                point(ScaledPixels(16.0), ScaledPixels(16.0)),
+                size(ScaledPixels(32.0), ScaledPixels(32.0)),
+            ),
+            content_mask: viewport_mask(),
+            background: Background::from(transparent_black()),
+            border_color: transparent_black().into(),
+            border_widths: Edges {
+                top: ScaledPixels(4.0),
+                right: ScaledPixels(4.0),
+                bottom: ScaledPixels(4.0),
+                left: ScaledPixels(4.0),
+            },
+            ..Default::default()
+        };
+        // Pure blue clear (RGBA; the BGRA target stores it as [255, 0, 0, 255]): a NaN written
+        // into the border band would land as 0 (black), distinguishable from the clear colour.
+        let target = render_quad(&device, &context, quad, [0.0, 0.0, 1.0, 1.0])?;
+        for (x, y) in [(17, 32), (47, 32), (32, 17), (32, 47)] {
+            let px = read_pixel(&context, &target.texture, &target.staging, x, y)?;
+            assert_eq!(
+                px,
+                [255, 0, 0, 255],
+                "a fully transparent border must leave the clear colour at ({x}, {y}), got {px:?}"
+            );
+        }
+        Ok(())
+    }
+
+    /// An inset shadow's element edge is both its outer shape and its clip, so the geometry is
+    /// grown by AA_MARGIN; without that the fragment stage's element-edge ramp had no fragment
+    /// outside the element and the edge snapped inward by up to half a pixel.
+    #[test]
+    fn hlsl_inset_shadow_element_edge_aa_readback() -> Result<()> {
+        let Some((device, context)) = create_warp_device() else {
+            eprintln!("[inset_shadow_aa] WARP device unavailable, skipping");
+            return Ok(());
+        };
+        let (texture, rtv, staging) = make_render_target(&device)?;
+        let globals = install_globals(&device, &context)?;
+        let blend = create_blend_state(&device)?;
+        let mut pipeline = PipelineState::<Shadow>::new(
+            &device,
+            "test_shadow_precision",
+            ShaderModule::Shadow,
+            4,
+            blend,
+        )?;
+        // Element edge at 16.75: pixel 16's centre is 0.25 px outside the element, so its
+        // element-edge coverage is 0.25. The hole sits 4 px inside.
+        let shadow = Shadow {
+            order: 0,
+            blur_radius: ScaledPixels(0.0),
+            bounds: bounds(
+                point(ScaledPixels(20.75), ScaledPixels(20.75)),
+                size(ScaledPixels(22.5), ScaledPixels(22.5)),
+            ),
+            corner_radii: Corners::default(),
+            content_mask: viewport_mask(),
+            color: red().into(),
+            element_bounds: bounds(
+                point(ScaledPixels(16.75), ScaledPixels(16.75)),
+                size(ScaledPixels(30.5), ScaledPixels(30.5)),
+            ),
+            element_corner_radii: Corners::default(),
+            inset: 1,
+            pad: 0,
+        };
+        pipeline.update_buffer(&device, &context, &[shadow])?;
+        unsafe {
+            context.ClearRenderTargetView(&rtv, &[0.0, 0.0, 0.0, 1.0]);
+            context.OMSetRenderTargets(Some(slice::from_ref(&Some(rtv.clone()))), None);
+        }
+        pipeline.draw_range(&device, &context, &[test_viewport()], &[Some(globals)], 4, 0, 1)?;
+        dump_device_errors(&device);
+
+        let edge = read_pixel(&context, &texture, &staging, 16, 32)?;
+        assert_red_close(edge, 64, "inset shadow element edge");
+        let inside = read_pixel(&context, &texture, &staging, 17, 32)?;
+        assert_red_close(inside, 255, "inset shadow inside the element");
+        let outside = read_pixel(&context, &texture, &staging, 15, 32)?;
+        assert_eq!(outside[2], 0, "inset shadow must not escape the element, got {outside:?}");
+        Ok(())
+    }
+
+    /// A zero-sized checkerboard used to divide the local position by zero (NaN). The guarded
+    /// branch paints nothing, so the clear colour must survive untouched.
+    #[test]
+    fn hlsl_zero_size_checkerboard_readback() -> Result<()> {
+        let Some((device, context)) = create_warp_device() else {
+            eprintln!("[checker_zero] WARP device unavailable, skipping");
+            return Ok(());
+        };
+        let quad = Quad {
+            bounds: bounds(
+                point(ScaledPixels(16.0), ScaledPixels(16.0)),
+                size(ScaledPixels(32.0), ScaledPixels(32.0)),
+            ),
+            content_mask: viewport_mask(),
+            background: hgpui::checkerboard(rgba(0xff0000ff), 0.0),
+            ..Default::default()
+        };
+        // Blue clear (BGRA [255, 0, 0, 255]).
+        let target = render_quad(&device, &context, quad, [0.0, 0.0, 1.0, 1.0])?;
+        let px = read_pixel(&context, &target.texture, &target.staging, 32, 32)?;
+        assert_eq!(px, [255, 0, 0, 255], "zero-size checkerboard must be transparent, got {px:?}");
+        Ok(())
+    }
+
+    /// A dashed border with a zero-width side divided by zero in the dash layout (infinite
+    /// velocity, then 0/0 for the period). The guarded layout must paint the corner sliver as a
+    /// solid border instead of a NaN.
+    #[test]
+    fn hlsl_dashed_zero_width_side_readback() -> Result<()> {
+        let Some((device, context)) = create_warp_device() else {
+            eprintln!("[dash_zero_width] WARP device unavailable, skipping");
+            return Ok(());
+        };
+        let quad = Quad {
+            bounds: bounds(
+                point(ScaledPixels(16.0), ScaledPixels(16.0)),
+                size(ScaledPixels(32.0), ScaledPixels(32.0)),
+            ),
+            content_mask: viewport_mask(),
+            background: Background::from(transparent_black()),
+            border_color: red().into(),
+            border_widths: Edges {
+                top: ScaledPixels(0.0),
+                right: ScaledPixels(0.0),
+                bottom: ScaledPixels(0.0),
+                left: ScaledPixels(4.0),
+            },
+            border_style: BorderStyle::Dashed,
+            ..Default::default()
+        };
+        let target = render_quad(&device, &context, quad, [0.0, 0.0, 0.0, 1.0])?;
+        // (18, 20) is in the left border band and used to pick the zero-width top side as
+        // "horizontal", taking dash_velocity to infinity and the period to NaN.
+        let px = read_pixel(&context, &target.texture, &target.staging, 18, 20)?;
+        assert_red_close(px, 255, "zero-width dashed side sliver");
         Ok(())
     }
 }

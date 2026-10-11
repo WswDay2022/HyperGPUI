@@ -48,6 +48,7 @@ js-sys.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
+hgpui.workspace = true
 
 [[bench]]
 name = "layout_line"
