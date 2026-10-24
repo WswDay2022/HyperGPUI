@@ -4680,6 +4680,51 @@ mod tests {
         Ok(())
     }
 
+    /// A scaled primitive's edge transition must be one *device* pixel wide. The distance field
+    /// is evaluated in local space, so a 0.5 scale halves a local-unit ramp; before the
+    /// derivative-based coverage, the pixel just outside the intended edge on screen could still
+    /// be fully covered because it was inside by half a local unit.
+    #[test]
+    fn hlsl_quad_scaled_rounded_edge_aa_readback() -> Result<()> {
+        let Some((device, context)) = create_warp_device() else {
+            eprintln!("[scaled_rounded_aa] WARP device unavailable, skipping");
+            return Ok(());
+        };
+        let quad = Quad {
+            bounds: bounds(
+                point(ScaledPixels(8.0), ScaledPixels(8.0)),
+                size(ScaledPixels(48.0), ScaledPixels(48.0)),
+            ),
+            // A mask larger than the transformed quad keeps the mask out of the measurement.
+            content_mask: viewport_mask(),
+            background: Background::from(rgba(0xff0000ff)),
+            border_color: red().into(),
+            border_widths: Edges {
+                top: ScaledPixels(4.0),
+                right: ScaledPixels(4.0),
+                bottom: ScaledPixels(4.0),
+                left: ScaledPixels(4.0),
+            },
+            // scene = local * 0.5 + (16.25, 16.25); the left edge lands at x = 20.25.
+            transformation: TransformationMatrix {
+                rotation_scale: [[0.5, 0.0], [0.0, 0.5]],
+                translation: [16.25, 16.25],
+            },
+            ..Default::default()
+        };
+        let target = render_quad(&device, &context, quad, [0.0, 0.0, 0.0, 1.0])?;
+
+        for (x, expected, what) in [
+            (19, 0, "0.75 px outside the scaled edge"),
+            (20, 191, "0.25 px inside the scaled edge"),
+            (21, 255, "fully inside the scaled edge"),
+        ] {
+            let px = read_pixel(&context, &target.texture, &target.staging, x, 32)?;
+            assert_red_close(px, expected, what);
+        }
+        Ok(())
+    }
+
     /// When a primitive's content mask is its own rounded cutout, the mask's distance field is
     /// the same field the primitive already uses for its outline. Applying both squares the
     /// coverage of every edge pixel (0.5 × 0.5 = 0.25), which shows up as a dark one-pixel rim
