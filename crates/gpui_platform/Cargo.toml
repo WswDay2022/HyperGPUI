@@ -22,7 +22,6 @@ screen-capture = [
   "hgpui_windows/screen-capture",
   "hgpui_linux/screen-capture",
 ]
-runtime_shaders = ["hgpui_macos/runtime_shaders"]
 wayland = ["hgpui_linux/wayland"]
 x11 = ["hgpui_linux/x11"]
 wgpu = ["hgpui_windows/wgpu"]

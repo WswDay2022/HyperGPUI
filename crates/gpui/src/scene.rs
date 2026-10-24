@@ -23,6 +23,17 @@ pub type PathVertex_ScaledPixels = PathVertex<ScaledPixels>;
 #[expect(missing_docs)]
 pub type DrawOrder = u32;
 
+/// A nonzero smoothing value selects the smoothed corner pipeline.
+fn has_corner_smoothing(corner_smoothing: f32) -> bool {
+    corner_smoothing > 0.0
+}
+
+
+/// Default length of each border dash, as a multiple of the border width.
+pub(crate) const DEFAULT_BORDER_DASHED_LENGTH: f32 = 2.0;
+/// Default gap between border dashes, as a multiple of the border width.
+pub(crate) const DEFAULT_BORDER_DASHED_GAP: f32 = 1.0;
+
 /// A boolean stored as a `u32` so that GPU-facing structs contain no
 /// compiler-inserted padding bytes, which would be undefined behavior to
 /// reinterpret as `&[u8]` when writing instance buffers. Guaranteed to be
@@ -484,32 +495,47 @@ impl<'a> Iterator for BatchIterator<'a> {
 
         match batch_kind {
             PrimitiveKind::Shadow => {
+                let smoothed =
+                    has_corner_smoothing(self.shadows_iter.peek().unwrap().corner_smoothing);
                 let shadows_start = self.shadows_start;
                 let mut shadows_end = shadows_start + 1;
                 self.shadows_iter.next();
                 while self
                     .shadows_iter
-                    .next_if(|shadow| (shadow.order, batch_kind) < max_order_and_kind)
+                    .next_if(|shadow| {
+                        (shadow.order, batch_kind) < max_order_and_kind
+                            && has_corner_smoothing(shadow.corner_smoothing) == smoothed
+                    })
                     .is_some()
                 {
                     shadows_end += 1;
                 }
                 self.shadows_start = shadows_end;
-                Some(PrimitiveBatch::Shadows(shadows_start..shadows_end))
+                Some(PrimitiveBatch::Shadows {
+                    range: shadows_start..shadows_end,
+                    smoothed,
+                })
             }
             PrimitiveKind::Quad => {
+                let smoothed = has_corner_smoothing(self.quads_iter.peek().unwrap().corner_smoothing);
                 let quads_start = self.quads_start;
                 let mut quads_end = quads_start + 1;
                 self.quads_iter.next();
                 while self
                     .quads_iter
-                    .next_if(|quad| (quad.order, batch_kind) < max_order_and_kind)
+                    .next_if(|quad| {
+                        (quad.order, batch_kind) < max_order_and_kind
+                            && has_corner_smoothing(quad.corner_smoothing) == smoothed
+                    })
                     .is_some()
                 {
                     quads_end += 1;
                 }
                 self.quads_start = quads_end;
-                Some(PrimitiveBatch::Quads(quads_start..quads_end))
+                Some(PrimitiveBatch::Quads {
+                    range: quads_start..quads_end,
+                    smoothed,
+                })
             }
             PrimitiveKind::Path => {
                 let paths_start = self.paths_start;
@@ -582,7 +608,9 @@ impl<'a> Iterator for BatchIterator<'a> {
                 })
             }
             PrimitiveKind::PolychromeSprite => {
-                let texture_id = self.polychrome_sprites_iter.peek().unwrap().tile.texture_id;
+                let first_sprite = self.polychrome_sprites_iter.peek().unwrap();
+                let texture_id = first_sprite.tile.texture_id;
+                let smoothed = has_corner_smoothing(first_sprite.corner_smoothing);
                 let sprites_start = self.polychrome_sprites_start;
                 let mut sprites_end = sprites_start + 1;
                 self.polychrome_sprites_iter.next();
@@ -591,6 +619,7 @@ impl<'a> Iterator for BatchIterator<'a> {
                     .next_if(|sprite| {
                         (sprite.order, batch_kind) < max_order_and_kind
                             && sprite.tile.texture_id == texture_id
+                            && has_corner_smoothing(sprite.corner_smoothing) == smoothed
                     })
                     .is_some()
                 {
@@ -600,6 +629,7 @@ impl<'a> Iterator for BatchIterator<'a> {
                 Some(PrimitiveBatch::PolychromeSprites {
                     texture_id,
                     range: sprites_start..sprites_end,
+                    smoothed,
                 })
             }
             PrimitiveKind::Surface => {
@@ -654,8 +684,14 @@ impl<'a> Iterator for BatchIterator<'a> {
 )]
 #[allow(missing_docs)]
 pub enum PrimitiveBatch {
-    Shadows(Range<usize>),
-    Quads(Range<usize>),
+    Shadows {
+        range: Range<usize>,
+        smoothed: bool,
+    },
+    Quads {
+        range: Range<usize>,
+        smoothed: bool,
+    },
     Paths(Range<usize>),
     Underlines(Range<usize>),
     MonochromeSprites {
@@ -670,6 +706,7 @@ pub enum PrimitiveBatch {
     PolychromeSprites {
         texture_id: AtlasTextureId,
         range: Range<usize>,
+        smoothed: bool,
     },
     Surfaces(Range<usize>),
     BackdropFilters(Range<usize>),
@@ -683,8 +720,12 @@ impl PrimitiveBatch {
     #[expect(missing_docs)]
     pub fn label(&self) -> String {
         match self {
-            Self::Shadows(range) => format!("shadows ({})", range.len()),
-            Self::Quads(range) => format!("quads ({})", range.len()),
+            Self::Shadows { range, smoothed } => {
+                format!("shadows ({}{})", range.len(), if *smoothed { ", smoothed" } else { "" })
+            }
+            Self::Quads { range, smoothed } => {
+                format!("quads ({}{})", range.len(), if *smoothed { ", smoothed" } else { "" })
+            }
             Self::Paths(range) => format!("paths ({})", range.len()),
             Self::Underlines(range) => format!("underlines ({})", range.len()),
             Self::MonochromeSprites { texture_id, range } => {
@@ -701,10 +742,15 @@ impl PrimitiveBatch {
                     texture_id.index
                 )
             }
-            Self::PolychromeSprites { texture_id, range } => {
+            Self::PolychromeSprites {
+                texture_id,
+                range,
+                smoothed,
+            } => {
                 format!(
-                    "polychrome sprites ({}) on atlas {}",
+                    "polychrome sprites ({}{}) on atlas {}",
                     range.len(),
+                    if *smoothed { ", smoothed" } else { "" },
                     texture_id.index
                 )
             }
@@ -715,20 +761,44 @@ impl PrimitiveBatch {
     }
 }
 
-#[derive(Default, Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
 #[repr(C)]
 #[expect(missing_docs)]
 pub struct Quad {
     pub order: DrawOrder,
     pub border_style: BorderStyle,
+    pub border_dashed_length: f32,
+    pub border_dashed_gap: f32,
     pub bounds: Bounds<ScaledPixels>,
     pub content_mask: ContentMask<ScaledPixels>,
     pub background: Background,
-    pub border_color: SceneHsla,
+    pub border_color: Background,
     pub corner_radii: Corners<ScaledPixels>,
     pub border_widths: Edges<ScaledPixels>,
+    pub corner_smoothing: f32,
+    pub padding: u32,
     /// Transform applied at draw time, around the element's center (defaults to the identity).
     pub transformation: TransformationMatrix,
+}
+
+impl Default for Quad {
+    fn default() -> Self {
+        Self {
+            order: Default::default(),
+            border_style: BorderStyle::default(),
+            border_dashed_length: DEFAULT_BORDER_DASHED_LENGTH,
+            border_dashed_gap: DEFAULT_BORDER_DASHED_GAP,
+            bounds: Default::default(),
+            content_mask: Default::default(),
+            background: Default::default(),
+            border_color: Default::default(),
+            corner_radii: Default::default(),
+            border_widths: Default::default(),
+            corner_smoothing: 0.0,
+            padding: 0,
+            transformation: TransformationMatrix::default(),
+        }
+    }
 }
 
 impl From<Quad> for Primitive {
@@ -742,7 +812,8 @@ impl From<Quad> for Primitive {
 #[expect(missing_docs)]
 pub struct Underline {
     pub order: DrawOrder,
-    pub pad: u32, // align to 8 bytes
+    pub padding: u32,
+
     pub bounds: Bounds<ScaledPixels>,
     pub content_mask: ContentMask<ScaledPixels>,
     pub color: SceneHsla,
@@ -770,12 +841,13 @@ pub struct Shadow {
     pub bounds: Bounds<ScaledPixels>,
     pub corner_radii: Corners<ScaledPixels>,
     pub content_mask: ContentMask<ScaledPixels>,
-    pub color: SceneHsla,
+    /// The shadow color or gradient.
+    pub color: Background,
     pub element_bounds: Bounds<ScaledPixels>,
     pub element_corner_radii: Corners<ScaledPixels>,
     /// 0 = drop shadow (rendered outside the element), 1 = inset shadow (rendered inside).
     pub inset: u32,
-    pub pad: u32, // align to 8 bytes
+    pub corner_smoothing: f32,
 }
 
 impl From<Shadow> for Primitive {
@@ -1023,7 +1095,7 @@ impl Default for TransformationMatrix {
 #[expect(missing_docs)]
 pub struct MonochromeSprite {
     pub order: DrawOrder,
-    pub pad: u32,
+    pub padding: u32,
     pub bounds: Bounds<ScaledPixels>,
     pub content_mask: ContentMask<ScaledPixels>,
     pub color: SceneHsla,
@@ -1042,7 +1114,8 @@ impl From<MonochromeSprite> for Primitive {
 #[expect(missing_docs)]
 pub struct SubpixelSprite {
     pub order: DrawOrder,
-    pub pad: u32, // align to 8 bytes
+    pub padding: u32,
+
     pub bounds: Bounds<ScaledPixels>,
     pub content_mask: ContentMask<ScaledPixels>,
     pub color: SceneHsla,
@@ -1061,9 +1134,9 @@ impl From<SubpixelSprite> for Primitive {
 #[expect(missing_docs)]
 pub struct PolychromeSprite {
     pub order: DrawOrder,
-    pub pad: u32,
     pub grayscale: PaddedBool32,
     pub opacity: f32,
+    pub corner_smoothing: f32,
     pub bounds: Bounds<ScaledPixels>,
     pub content_mask: ContentMask<ScaledPixels>,
     pub corner_radii: Corners<ScaledPixels>,
@@ -1297,6 +1370,8 @@ mod tests {
         ContentMask {
             bounds: full_bounds(),
             corner_radii: Corners::default(),
+
+            fade_out: Default::default(),
         }
     }
 
@@ -1326,6 +1401,8 @@ mod tests {
             content_mask: ContentMask {
                 bounds,
                 corner_radii: Corners::default(),
+
+                fade_out: Default::default(),
             },
             ..Default::default()
         }
@@ -1354,12 +1431,61 @@ mod tests {
         }
     }
 
+    #[test]
+    fn corner_smoothing_splits_quad_batches() {
+        let mut scene = Scene::default();
+        let mask = ContentMask {
+            bounds: Bounds {
+                origin: point(ScaledPixels(0.0), ScaledPixels(0.0)),
+                size: Size {
+                    width: ScaledPixels(64.0),
+                    height: ScaledPixels(64.0),
+                },
+            },
+            ..Default::default()
+        };
+        scene.insert_primitive(Quad {
+            bounds: Bounds {
+                origin: point(ScaledPixels(0.0), ScaledPixels(0.0)),
+                size: Size {
+                    width: ScaledPixels(10.0),
+                    height: ScaledPixels(10.0),
+                },
+            },
+            content_mask: mask,
+            ..Default::default()
+        });
+        scene.insert_primitive(Quad {
+            bounds: Bounds {
+                origin: point(ScaledPixels(20.0), ScaledPixels(20.0)),
+                size: Size {
+                    width: ScaledPixels(10.0),
+                    height: ScaledPixels(10.0),
+                },
+            },
+            content_mask: mask,
+            corner_smoothing: 1.0,
+            ..Default::default()
+        });
+        scene.finish();
+        let labels: Vec<String> = scene.batches().map(|batch| batch.label()).collect();
+        assert_eq!(
+            labels.iter().filter(|label| label.starts_with("quads")).count(),
+            2,
+            "plain and smoothed quads must not share a draw batch: {labels:?}"
+        );
+        assert!(
+            labels.iter().any(|label| label.contains("smoothed")),
+            "the smoothed quad batch must be marked: {labels:?}"
+        );
+    }
+
     fn batch_kinds(scene: &mut Scene) -> Vec<&'static str> {
         scene.finish();
         scene
             .batches()
             .map(|batch| match batch {
-                PrimitiveBatch::Quads(_) => "quad",
+                PrimitiveBatch::Quads { .. } => "quad",
                 PrimitiveBatch::BackdropFilters(_) => "backdrop",
                 PrimitiveBatch::FilterBoundary(ix) => {
                     if scene.filter_boundaries[ix].is_start {

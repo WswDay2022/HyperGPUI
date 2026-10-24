@@ -614,6 +614,42 @@ pub trait Styled: Sized {
         self
     }
 
+    /// Sets the length of each border dash, as a multiple of the border width.
+    fn border_dashed_length(mut self, length: f32) -> Self {
+        self.style().border_dashed_length = Some(length.max(0.0));
+        self
+    }
+
+    /// Sets the gap between border dashes, as a multiple of the border width.
+    fn border_dashed_gap(mut self, gap: f32) -> Self {
+        self.style().border_dashed_gap = Some(gap.max(0.0));
+        self
+    }
+
+    /// Sets rounded-corner smoothing, from circular (`0.0`) to maximum (`1.0`).
+    fn corner_smoothing(mut self, amount: f32) -> Self {
+        self.style().corner_smoothing = Some(amount.clamp(0.0, 1.0));
+        self
+    }
+
+    /// Sets a gradient border. Takes precedence over [`Styled::border_color`].
+    fn border_gradient(mut self, gradient: impl Into<hgpui::Background>) -> Self {
+        self.style().border_gradient = Some(gradient.into());
+        self
+    }
+
+    /// Sets the fade distances applied at the edges of an overflow mask.
+    fn overflow_fade(mut self, fade: impl Into<hgpui::Edges<hgpui::AbsoluteLength>>) -> Self {
+        let fade = fade.into();
+        self.style().overflow_fade = hgpui::EdgesRefinement {
+            top: Some(fade.top),
+            right: Some(fade.right),
+            bottom: Some(fade.bottom),
+            left: Some(fade.left),
+        };
+        self
+    }
+
     /// Returns a mutable reference to the text style that has been configured on this element.
     fn text_style(&mut self) -> &mut TextStyleRefinement {
         let style: &mut StyleRefinement = self.style();

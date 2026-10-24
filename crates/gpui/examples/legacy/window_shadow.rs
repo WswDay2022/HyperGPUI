@@ -20,6 +20,7 @@ impl Render for WindowShadow {
         let shadow_size = px(10.0);
         let border_size = px(1.0);
         let grey = rgb(0x808080);
+        let shadow_color: Hsla = Hsla::new(0.0, 0.0, 0.0, 0.4);
         window.set_client_inset(shadow_size);
 
         div()
@@ -108,7 +109,7 @@ impl Render for WindowShadow {
                                     hgpui::BoxShadow::new(
                                         px(0.),
                                         px(0.),
-                                        Hsla::new(0., 0., 0., 0.4),
+                                        shadow_color,
                                     )
                                     .blur_radius(shadow_size / 2.),
                                 ])
@@ -145,7 +146,7 @@ impl Render for WindowShadow {
                                             hgpui::BoxShadow::new(
                                                 px(0.),
                                                 px(0.),
-                                                Hsla::new(0., 0., 0., 1.),
+                                                black(),
                                             )
                                             .blur_radius(px(20.0)),
                                         ])

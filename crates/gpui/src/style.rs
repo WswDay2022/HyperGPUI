@@ -2,7 +2,8 @@ use crate::{
     AbsoluteLength, App, Background, BackgroundTag, BorderStyle, Bounds, ColorExt, ContentMask,
     Corners, CornersRefinement, CssTransform, CursorStyle, DefiniteLength, DevicePixels, Edges,
     EdgesRefinement, Font, FontFallbacks, FontFeatures, FontStyle, FontWeight, GridLocation, Length,
-    Pixels, Point, PointRefinement, ScaledPixels, SharedString, Size, SizeRefinement, Styled,
+    PaintQuad, Pixels, Point, PointRefinement, ScaledPixels, SharedString, Size, SizeRefinement,
+    Styled,
     TextRun, TransformationMatrix, Window, black, phi, point, px, quad, rems, size,
 };
 use collections::HashSet;
@@ -184,6 +185,9 @@ pub struct Style {
     /// How children overflowing their container should affect layout
     #[refineable]
     pub overflow: Point<Overflow>,
+    /// Edge fade distances for overflow masking.
+    #[refineable]
+    pub overflow_fade: Edges<AbsoluteLength>,
     /// How much space (in points) should be reserved for the scrollbars of `Overflow::Scroll` and `Overflow::Auto` nodes.
     pub scrollbar_width: AbsoluteLength,
     /// Whether both x and y axis should be scrollable at the same time.
@@ -282,15 +286,36 @@ pub struct Style {
     /// The border color of this element
     pub border_color: Option<Hsla>,
 
+    /// An optional gradient border. When set, it takes precedence over `border_color`.
+    pub border_gradient: Option<Background>,
+
     /// The border style of this element
     pub border_style: BorderStyle,
+
+    /// The length of each border dash, as a multiple of the border width.
+    pub border_dashed_length: f32,
+
+    /// The gap between border dashes, as a multiple of the border width.
+    pub border_dashed_gap: f32,
 
     /// The radius of the corners of this element
     #[refineable]
     pub corner_radii: Corners<AbsoluteLength>,
 
+    /// Controls the transition from each rounded corner to the straight edges.
+    /// `0.0` produces circular corners. `1.0` applies maximum smoothing.
+    pub corner_smoothing: Option<f32>,
+
     /// Box shadow of the element
     pub box_shadow: Vec<BoxShadow>,
+
+    /// A solid ring painted outside the element.
+    #[refineable]
+    pub ring: RingStyle,
+
+    /// A solid ring painted inside the element.
+    #[refineable]
+    pub inset_ring: RingStyle,
 
     /// Filters applied to this element's own content and children (CSS `filter`).
     pub filter: Vec<Filter>,
@@ -358,8 +383,8 @@ pub enum Visibility {
 /// The possible values of the box-shadow property
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BoxShadow {
-    /// What color should the shadow have?
-    pub color: Hsla,
+    /// The shadow color or gradient.
+    pub color: Background,
     /// How should it be offset from its element?
     pub offset: Point<Pixels>,
     /// How much should the shadow be blurred?
@@ -374,9 +399,9 @@ impl BoxShadow {
     /// Creates a new [`BoxShadow`] with the given offset and color, matching the order
     /// of the CSS `box-shadow` property. Use the builder methods to set blur radius,
     /// spread radius, and inset.
-    pub fn new(offset_x: Pixels, offset_y: Pixels, color: Hsla) -> Self {
+    pub fn new(offset_x: Pixels, offset_y: Pixels, color: impl Into<Background>) -> Self {
         Self {
-            color,
+            color: color.into(),
             offset: point(offset_x, offset_y),
             blur_radius: px(0.),
             spread_radius: px(0.),
@@ -400,6 +425,61 @@ impl BoxShadow {
     pub fn inset(mut self) -> Self {
         self.inset = true;
         self
+    }
+}
+
+/// A ring's color or gradient.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub enum RingColor {
+    /// Use the element's effective text color, matching CSS `currentColor`.
+    #[default]
+    CurrentColor,
+    /// Use an explicit color or gradient.
+    Color(Background),
+}
+
+impl RingColor {
+    fn resolve(self, current_color: Hsla) -> Background {
+        match self {
+            Self::CurrentColor => current_color.into(),
+            Self::Color(color) => color,
+        }
+    }
+}
+
+/// A ring around or inside an element.
+#[derive(Refineable, Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[refineable(Debug, PartialEq, Serialize, Deserialize)]
+pub struct RingStyle {
+    /// The width of the ring. A zero width disables it.
+    pub width: Pixels,
+    /// The ring color or gradient.
+    pub color: RingColor,
+}
+
+impl RingStyle {
+    fn outer_quad(
+        self,
+        bounds: Bounds<Pixels>,
+        corner_radii: Corners<Pixels>,
+        current_color: Hsla,
+    ) -> Option<PaintQuad> {
+        (self.width > Pixels::ZERO).then(|| {
+            // Quad borders are painted inward, so expanding the quad by the ring width leaves
+            // its transparent interior aligned with the element's original bounds.
+            PaintQuad::new(bounds.dilate(self.width))
+                .corner_radii(corner_radii.map(|radius| *radius + self.width))
+                .border_widths(Edges::all(self.width))
+                .border_color(self.color.resolve(current_color))
+        })
+    }
+
+    fn inset_shadow(self, current_color: Hsla) -> Option<BoxShadow> {
+        (self.width > Pixels::ZERO).then(|| {
+            BoxShadow::new(px(0.), px(0.), self.color.resolve(current_color))
+                .spread_radius(self.width)
+                .inset()
+        })
     }
 }
 
@@ -773,6 +853,7 @@ impl Style {
                 Some(ContentMask {
                     bounds,
                     corner_radii,
+                    fade_out: self.overflow_fade.to_pixels(rem_size),
                 })
             }
         }
@@ -801,10 +882,19 @@ impl Style {
             .corner_radii
             .to_pixels(rem_size)
             .clamp_radii_for_quad_size(bounds.size);
+        let corner_smoothing = self.corner_smoothing.unwrap_or_default();
+        let current_color = self.text.color.unwrap_or_else(|| window.text_style().color);
 
         let transformation = self.paint_transform(bounds, window.scale_factor());
 
-        window.paint_drop_shadows(bounds, corner_radii, &self.box_shadow);
+        window.paint_drop_shadows(bounds, corner_radii, corner_smoothing, &self.box_shadow);
+
+        if let Some(ring) = self.ring.outer_quad(bounds, corner_radii, current_color) {
+            window.paint_quad(
+                ring.corner_smoothing(corner_smoothing)
+                    .transformation(transformation),
+            );
+        }
 
         // Blur the content behind this element before its (typically translucent) background
         // is painted on top, so the background tints the frosted backdrop (CSS `backdrop-filter`).
@@ -835,32 +925,51 @@ impl Style {
                     None => Hsla::default(),
                 };
                 border_color.alpha = 0.;
-                window.paint_quad(quad(
-                    bounds,
-                    corner_radii,
-                    background_color.unwrap_or_default(),
-                    Edges::default(),
-                    border_color,
-                    self.border_style,
-                ));
+                window.paint_quad(
+                    quad(
+                        bounds,
+                        corner_radii,
+                        background_color.unwrap_or_default(),
+                        Edges::default(),
+                        border_color,
+                        self.border_style,
+                    )
+                    .corner_smoothing(corner_smoothing),
+                );
             }
 
-            window.paint_inset_shadows(bounds, corner_radii, &self.box_shadow);
+            if let Some(ring) = self.inset_ring.inset_shadow(current_color) {
+                window.paint_inset_shadows(
+                    bounds,
+                    corner_radii,
+                    corner_smoothing,
+                    std::slice::from_ref(&ring),
+                );
+            }
+
+            window.paint_inset_shadows(bounds, corner_radii, corner_smoothing, &self.box_shadow);
 
             continuation(window, cx);
 
             if self.is_border_visible() {
                 let border_widths = self.border_widths.to_pixels(rem_size);
-                let mut background = self.border_color.unwrap_or_default();
-                background.alpha = 0.;
-                window.paint_quad(quad(
-                    bounds,
-                    corner_radii,
-                    background,
-                    border_widths,
-                    self.border_color.unwrap_or_default(),
-                    self.border_style,
-                ));
+                let border_color = self
+                    .border_gradient
+                    .unwrap_or_else(|| self.border_color.unwrap_or_default().into());
+                let background = border_color.opacity(0.0);
+                window.paint_quad(
+                    quad(
+                        bounds,
+                        corner_radii,
+                        background,
+                        border_widths,
+                        border_color,
+                        self.border_style,
+                    )
+                    .border_dashed_length(self.border_dashed_length)
+                    .border_dashed_gap(self.border_dashed_gap)
+                    .corner_smoothing(corner_smoothing),
+                );
             }
         };
 
@@ -895,7 +1004,8 @@ impl Style {
     }
 
     fn is_border_visible(&self) -> bool {
-        self.border_color.is_some_and(|color| color.alpha > 0.)
+        (self.border_gradient.is_some()
+            || self.border_color.is_some_and(|color| color.alpha > 0.))
             && self.border_widths.any(|length| !length.is_zero())
     }
 }
@@ -909,6 +1019,7 @@ impl Default for Style {
                 x: Overflow::Visible,
                 y: Overflow::Visible,
             },
+            overflow_fade: Edges::default(),
             allow_concurrent_scroll: false,
             restrict_scroll_to_axis: false,
             smooth_scroll: None,
@@ -936,9 +1047,15 @@ impl Default for Style {
             flex_basis: Length::Auto,
             background: None,
             border_color: None,
+            border_gradient: None,
             border_style: BorderStyle::default(),
+            border_dashed_length: crate::scene::DEFAULT_BORDER_DASHED_LENGTH,
+            border_dashed_gap: crate::scene::DEFAULT_BORDER_DASHED_GAP,
+            corner_smoothing: None,
             corner_radii: Corners::default(),
             box_shadow: Default::default(),
+            ring: Default::default(),
+            inset_ring: Default::default(),
             filter: Default::default(),
             backdrop_filter: Default::default(),
             transform: None,
@@ -1643,5 +1760,92 @@ mod tests {
             Some(FontWeight::SEMIBOLD),
             style.text_style().unwrap().font_weight
         );
+    }
+
+    fn ring_gradient() -> Background {
+        crate::linear_gradient(
+            90.,
+            crate::linear_color_stop(red(), 0.),
+            crate::linear_color_stop(blue(), 1.),
+        )
+    }
+
+    #[test]
+    fn outer_ring_is_hollow_and_composes_with_shadows() {
+        let drop_shadow = BoxShadow::new(px(0.), px(2.), blue()).blur_radius(px(4.));
+        let mut style = Style::default();
+        style.refine(
+            &StyleRefinement::default()
+                .ring_2()
+                .shadow(vec![drop_shadow.clone()]),
+        );
+        let current_color = crate::hsla(0.7, 0.5, 0.4, 0.8);
+        style.refine(&StyleRefinement::default().ring(px(3.5)));
+        let element_bounds = Bounds {
+            origin: point(px(10.), px(20.)),
+            size: size(px(100.), px(40.)),
+        };
+        let element_radii = Corners {
+            top_left: px(0.),
+            top_right: px(4.),
+            bottom_right: px(10.),
+            bottom_left: px(20.),
+        };
+        let ring = style
+            .ring
+            .outer_quad(element_bounds, element_radii, current_color)
+            .unwrap();
+
+        assert_eq!(ring.bounds.dilate(-px(3.5)), element_bounds);
+        assert_eq!(ring.border_widths, Edges::all(px(3.5)));
+        assert_eq!(
+            ring.corner_radii.map(|radius| *radius - px(3.5)),
+            element_radii
+        );
+        assert!(ring.background.is_transparent());
+        assert_eq!(ring.border_color, current_color.into());
+        assert_eq!(ring.border_style, BorderStyle::Solid);
+        assert_eq!(style.box_shadow, vec![drop_shadow]);
+
+        let gradient = ring_gradient();
+        style.refine(&StyleRefinement::default().ring_color(gradient));
+        assert_eq!(
+            style
+                .ring
+                .outer_quad(element_bounds, element_radii, current_color)
+                .unwrap()
+                .border_color,
+            gradient
+        );
+
+        style.refine(&StyleRefinement::default().ring_0());
+        assert!(
+            style
+                .ring
+                .outer_quad(element_bounds, element_radii, current_color)
+                .is_none()
+        );
+        assert_eq!(style.box_shadow.len(), 1);
+    }
+
+    #[test]
+    fn inset_ring_utility_refines_independently_and_lowers_to_an_inset_shadow() {
+        let gradient = ring_gradient();
+        let mut style = Style::default();
+        style.refine(
+            &StyleRefinement::default()
+                .inset_ring(px(1.))
+                .inset_ring_color(gradient),
+        );
+        style.refine(&StyleRefinement::default().inset_ring_4());
+
+        let inset = style.inset_ring.inset_shadow(blue()).unwrap();
+
+        assert_eq!(inset.offset, point(px(0.), px(0.)));
+        assert_eq!(inset.blur_radius, px(0.));
+        assert_eq!(inset.spread_radius, px(4.));
+        assert_eq!(inset.color, gradient);
+        assert!(inset.inset);
+        assert_eq!(style.ring, RingStyle::default());
     }
 }

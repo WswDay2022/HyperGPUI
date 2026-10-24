@@ -1273,6 +1273,8 @@ impl StateInner {
                         Some(ContentMask {
                             bounds,
                             corner_radii: Corners::default(),
+
+                            fade_out: Default::default(),
                         }),
                         |window| {
                             item.element.prepaint_at(item_origin, window, cx);
@@ -1584,6 +1586,8 @@ impl Element for List {
             Some(ContentMask {
                 bounds,
                 corner_radii: Corners::default(),
+
+                fade_out: Default::default(),
             }),
             |window| {
                 for item in &mut prepaint.layout.item_layouts {

@@ -4,7 +4,7 @@ use hgpui::{
     AtlasTextureId, BackdropFilter, Background, Bounds, ContentMask, Corners, DevicePixels,
     FilterBoundary, GpuSpecs, MonochromeSprite, PaintSurface, Path, Point, PolychromeSprite,
     PrimitiveBatch, Quad, ScaledFilter, ScaledPixels, Scene, Shadow, Size, SubpixelSprite,
-    Underline, get_gamma_correction_ratios,
+    Underline, Edges, get_gamma_correction_ratios,
 };
 use log::warn;
 
@@ -69,9 +69,45 @@ pub struct FrameDrawStats {
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
+struct PodContentMask {
+    bounds: PodBounds,
+    corner_radii: [f32; 4],
+    fade_out: [f32; 4],
+}
+
+impl From<ContentMask<ScaledPixels>> for PodContentMask {
+    fn from(mask: ContentMask<ScaledPixels>) -> Self {
+        Self {
+            bounds: mask.bounds.into(),
+            corner_radii: [
+                mask.corner_radii.top_left.0,
+                mask.corner_radii.top_right.0,
+                mask.corner_radii.bottom_right.0,
+                mask.corner_radii.bottom_left.0,
+            ],
+            fade_out: [
+                mask.fade_out.top.0,
+                mask.fade_out.right.0,
+                mask.fade_out.bottom.0,
+                mask.fade_out.left.0,
+            ],
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
 struct SurfaceParams {
     bounds: PodBounds,
-    content_mask: PodBounds,
+    content_mask: PodContentMask,
+    color_format: u32,
+    opacity: f32,
+    padding0: u32,
+    padding1: u32,
+    padding2: u32,
+    padding3: u32,
+    padding4: u32,
+    padding5: u32,
 }
 
 /// Uniform passed to the blur pipelines. The same struct drives the downsample, separable
@@ -88,6 +124,8 @@ struct BlurParams {
     /// painted under may itself be rounded (`overflow_hidden` + a corner radius), and a filter's
     /// output is clipped by it like any other painting — corners included.
     content_mask_radii: [f32; 4],
+    /// The content mask's edge fade distances (top, right, bottom, left), in device pixels.
+    content_mask_fade_out: [f32; 4],
     /// Rounded-corner radii (tl, tr, br, bl), in device pixels (composite pass only).
     corner_radii: [f32; 4],
     /// Per-tap sampling step in UV space (gaussian passes only): (1/width, 0) or (0, 1/height).
@@ -132,7 +170,7 @@ struct PathSprite {
 #[repr(C)]
 struct PathRasterizationVertex {
     xy_position: Point<ScaledPixels>,
-    st_position: Point<f32>,
+    curve_position: Point<f32>,
     color: Background,
     /// The path's own bounds: the gradient box. (Used to be `clipped_bounds`, which made the
     /// gradient shift/scale whenever an ancestor clip cut the path.)
@@ -142,6 +180,7 @@ struct PathRasterizationVertex {
     /// vector paths too.
     content_mask: Bounds<ScaledPixels>,
     content_mask_corner_radii: Corners<ScaledPixels>,
+    content_mask_fade_out: Edges<ScaledPixels>,
 }
 
 pub struct WgpuSurfaceConfig {
@@ -158,13 +197,16 @@ pub struct WgpuSurfaceConfig {
 
 struct WgpuPipelines {
     quads: wgpu::RenderPipeline,
+    smoothed_quads: wgpu::RenderPipeline,
     shadows: wgpu::RenderPipeline,
+    smoothed_shadows: wgpu::RenderPipeline,
     path_rasterization: wgpu::RenderPipeline,
     paths: wgpu::RenderPipeline,
     underlines: wgpu::RenderPipeline,
     mono_sprites: wgpu::RenderPipeline,
     subpixel_sprites: Option<wgpu::RenderPipeline>,
     poly_sprites: wgpu::RenderPipeline,
+    smoothed_poly_sprites: wgpu::RenderPipeline,
     #[allow(dead_code)]
     surfaces: wgpu::RenderPipeline,
     /// Copies a source texture into the (smaller) target with one bilinear tap. Used both to
@@ -773,6 +815,16 @@ impl WgpuRenderer {
                 wgpu::BindGroupLayoutEntry {
                     binding: 2,
                     visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
@@ -850,13 +902,13 @@ impl WgpuRenderer {
         }
         let dual_source_blending = dual_source_blending && device_has_feature;
 
-        let base_shader_source = include_str!("shaders.wgsl");
+        let base_shader_source = hgpui_render::artifacts::BASE_WGSL;
         let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("gpui_shaders"),
             source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(base_shader_source)),
         });
 
-        let subpixel_shader_source = include_str!("shaders_subpixel.wgsl");
+        let subpixel_shader_source = hgpui_render::artifacts::SUBPIXEL_WGSL;
         let subpixel_shader_module = if dual_source_blending {
             let combined = format!(
                 "enable dual_source_blending;\n{base_shader_source}\n{subpixel_shader_source}"
@@ -934,8 +986,20 @@ impl WgpuRenderer {
 
         let quads = create_pipeline(
             "quads",
-            "vs_quad",
-            "fs_quad",
+            "quad_vertex",
+            "quad_fragment",
+            &layouts.globals,
+            &layouts.instances,
+            wgpu::PrimitiveTopology::TriangleStrip,
+            &[Some(color_target.clone())],
+            1,
+            &shader_module,
+        );
+
+        let smoothed_quads = create_pipeline(
+            "smoothed_quads",
+            "vertex_smoothed_quad",
+            "fragment_smoothed_quad",
             &layouts.globals,
             &layouts.instances,
             wgpu::PrimitiveTopology::TriangleStrip,
@@ -946,8 +1010,20 @@ impl WgpuRenderer {
 
         let shadows = create_pipeline(
             "shadows",
-            "vs_shadow",
-            "fs_shadow",
+            "shadow_vertex",
+            "shadow_fragment",
+            &layouts.globals,
+            &layouts.instances,
+            wgpu::PrimitiveTopology::TriangleStrip,
+            &[Some(color_target.clone())],
+            1,
+            &shader_module,
+        );
+
+        let smoothed_shadows = create_pipeline(
+            "smoothed_shadows",
+            "vertex_smoothed_shadow",
+            "fragment_smoothed_shadow",
             &layouts.globals,
             &layouts.instances,
             wgpu::PrimitiveTopology::TriangleStrip,
@@ -958,8 +1034,8 @@ impl WgpuRenderer {
 
         let path_rasterization = create_pipeline(
             "path_rasterization",
-            "vs_path_rasterization",
-            "fs_path_rasterization",
+            "path_rasterization_vertex",
+            "path_rasterization_fragment",
             &layouts.globals,
             &layouts.instances,
             wgpu::PrimitiveTopology::TriangleList,
@@ -987,8 +1063,8 @@ impl WgpuRenderer {
 
         let paths = create_pipeline(
             "paths",
-            "vs_path",
-            "fs_path",
+            "path_sprite_vertex",
+            "path_sprite_fragment",
             &layouts.globals,
             &layouts.instances_with_texture,
             wgpu::PrimitiveTopology::TriangleStrip,
@@ -1003,8 +1079,8 @@ impl WgpuRenderer {
 
         let underlines = create_pipeline(
             "underlines",
-            "vs_underline",
-            "fs_underline",
+            "underline_vertex",
+            "underline_fragment",
             &layouts.globals,
             &layouts.instances,
             wgpu::PrimitiveTopology::TriangleStrip,
@@ -1015,8 +1091,8 @@ impl WgpuRenderer {
 
         let mono_sprites = create_pipeline(
             "mono_sprites",
-            "vs_mono_sprite",
-            "fs_mono_sprite",
+            "monochrome_sprite_vertex",
+            "monochrome_sprite_fragment",
             &layouts.globals,
             &layouts.instances_with_texture,
             wgpu::PrimitiveTopology::TriangleStrip,
@@ -1041,8 +1117,8 @@ impl WgpuRenderer {
 
             Some(create_pipeline(
                 "subpixel_sprites",
-                "vs_subpixel_sprite",
-                "fs_subpixel_sprite",
+                "subpixel_sprite_vertex",
+                "subpixel_sprite_fragment",
                 &layouts.globals,
                 &layouts.instances_with_texture,
                 wgpu::PrimitiveTopology::TriangleStrip,
@@ -1060,8 +1136,20 @@ impl WgpuRenderer {
 
         let poly_sprites = create_pipeline(
             "poly_sprites",
-            "vs_poly_sprite",
-            "fs_poly_sprite",
+            "polychrome_sprite_vertex",
+            "polychrome_sprite_fragment",
+            &layouts.globals,
+            &layouts.instances_with_texture,
+            wgpu::PrimitiveTopology::TriangleStrip,
+            &[Some(color_target.clone())],
+            1,
+            &shader_module,
+        );
+
+        let smoothed_poly_sprites = create_pipeline(
+            "smoothed_poly_sprites",
+            "vertex_smoothed_polychrome_sprite",
+            "fragment_smoothed_polychrome_sprite",
             &layouts.globals,
             &layouts.instances_with_texture,
             wgpu::PrimitiveTopology::TriangleStrip,
@@ -1072,8 +1160,8 @@ impl WgpuRenderer {
 
         let surfaces = create_pipeline(
             "surfaces",
-            "vs_surface",
-            "fs_surface",
+            "surface_vertex",
+            "surface_fragment",
             &layouts.globals,
             &layouts.surfaces,
             wgpu::PrimitiveTopology::TriangleStrip,
@@ -1092,8 +1180,8 @@ impl WgpuRenderer {
 
         let blur_downsample = create_pipeline(
             "blur_downsample",
-            "vs_blur_fullscreen",
-            "fs_blur_downsample",
+            "blur_vertex",
+            "blur_downsample_fragment",
             &layouts.globals,
             &layouts.blur,
             wgpu::PrimitiveTopology::TriangleList,
@@ -1104,8 +1192,8 @@ impl WgpuRenderer {
 
         let blur = create_pipeline(
             "blur",
-            "vs_blur_fullscreen",
-            "fs_blur",
+            "blur_vertex",
+            "blur_fragment",
             &layouts.globals,
             &layouts.blur,
             wgpu::PrimitiveTopology::TriangleList,
@@ -1125,8 +1213,8 @@ impl WgpuRenderer {
         };
         let blur_composite = create_pipeline(
             "blur_composite",
-            "vs_blur_composite",
-            "fs_blur_composite",
+            "blur_composite_vertex",
+            "blur_composite_fragment",
             &layouts.globals,
             &layouts.blur,
             wgpu::PrimitiveTopology::TriangleStrip,
@@ -1137,13 +1225,16 @@ impl WgpuRenderer {
 
         WgpuPipelines {
             quads,
+            smoothed_quads,
             shadows,
+            smoothed_shadows,
             path_rasterization,
             paths,
             underlines,
             mono_sprites,
             subpixel_sprites,
             poly_sprites,
+            smoothed_poly_sprites,
             surfaces,
             blur_downsample,
             blur,
@@ -1607,22 +1698,22 @@ impl WgpuRenderer {
 
                 for batch in scene.batches() {
                     let ok = match batch {
-                        PrimitiveBatch::Quads(range) => {
+                        PrimitiveBatch::Quads { range, smoothed } => {
                             let quads = &scene.quads[range];
                             let visible_quads: Vec<_> = quads.iter().filter(|q| q.bounds.intersects(&viewport_bounds)).cloned().collect();
                             self.frame_stats.quads += visible_quads.len();
                             if !visible_quads.is_empty() {
-                                self.draw_quads(&visible_quads, &mut instance_offset, &mut pass)
+                                self.draw_quads(&visible_quads, smoothed, &mut instance_offset, &mut pass)
                             } else {
                                 true
                             }
                         }
-                        PrimitiveBatch::Shadows(range) => {
+                        PrimitiveBatch::Shadows { range, smoothed } => {
                             let shadows = &scene.shadows[range];
                             let visible_shadows: Vec<_> = shadows.iter().filter(|s| s.bounds.intersects(&viewport_bounds)).cloned().collect();
                             self.frame_stats.shadows += visible_shadows.len();
                             if !visible_shadows.is_empty() {
-                                self.draw_shadows(&visible_shadows, &mut instance_offset, &mut pass)
+                                self.draw_shadows(&visible_shadows, smoothed, &mut instance_offset, &mut pass)
                             } else {
                                 true
                             }
@@ -1699,12 +1790,12 @@ impl WgpuRenderer {
                                 true
                             }
                         }
-                        PrimitiveBatch::PolychromeSprites { texture_id, range } => {
+                        PrimitiveBatch::PolychromeSprites { texture_id, range, smoothed } => {
                             let sprites = &scene.polychrome_sprites[range];
                             let visible_sprites: Vec<_> = sprites.iter().filter(|s| s.bounds.intersects(&viewport_bounds)).cloned().collect();
                             self.frame_stats.polychrome_sprites += visible_sprites.len();
                             if !visible_sprites.is_empty() {
-                                self.draw_polychrome_sprites(&visible_sprites, texture_id, &mut instance_offset, &mut pass)
+                                self.draw_polychrome_sprites(&visible_sprites, texture_id, smoothed, &mut instance_offset, &mut pass)
                             } else {
                                 true
                             }
@@ -1861,21 +1952,33 @@ impl WgpuRenderer {
     fn draw_quads(
         &self,
         quads: &[Quad],
+        smoothed: bool,
         instance_offset: &mut u64,
         pass: &mut wgpu::RenderPass<'_>,
     ) -> bool {
         let data = unsafe { Self::instance_bytes(quads) };
-        self.draw_instances(data, quads.len() as u32, &self.resources().pipelines.quads, instance_offset, pass)
+        let pipeline = if smoothed {
+            &self.resources().pipelines.smoothed_quads
+        } else {
+            &self.resources().pipelines.quads
+        };
+        self.draw_instances(data, quads.len() as u32, pipeline, instance_offset, pass)
     }
 
     fn draw_shadows(
         &self,
         shadows: &[Shadow],
+        smoothed: bool,
         instance_offset: &mut u64,
         pass: &mut wgpu::RenderPass<'_>,
     ) -> bool {
         let data = unsafe { Self::instance_bytes(shadows) };
-        self.draw_instances(data, shadows.len() as u32, &self.resources().pipelines.shadows, instance_offset, pass)
+        let pipeline = if smoothed {
+            &self.resources().pipelines.smoothed_shadows
+        } else {
+            &self.resources().pipelines.shadows
+        };
+        self.draw_instances(data, shadows.len() as u32, pipeline, instance_offset, pass)
     }
 
     fn draw_underlines(
@@ -1930,7 +2033,15 @@ impl WgpuRenderer {
 
             let params = SurfaceParams {
                 bounds: surface.bounds.into(),
-                content_mask: surface.content_mask.bounds.into(),
+                content_mask: surface.content_mask.into(),
+                color_format: 0,
+                opacity: 1.0,
+                padding0: 0,
+                padding1: 0,
+                padding2: 0,
+                padding3: 0,
+                padding4: 0,
+                padding5: 0,
             };
 
             resources.queue.write_buffer(
@@ -1955,6 +2066,10 @@ impl WgpuRenderer {
                         },
                         wgpu::BindGroupEntry {
                             binding: 2,
+                            resource: wgpu::BindingResource::TextureView(&texture_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
                             resource: wgpu::BindingResource::Sampler(&resources.surface_sampler),
                         },
                     ],
@@ -2195,6 +2310,12 @@ impl WgpuRenderer {
                 content_mask.corner_radii.bottom_right.0,
                 content_mask.corner_radii.bottom_left.0,
             ],
+            content_mask_fade_out: [
+                content_mask.fade_out.top.0,
+                content_mask.fade_out.right.0,
+                content_mask.fade_out.bottom.0,
+                content_mask.fade_out.left.0,
+            ],
             corner_radii,
             opacity,
             clip_rounded: if clip_rounded { 1.0 } else { 0.0 },
@@ -2280,12 +2401,18 @@ impl WgpuRenderer {
         &self,
         sprites: &[PolychromeSprite],
         texture_id: AtlasTextureId,
+        smoothed: bool,
         instance_offset: &mut u64,
         pass: &mut wgpu::RenderPass<'_>,
     ) -> bool {
         let tex_info = self.atlas.get_texture_info(texture_id);
         let data = unsafe { Self::instance_bytes(sprites) };
-        self.draw_instances_with_texture(data, sprites.len() as u32, &tex_info.view, &self.resources().pipelines.poly_sprites, instance_offset, pass)
+        let pipeline = if smoothed {
+            &self.resources().pipelines.smoothed_poly_sprites
+        } else {
+            &self.resources().pipelines.poly_sprites
+        };
+        self.draw_instances_with_texture(data, sprites.len() as u32, &tex_info.view, pipeline, instance_offset, pass)
     }
 
     fn draw_instances(
@@ -2422,11 +2549,12 @@ impl WgpuRenderer {
         for path in paths {
             vertices.extend(path.vertices.iter().map(|v| PathRasterizationVertex {
                 xy_position: v.xy_position,
-                st_position: v.st_position,
+                curve_position: v.st_position,
                 color: path.color,
                 bounds: path.bounds,
                 content_mask: path.content_mask.bounds,
                 content_mask_corner_radii: path.content_mask.corner_radii,
+                content_mask_fade_out: path.content_mask.fade_out,
             }));
         }
 
@@ -2764,19 +2892,23 @@ mod path_layout_tests {
     use std::mem::{offset_of, size_of};
 
     /// The WGSL `PathRasterizationVertex` must see the same field offsets as the Rust
-    /// `repr(C)` struct: 8 / 8 / 80 / 16 / 16 / 16 = 144 bytes. A drift here silently
+    /// `repr(C)` struct: 8 / 8 / 80 / 16 / 16 / 16 / 16 = 160 bytes. A drift here silently
     /// misreads the mask and the gradient box for every path vertex.
     #[test]
     fn path_rasterization_vertex_layout_matches_wgsl() {
-        assert_eq!(size_of::<PathRasterizationVertex>(), 144);
+        assert_eq!(size_of::<PathRasterizationVertex>(), 160);
         assert_eq!(offset_of!(PathRasterizationVertex, xy_position), 0);
-        assert_eq!(offset_of!(PathRasterizationVertex, st_position), 8);
+        assert_eq!(offset_of!(PathRasterizationVertex, curve_position), 8);
         assert_eq!(offset_of!(PathRasterizationVertex, color), 16);
         assert_eq!(offset_of!(PathRasterizationVertex, bounds), 96);
         assert_eq!(offset_of!(PathRasterizationVertex, content_mask), 112);
         assert_eq!(
             offset_of!(PathRasterizationVertex, content_mask_corner_radii),
             128
+        );
+        assert_eq!(
+            offset_of!(PathRasterizationVertex, content_mask_fade_out),
+            144
         );
     }
 }

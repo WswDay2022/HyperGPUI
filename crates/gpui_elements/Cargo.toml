@@ -33,3 +33,11 @@ path = "examples/borderless_window.rs"
 [[example]]
 name = "button-feedback"
 path = "examples/button_feedback.rs"
+
+[[example]]
+name = "image-repro"
+path = "examples/image_repro.rs"
+
+[[example]]
+name = "image-transition-repro"
+path = "examples/image_transition_repro.rs"

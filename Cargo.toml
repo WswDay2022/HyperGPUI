@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "./crates/gpui/",
+  "./crates/gpui_render/",
   "./crates/gpui_web/",
   "./crates/gpui_wgpu/",
   "./crates/gpui_linux/",
@@ -166,6 +167,9 @@ libc = "0.2"
 smol = "2.0"
 util = { path = "crates/gpui_zed_util", version = "0.2.2", package = "hgpui_zed_util" }
 wgpu = "29.0.3"
+wgsl-rs = { git = "https://github.com/schell/wgsl-rs", rev = "b2de16a1b81e67d76bc265c296184f882864badb", default-features = false, features = [
+  "validation",
+] }
 criterion = { version = "0.5", features = ["html_reports"] }
 objc2-app-kit = { version = "0.3", default-features = false, features = [
   "NSButton",
@@ -180,6 +184,7 @@ windows-core = "0.62.2"
 tokio = { version = "1" }
 
 hgpui = { path = "./crates/gpui", version = "0.2.3", package = "hgpui" }
+hgpui_render = { path = "./crates/gpui_render", version = "0.1.0", package = "hgpui_render" }
 hgpui_platform = { path = "./crates/gpui_platform", version = "0.1.0", package = "hgpui_platform" }
 hgpui_linux = { path = "./crates/gpui_linux", version = "0.1.0", package = "hgpui_linux" }
 hgpui_macos = { path = "./crates/gpui_macos", version = "0.1.0", package = "hgpui_macos" }

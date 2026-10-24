@@ -1,0 +1,28 @@
+//! Rust-authored shader sources shared by the DirectX, WGPU, and Metal backends.
+
+#![allow(dead_code, unused_assignments, unused_imports)]
+
+pub mod common;
+pub mod interface;
+
+mod corner_smoothing;
+mod emoji;
+mod filters;
+mod linkage;
+mod paths;
+mod quads;
+mod shadows;
+mod sprites;
+
+pub use emoji::emoji_rasterization;
+pub use filters::{blur, surface};
+pub use linkage::base;
+pub use paths::{path, path_rasterization};
+pub use quads::quad;
+pub use shadows::shadow;
+pub use sprites::{monochrome_sprite, polychrome_sprite, subpixel_sprite, underline};
+
+mod host;
+
+#[cfg(test)]
+mod tests;

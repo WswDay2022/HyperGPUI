@@ -348,8 +348,14 @@ impl WindowsPlatform {
             .name("VSyncProvider".to_owned())
             .spawn(move || {
                 let vsync_provider = VSyncProvider::new();
+                let trace = std::env::var_os("HGPUI_TRACE_FRAMES").is_some();
+                let mut ticks: u64 = 0;
                 loop {
                     vsync_provider.wait_for_vsync();
+                    ticks += 1;
+                    if trace && ticks % 300 == 0 {
+                        eprintln!("[vsync] alive ticks={ticks}");
+                    }
                     #[cfg(not(feature = "wgpu"))]
                     {
                         if check_device_lost(&directx_device.device)

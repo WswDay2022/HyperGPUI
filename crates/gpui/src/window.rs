@@ -8,7 +8,8 @@ use crate::{
     Entity, EntityId, EventEmitter, FileDropEvent, Filter, FilterBoundary, FontId, Global,
     GlobalElementId, GlyphId, GpuSpecs, InputHandler, IsZero, KeyBinding, KeyContext, KeyDownEvent,
     KeyEvent, Keystroke, KeystrokeEvent, LayoutId, Lerp, LineLayoutIndex, Modifiers,
-    ModifiersChangedEvent, MonochromeSprite, MouseButton, MouseEvent, MouseMoveEvent, MouseUpEvent,
+    ModifiersChangedEvent, MonochromeSprite, Motion, MouseButton, MouseEvent, MouseMoveEvent,
+    MouseUpEvent,
     Path, Pixels, PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler,
     PlatformWindow, Point, PolychromeSprite, Priority, PromptButton, PromptLevel, Quad, Render,
     RenderGlyphParams, RenderImage, RenderImageParams, RenderSvgParams, Replay, ResizeEdge,
@@ -1636,6 +1637,14 @@ impl Window {
                     || input_rate_tracker.borrow_mut().is_high_rate();
 
                 if invalidator.is_dirty() || force_render {
+                    let trace_frame = std::env::var_os("HGPUI_TRACE_FRAMES").is_some();
+                    let trace_started = Instant::now();
+                    if trace_frame {
+                        eprintln!(
+                            "[frame] draw begin force={force_render} dirty={}",
+                            invalidator.is_dirty()
+                        );
+                    }
                     measure("frame duration", || {
                         handle
                             .update(&mut cx, |_, window, cx| {
@@ -1649,7 +1658,10 @@ impl Window {
                                 arena_clear_needed.clear(cx);
                             })
                             .log_err();
-                    })
+                    });
+                    if trace_frame {
+                        eprintln!("[frame] draw end {:?}", trace_started.elapsed());
+                    }
                 } else if needs_present {
                     handle
                         .update(&mut cx, |_, window, _| window.present())
@@ -1912,6 +1924,8 @@ pub struct ContentMask<P: Clone + Debug + Default + PartialEq> {
     pub bounds: Bounds<P>,
     /// Corner radii applied when clipping to `bounds`; zero means a square corner.
     pub corner_radii: Corners<P>,
+    /// Edge fade distances. A zero distance leaves that edge fully opaque.
+    pub fade_out: Edges<P>,
 }
 
 impl ContentMask<Pixels> {
@@ -1920,6 +1934,7 @@ impl ContentMask<Pixels> {
         ContentMask {
             bounds: self.bounds.scale(factor),
             corner_radii: self.corner_radii.scale(factor),
+            fade_out: self.fade_out.scale(factor),
         }
     }
 }
@@ -1954,9 +1969,58 @@ where
             bottom_left: Self::fold_corners_at(self, other, bounds.bottom_left()),
         }
         .clamp_radii_for_quad_size(bounds.size);
+        fn edge_fade<P: Copy + Ord>(
+            a: P,
+            b: P,
+            a_fade: P,
+            b_fade: P,
+            a_clips_closer: impl Fn(P, P) -> bool,
+        ) -> P {
+            if a_clips_closer(a, b) {
+                a_fade
+            } else if a_clips_closer(b, a) {
+                b_fade
+            } else if a_fade > b_fade {
+                a_fade
+            } else {
+                b_fade
+            }
+        }
+
+        let fade_out = Edges {
+            top: edge_fade(
+                self.bounds.top(),
+                other.bounds.top(),
+                self.fade_out.top,
+                other.fade_out.top,
+                |a, b| a > b,
+            ),
+            right: edge_fade(
+                self.bounds.right(),
+                other.bounds.right(),
+                self.fade_out.right,
+                other.fade_out.right,
+                |a, b| a < b,
+            ),
+            bottom: edge_fade(
+                self.bounds.bottom(),
+                other.bounds.bottom(),
+                self.fade_out.bottom,
+                other.fade_out.bottom,
+                |a, b| a < b,
+            ),
+            left: edge_fade(
+                self.bounds.left(),
+                other.bounds.left(),
+                self.fade_out.left,
+                other.fade_out.left,
+                |a, b| a > b,
+            ),
+        };
         ContentMask {
             bounds,
             corner_radii,
+            fade_out,
         }
     }
 
@@ -2803,6 +2867,7 @@ impl Window {
         ContentMask {
             bounds: self.cover_bounds(self.content_mask().bounds),
             corner_radii: self.content_mask().corner_radii.scale(self.scale_factor()),
+            fade_out: self.content_mask().fade_out.scale(self.scale_factor()),
         }
     }
 
@@ -3089,6 +3154,8 @@ impl Window {
         // Layout all root elements. Like the root element on the web, which
         // stretches to fill the viewport unless explicitly sized, window roots
         // fill the window when their size is `auto`.
+        let trace_frame = std::env::var_os("HGPUI_TRACE_FRAMES").is_some();
+        let phase_started = Instant::now();
         let scale_factor = self.scale_factor();
         let mut root_element = self.root.as_ref().unwrap().clone().into_any_element();
         let root_layout_id = root_element.request_layout(self, cx);
@@ -3096,12 +3163,19 @@ impl Window {
             .as_mut()
             .unwrap()
             .stretch_auto_size_to_fill(root_layout_id, root_size, scale_factor);
+        if trace_frame {
+            eprintln!("[frame] layout end {:?}", phase_started.elapsed());
+        }
+        let phase_started = Instant::now();
         root_element.prepaint_as_root(Point::default(), root_size.into(), self, cx);
 
         #[cfg(any(feature = "inspector", debug_assertions))]
         let inspector_element = self.prepaint_inspector(_inspector_width, cx);
 
         self.prepaint_deferred_draws(cx);
+        if trace_frame {
+            eprintln!("[frame] prepaint end {:?}", phase_started.elapsed());
+        }
 
         let mut prompt_element = None;
         let mut active_drag_element = None;
@@ -3127,6 +3201,7 @@ impl Window {
 
         // Now actually paint the elements.
         self.invalidator.set_phase(DrawPhase::Paint);
+        let phase_started = Instant::now();
         root_element.paint(self, cx);
 
         #[cfg(any(feature = "inspector", debug_assertions))]
@@ -3138,6 +3213,9 @@ impl Window {
             prompt_element.paint(self, cx);
         } else if let Some(mut drag_element) = active_drag_element {
             drag_element.paint(self, cx);
+        }
+        if std::env::var_os("HGPUI_TRACE_FRAMES").is_some() {
+            eprintln!("[frame] paint end {:?}", phase_started.elapsed());
         }
 
         #[cfg(any(feature = "inspector", debug_assertions))]
@@ -3666,6 +3744,8 @@ impl Window {
                     size: self.viewport_size,
                 },
                 corner_radii: Corners::default(),
+
+                fade_out: Default::default(),
             })
     }
 
@@ -3847,12 +3927,15 @@ impl Window {
     pub fn use_transition<T: Lerp + Clone + PartialEq + 'static>(
         &mut self,
         cx: &mut App,
-        duration: Duration,
+        motion: impl Into<Motion>,
         init: impl Fn(&mut Window, &mut Context<TransitionState<T>>) -> T,
     ) -> Transition<T> {
-        let state = self.use_state(cx, |window, cx| TransitionState::new(init(window, cx)));
+        let motion = motion.into();
+        let state = self.use_state(cx, |window, cx| {
+            TransitionState::new(init(window, cx), motion.clone())
+        });
 
-        Transition::new(state, duration)
+        Transition::new(state, motion)
     }
 
     /// Creates a new keyed transition with persistent state.
@@ -3867,13 +3950,15 @@ impl Window {
         &mut self,
         key: impl Into<ElementId>,
         cx: &mut App,
-        duration: Duration,
+        motion: impl Into<Motion>,
         init: impl Fn(&mut Window, &mut Context<TransitionState<T>>) -> T,
     ) -> Transition<T> {
-        let state =
-            self.use_keyed_state(key, cx, |window, cx| TransitionState::new(init(window, cx)));
+        let motion = motion.into();
+        let state = self.use_keyed_state(key, cx, |window, cx| {
+            TransitionState::new(init(window, cx), motion.clone())
+        });
 
-        Transition::new(state, duration)
+        Transition::new(state, motion)
     }
 
     /// Executes the given closure within the context of a tab group.
@@ -3956,6 +4041,7 @@ impl Window {
         &mut self,
         bounds: Bounds<Pixels>,
         corner_radii: Corners<Pixels>,
+        corner_smoothing: f32,
         shadows: &[BoxShadow],
     ) {
         self.invalidator.debug_assert_paint();
@@ -3976,11 +4062,11 @@ impl Window {
                 bounds: self.cover_bounds(shadow_bounds),
                 content_mask,
                 corner_radii: corner_radii.scale(scale_factor),
-                color: shadow.color.opacity(opacity).into(),
+                color: shadow.color.opacity(opacity),
                 element_bounds,
                 element_corner_radii,
                 inset: 0,
-                pad: 0,
+                corner_smoothing,
             });
         }
     }
@@ -3992,6 +4078,7 @@ impl Window {
         &mut self,
         bounds: Bounds<Pixels>,
         corner_radii: Corners<Pixels>,
+        corner_smoothing: f32,
         shadows: &[BoxShadow],
     ) {
         self.invalidator.debug_assert_paint();
@@ -4021,11 +4108,11 @@ impl Window {
                 bounds: self.cover_bounds(hole),
                 content_mask,
                 corner_radii: hole_corner_radii.scale(scale_factor),
-                color: shadow.color.opacity(opacity).into(),
+                color: shadow.color.opacity(opacity),
                 element_bounds,
                 element_corner_radii,
                 inset: 1,
-                pad: 0,
+                corner_smoothing,
             });
         }
     }
@@ -4142,10 +4229,14 @@ impl Window {
             bounds: snapped_bounds,
             content_mask: self.snapped_content_mask(),
             background: quad.background.opacity(opacity),
-            border_color: quad.border_color.opacity(opacity).into(),
+            border_color: quad.border_color.opacity(opacity),
             corner_radii: quad.corner_radii.scale(self.scale_factor()),
             border_widths: snapped_border_widths,
             border_style: quad.border_style,
+            border_dashed_length: quad.border_dashed_length,
+            border_dashed_gap: quad.border_dashed_gap,
+            corner_smoothing: quad.corner_smoothing,
+            padding: 0,
             transformation: self
                 .current_transform()
                 .compose(quad.transformation.unwrap_or(TransformationMatrix::unit())),
@@ -4231,6 +4322,8 @@ impl Window {
             let content_mask = quad.content_mask.intersect(&ContentMask {
                 bounds: strip,
                 corner_radii: Corners::default(),
+
+                fade_out: Default::default(),
             });
             if !content_mask.bounds.is_empty() {
                 self.next_frame.scene.insert_primitive(Quad {
@@ -4284,7 +4377,7 @@ impl Window {
 
         self.next_frame.scene.insert_primitive(Underline {
             order: 0,
-            pad: 0,
+            padding: 0,
             bounds,
             content_mask: self.snapped_content_mask(),
             color: style
@@ -4319,7 +4412,7 @@ impl Window {
 
         self.next_frame.scene.insert_primitive(Underline {
             order: 0,
-            pad: 0,
+            padding: 0,
             bounds,
             content_mask: self.snapped_content_mask(),
             thickness: self.snap_stroke(style.thickness),
@@ -4394,7 +4487,7 @@ impl Window {
             if subpixel_rendering {
                 self.next_frame.scene.insert_primitive(SubpixelSprite {
                     order: 0,
-                    pad: 0,
+                    padding: 0,
                     bounds,
                     content_mask,
                     color: color.opacity(element_opacity).into(),
@@ -4404,7 +4497,7 @@ impl Window {
             } else {
                 self.next_frame.scene.insert_primitive(MonochromeSprite {
                     order: 0,
-                    pad: 0,
+                    padding: 0,
                     bounds,
                     content_mask,
                     color: color.opacity(element_opacity).into(),
@@ -4485,13 +4578,13 @@ impl Window {
 
             self.next_frame.scene.insert_primitive(PolychromeSprite {
                 order: 0,
-                pad: 0,
                 grayscale: false.into(),
                 bounds,
                 corner_radii: Default::default(),
                 content_mask,
                 tile,
                 opacity,
+                corner_smoothing: 0.0,
                 transformation: self.current_transform(),
             });
         }
@@ -4552,7 +4645,7 @@ impl Window {
 
         self.next_frame.scene.insert_primitive(MonochromeSprite {
             order: 0,
-            pad: 0,
+            padding: 0,
             bounds: final_bounds,
             content_mask,
             color: color.opacity(element_opacity).into(),
@@ -4588,6 +4681,13 @@ impl Window {
         }
         if image_bounds.size.width <= Pixels::ZERO || image_bounds.size.height <= Pixels::ZERO {
             return Ok(());
+        }
+
+        if std::env::var_os("HGPUI_TRACE_FRAMES").is_some() {
+            eprintln!(
+                "[img] id={} frame={} bounds={:?} image_bounds={:?} radii={:?}",
+                data.id.0, frame_index, visible_bounds, image_bounds, corner_radii
+            );
         }
 
         let params = RenderImageParams {
@@ -4671,13 +4771,13 @@ impl Window {
 
         self.next_frame.scene.insert_primitive(PolychromeSprite {
             order: 0,
-            pad: 0,
             grayscale: grayscale.into(),
             bounds: visible_bounds_snapped,
             content_mask,
             corner_radii,
             tile: sub_tile,
             opacity,
+            corner_smoothing: 0.0,
             transformation: self.current_transform(),
         });
         Ok(())
@@ -5845,8 +5945,14 @@ impl Window {
     }
 
     /// Focus the current window and bring it to the foreground at the platform level.
-    pub fn activate_window(&self) {
+    pub fn activate(&self) {
         self.platform_window.activate();
+    }
+
+    /// Deprecated alias for [`Window::activate`].
+    #[deprecated(note = "Use Window::activate instead.")]
+    pub fn activate_window(&self) {
+        self.activate();
     }
 
     /// Requests that the operating system draw attention to this window.
@@ -6942,16 +7048,38 @@ pub struct PaintQuad {
     pub background: Background,
     /// The widths of the quad's borders.
     pub border_widths: Edges<Pixels>,
-    /// The color of the quad's borders.
-    pub border_color: Hsla,
+    /// The color or gradient of the quad's borders.
+    pub border_color: Background,
     /// The style of the quad's borders.
     pub border_style: BorderStyle,
+    /// The length of each border dash, as a multiple of the border width.
+    pub border_dashed_length: f32,
+    /// The gap between border dashes, as a multiple of the border width.
+    pub border_dashed_gap: f32,
+    /// Rounded-corner smoothing, from circular (`0.0`) to maximum (`1.0`).
+    pub corner_smoothing: f32,
     /// Optional transform applied at draw time, around the quad's center (device pixels).
     /// `None` renders the quad untransformed.
     pub transformation: Option<TransformationMatrix>,
 }
 
 impl PaintQuad {
+    /// Creates an empty, fully transparent quad at the given bounds.
+    pub fn new(bounds: impl Into<Bounds<Pixels>>) -> Self {
+        Self {
+            bounds: bounds.into(),
+            corner_radii: (0.).into(),
+            background: transparent_black().into(),
+            border_widths: (0.).into(),
+            border_color: transparent_black().into(),
+            border_style: BorderStyle::default(),
+            border_dashed_length: crate::scene::DEFAULT_BORDER_DASHED_LENGTH,
+            border_dashed_gap: crate::scene::DEFAULT_BORDER_DASHED_GAP,
+            corner_smoothing: 0.0,
+            transformation: None,
+        }
+    }
+
     /// Sets the corner radii of the quad.
     pub fn corner_radii(self, corner_radii: impl Into<Corners<Pixels>>) -> Self {
         PaintQuad {
@@ -6976,10 +7104,34 @@ impl PaintQuad {
         }
     }
 
-    /// Sets the border color of the quad.
-    pub fn border_color(self, border_color: impl IntoColor<Hsla>) -> Self {
+    /// Sets the border color or gradient of the quad.
+    pub fn border_color(self, border_color: impl Into<Background>) -> Self {
         PaintQuad {
-            border_color: border_color.into_color(),
+            border_color: border_color.into(),
+            ..self
+        }
+    }
+
+    /// Sets the border dash length and gap, as multiples of the border width.
+    pub fn border_dashed_length(self, length: f32) -> Self {
+        PaintQuad {
+            border_dashed_length: length.max(0.0),
+            ..self
+        }
+    }
+
+    /// Sets the gap between border dashes, as a multiple of the border width.
+    pub fn border_dashed_gap(self, gap: f32) -> Self {
+        PaintQuad {
+            border_dashed_gap: gap.max(0.0),
+            ..self
+        }
+    }
+
+    /// Sets rounded-corner smoothing, from circular (`0.0`) to maximum (`1.0`).
+    pub fn corner_smoothing(self, smoothing: f32) -> Self {
+        PaintQuad {
+            corner_smoothing: smoothing.clamp(0.0, 1.0),
             ..self
         }
     }
@@ -6999,7 +7151,7 @@ pub fn quad(
     corner_radii: impl Into<Corners<Pixels>>,
     background: impl Into<Background>,
     border_widths: impl Into<Edges<Pixels>>,
-    border_color: impl IntoColor<Hsla>,
+    border_color: impl Into<Background>,
     border_style: BorderStyle,
 ) -> PaintQuad {
     PaintQuad {
@@ -7007,8 +7159,11 @@ pub fn quad(
         corner_radii: corner_radii.into(),
         background: background.into(),
         border_widths: border_widths.into(),
-        border_color: border_color.into_color(),
+        border_color: border_color.into(),
         border_style,
+        border_dashed_length: crate::scene::DEFAULT_BORDER_DASHED_LENGTH,
+        border_dashed_gap: crate::scene::DEFAULT_BORDER_DASHED_GAP,
+        corner_smoothing: 0.0,
         transformation: None,
     }
 }
@@ -7020,8 +7175,11 @@ pub fn fill(bounds: impl Into<Bounds<Pixels>>, background: impl Into<Background>
         corner_radii: (0.).into(),
         background: background.into(),
         border_widths: (0.).into(),
-        border_color: transparent_black(),
+        border_color: transparent_black().into(),
         border_style: BorderStyle::default(),
+        border_dashed_length: crate::scene::DEFAULT_BORDER_DASHED_LENGTH,
+        border_dashed_gap: crate::scene::DEFAULT_BORDER_DASHED_GAP,
+        corner_smoothing: 0.0,
         transformation: None,
     }
 }
@@ -7037,8 +7195,11 @@ pub fn outline(
         corner_radii: (0.).into(),
         background: transparent_black().into(),
         border_widths: (1.).into(),
-        border_color: border_color.into_color(),
+        border_color: border_color.into_color().into(),
         border_style,
+        border_dashed_length: crate::scene::DEFAULT_BORDER_DASHED_LENGTH,
+        border_dashed_gap: crate::scene::DEFAULT_BORDER_DASHED_GAP,
+        corner_smoothing: 0.0,
         transformation: None,
     }
 }
@@ -7057,7 +7218,7 @@ mod tests {
         CssTransform, DragMoveEvent, Edges, Empty, Entity, ExternalDragPayload, ExternalPaths,
         FileDragPaths, FileDropEvent, FocusHandle, InputEvent as _, InteractiveElement as _,
         IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement, Pixels, Point,
-        Render, ScaledPixels, SceneHsla, StatefulInteractiveElement as _, Styled, TestAppContext,
+        Render, ScaledPixels, StatefulInteractiveElement as _, Styled, TestAppContext,
         TransformationMatrix, Window, WindowAppearance, WindowOptions, canvas, deferred, div,
         point, px, quad, radians, rgba, size, transparent_black,
     };
@@ -7526,7 +7687,7 @@ mod tests {
                     Background::from(rgba(0x990000ff)),
                 ];
                 let green_bg = Background::from(rgba(0x00ff00ff));
-                let blue_border: SceneHsla = crate::rgb_to_hsla(rgba(0x0000ffff)).into();
+                let blue_border: Background = crate::rgb_to_hsla(rgba(0x0000ffff)).into();
                 let red_indices: Vec<usize> = quads
                     .iter()
                     .enumerate()
@@ -7991,7 +8152,7 @@ mod tests {
         });
 
         window
-            .update(cx, |_, window, _| window.activate_window())
+            .update(cx, |_, window, _| window.activate())
             .unwrap();
         cx.executor().run_until_parked();
 

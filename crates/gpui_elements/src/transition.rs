@@ -296,6 +296,7 @@ impl TransitionBuilder {
             .clone()
             .expect("transition(..).child(..) must be given a child factory");
 
+        let duration = self.duration;
         let slot_entity = window.use_keyed_state(self.id.clone(), cx, |_window, cx| {
             TransitionSlot {
                 key: None,
@@ -303,8 +304,8 @@ impl TransitionBuilder {
                 leaving: None,
                 pending: None,
                 phase: Phase::Idle,
-                enter_state: cx.new(|_| TransitionState::new(0.0)),
-                leave_state: cx.new(|_| TransitionState::new(0.0)),
+                enter_state: cx.new(|_| TransitionState::new(0.0, duration)),
+                leave_state: cx.new(|_| TransitionState::new(0.0, duration)),
             }
         });
 

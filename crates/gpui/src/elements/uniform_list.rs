@@ -511,6 +511,8 @@ impl Element for UniformList {
                     let content_mask = ContentMask {
                         bounds,
                         corner_radii: Corners::default(),
+
+                        fade_out: Default::default(),
                     };
                     window.with_content_mask(Some(content_mask), |window| {
                         for (mut item, ix) in items.into_iter().zip(visible_range.clone()) {

@@ -22,6 +22,7 @@ use windows::{
 use crate::directx_renderer::shader_resources::{RawShaderBytes, ShaderModule, ShaderTarget};
 use crate::*;
 use hgpui::*;
+use hgpui_render::artifacts::Dx11DrawConstants;
 
 /// The largest blur radius in a scene-space filter chain, in device pixels — used to size the
 /// blur kernel and the dilated region the blur passes are scissored to.
@@ -169,13 +170,16 @@ impl BlurResources {
 
 struct DirectXRenderPipelines {
     shadow_pipeline: PipelineState<Shadow>,
+    smoothed_shadow_pipeline: PipelineState<Shadow>,
     quad_pipeline: PipelineState<Quad>,
+    smoothed_quad_pipeline: PipelineState<Quad>,
     path_rasterization_pipeline: PipelineState<PathRasterizationSprite>,
     path_sprite_pipeline: PipelineState<PathSprite>,
     underline_pipeline: PipelineState<Underline>,
     mono_sprites: PipelineState<MonochromeSprite>,
     subpixel_sprites: PipelineState<SubpixelSprite>,
     poly_sprites: PipelineState<PolychromeSprite>,
+    smoothed_poly_sprites: PipelineState<PolychromeSprite>,
     // Blur (backdrop-filter / filter). These don't use the generic PipelineState since they
     // sample a texture rather than read a structured instance buffer; their parameters live in
     // a dedicated constant buffer at register b1.
@@ -192,6 +196,8 @@ struct DirectXRenderPipelines {
 
 struct DirectXGlobalElements {
     global_params_buffer: Option<ID3D11Buffer>,
+    font_params_buffer: Option<ID3D11Buffer>,
+    draw_constants_buffer: Option<ID3D11Buffer>,
     sampler: Option<ID3D11SamplerState>,
     /// Clamp-addressed sampler used by the blur passes: gaussian taps may leave the texture at
     /// the window edges, and must clamp like CSS rather than wrap around to the far side.
@@ -310,14 +316,27 @@ impl DirectXRenderer {
         update_buffer(
             device_context,
             self.globals.global_params_buffer.as_ref().unwrap(),
-            &[GlobalParams {
-                gamma_ratios: self.font_info.gamma_ratios,
+            &[GlobalUniforms {
                 viewport_size: [resources.viewport.Width, resources.viewport.Height],
+                premultiplied_alpha: 0,
+                padding: 0,
+            }],
+        )?;
+        update_buffer(
+            device_context,
+            self.globals.font_params_buffer.as_ref().unwrap(),
+            &[FontRasterizationUniforms {
+                gamma_ratios: self.font_info.gamma_ratios,
                 grayscale_enhanced_contrast: self.font_info.grayscale_enhanced_contrast,
                 subpixel_enhanced_contrast: self.font_info.subpixel_enhanced_contrast,
-                is_bgr: self.font_info.is_bgr as u32,
-                _pad: [0; 3],
+                uses_blue_green_red_subpixel_order: self.font_info.is_bgr as u32,
+                padding: 0,
             }],
+        )?;
+        update_buffer(
+            device_context,
+            self.globals.draw_constants_buffer.as_ref().unwrap(),
+            &[Dx11DrawConstants::default()],
         )?;
         unsafe {
             device_context.ClearRenderTargetView(
@@ -497,8 +516,12 @@ impl DirectXRenderer {
                 .as_ref()
                 .map(|annotation| Annotation::new(annotation, HSTRING::from(batch.label())));
             match batch {
-                PrimitiveBatch::Shadows(range) => self.draw_shadows(range.start, range.len()),
-                PrimitiveBatch::Quads(range) => self.draw_quads(range.start, range.len()),
+                PrimitiveBatch::Shadows { range, smoothed } => {
+                    self.draw_shadows(range.start, range.len(), smoothed)
+                }
+                PrimitiveBatch::Quads { range, smoothed } => {
+                    self.draw_quads(range.start, range.len(), smoothed)
+                }
                 PrimitiveBatch::Paths(range) => {
                     let paths = &scene.paths[range];
                     self.draw_paths_to_intermediate(paths)?;
@@ -511,9 +534,11 @@ impl DirectXRenderer {
                 PrimitiveBatch::SubpixelSprites { texture_id, range } => {
                     self.draw_subpixel_sprites(texture_id, range.start, range.len())
                 }
-                PrimitiveBatch::PolychromeSprites { texture_id, range } => {
-                    self.draw_polychrome_sprites(texture_id, range.start, range.len())
-                }
+                PrimitiveBatch::PolychromeSprites {
+                    texture_id,
+                    range,
+                    smoothed,
+                } => self.draw_polychrome_sprites(texture_id, range.start, range.len(), smoothed),
                 PrimitiveBatch::Surfaces(range) => self.draw_surfaces(&scene.surfaces[range]),
                 PrimitiveBatch::BackdropFilters(range) => {
                     let result = (|| {
@@ -716,12 +741,17 @@ impl DirectXRenderer {
         Ok(())
     }
 
-    fn draw_shadows(&mut self, start: usize, len: usize) -> Result<()> {
+    fn draw_shadows(&mut self, start: usize, len: usize, smoothed: bool) -> Result<()> {
         if len == 0 {
             return Ok(());
         }
         let devices = self.devices.as_ref().context("devices missing")?;
-        self.pipelines.shadow_pipeline.draw_range(
+        let pipeline = if smoothed {
+            &self.pipelines.smoothed_shadow_pipeline
+        } else {
+            &self.pipelines.shadow_pipeline
+        };
+        pipeline.draw_range(
             &devices.device,
             &devices.device_context,
             slice::from_ref(
@@ -731,19 +761,24 @@ impl DirectXRenderer {
                     .context("resources missing")?
                     .viewport,
             ),
-            slice::from_ref(&self.globals.global_params_buffer),
+            &self.globals.constant_buffers(None),
             4,
             start as u32,
             len as u32,
         )
     }
 
-    fn draw_quads(&mut self, start: usize, len: usize) -> Result<()> {
+    fn draw_quads(&mut self, start: usize, len: usize, smoothed: bool) -> Result<()> {
         if len == 0 {
             return Ok(());
         }
         let devices = self.devices.as_ref().context("devices missing")?;
-        self.pipelines.quad_pipeline.draw_range(
+        let pipeline = if smoothed {
+            &self.pipelines.smoothed_quad_pipeline
+        } else {
+            &self.pipelines.quad_pipeline
+        };
+        pipeline.draw_range(
             &devices.device,
             &devices.device_context,
             slice::from_ref(
@@ -753,7 +788,7 @@ impl DirectXRenderer {
                     .context("resources missing")?
                     .viewport,
             ),
-            slice::from_ref(&self.globals.global_params_buffer),
+            &self.globals.constant_buffers(None),
             4,
             start as u32,
             len as u32,
@@ -786,11 +821,12 @@ impl DirectXRenderer {
         for path in paths {
             vertices.extend(path.vertices.iter().map(|v| PathRasterizationSprite {
                 xy_position: v.xy_position,
-                st_position: v.st_position,
+                curve_position: v.st_position,
                 color: path.color,
                 bounds: path.bounds,
                 content_mask: path.content_mask.bounds,
                 content_mask_corner_radii: path.content_mask.corner_radii,
+                content_mask_fade_out: path.content_mask.fade_out,
             }));
         }
 
@@ -803,7 +839,7 @@ impl DirectXRenderer {
         self.pipelines.path_rasterization_pipeline.draw(
             &devices.device_context,
             slice::from_ref(&resources.viewport),
-            slice::from_ref(&self.globals.global_params_buffer),
+            &self.globals.constant_buffers(None),
             D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
             vertices.len() as u32,
             1,
@@ -873,7 +909,7 @@ impl DirectXRenderer {
             &devices.device_context,
             slice::from_ref(&resources.path_intermediate_srv),
             slice::from_ref(&resources.viewport),
-            slice::from_ref(&self.globals.global_params_buffer),
+            &self.globals.constant_buffers(None),
             slice::from_ref(&self.globals.sampler),
             sprites.len() as u32,
         )
@@ -889,7 +925,7 @@ impl DirectXRenderer {
             &devices.device,
             &devices.device_context,
             slice::from_ref(&resources.viewport),
-            slice::from_ref(&self.globals.global_params_buffer),
+            &self.globals.constant_buffers(None),
             4,
             start as u32,
             len as u32,
@@ -913,7 +949,7 @@ impl DirectXRenderer {
             &devices.device_context,
             &texture_view,
             slice::from_ref(&resources.viewport),
-            slice::from_ref(&self.globals.global_params_buffer),
+            &self.globals.constant_buffers(None),
             slice::from_ref(&self.globals.sampler),
             start as u32,
             len as u32,
@@ -937,7 +973,7 @@ impl DirectXRenderer {
             &devices.device_context,
             &texture_view,
             slice::from_ref(&resources.viewport),
-            slice::from_ref(&self.globals.global_params_buffer),
+            &self.globals.constant_buffers(None),
             slice::from_ref(&self.globals.sampler),
             start as u32,
             len as u32,
@@ -949,6 +985,7 @@ impl DirectXRenderer {
         texture_id: AtlasTextureId,
         start: usize,
         len: usize,
+        smoothed: bool,
     ) -> Result<()> {
         if len == 0 {
             return Ok(());
@@ -956,12 +993,17 @@ impl DirectXRenderer {
         let devices = self.devices.as_ref().context("devices missing")?;
         let resources = self.resources.as_ref().context("resources missing")?;
         let texture_view = self.atlas.get_texture_view(texture_id);
-        self.pipelines.poly_sprites.draw_range_with_texture(
+        let pipeline = if smoothed {
+            &self.pipelines.smoothed_poly_sprites
+        } else {
+            &self.pipelines.poly_sprites
+        };
+        pipeline.draw_range_with_texture(
             &devices.device,
             &devices.device_context,
             &texture_view,
             slice::from_ref(&resources.viewport),
-            slice::from_ref(&self.globals.global_params_buffer),
+            &self.globals.constant_buffers(None),
             slice::from_ref(&self.globals.sampler),
             start as u32,
             len as u32,
@@ -995,10 +1037,9 @@ impl DirectXRenderer {
         let ctx = &devices.device_context;
         update_buffer(ctx, &self.pipelines.blur_params_buffer, &[params])?;
         let null_srv: [Option<ID3D11ShaderResourceView>; 1] = [None];
-        let blur_params = [Some(self.pipelines.blur_params_buffer.clone())];
         unsafe {
             // Unbind any SRV at slot 0 so the target texture isn't simultaneously bound as input.
-            ctx.PSSetShaderResources(0, Some(&null_srv));
+            ctx.PSSetShaderResources(3, Some(&null_srv));
             if clear {
                 ctx.ClearRenderTargetView(
                     target_rtv.as_ref().context("blur target view missing")?,
@@ -1010,18 +1051,19 @@ impl DirectXRenderer {
             ctx.IASetPrimitiveTopology(topology);
             ctx.VSSetShader(vertex, None);
             ctx.PSSetShader(fragment, None);
-            ctx.VSSetConstantBuffers(0, Some(slice::from_ref(&self.globals.global_params_buffer)));
-            ctx.PSSetConstantBuffers(0, Some(slice::from_ref(&self.globals.global_params_buffer)));
-            ctx.VSSetConstantBuffers(1, Some(&blur_params));
-            ctx.PSSetConstantBuffers(1, Some(&blur_params));
+            let constant_buffers =
+                self.globals
+                    .constant_buffers(Some(&self.pipelines.blur_params_buffer));
+            ctx.VSSetConstantBuffers(0, Some(&constant_buffers));
+            ctx.PSSetConstantBuffers(0, Some(&constant_buffers));
             // Blur passes sample with a clamp sampler: gaussian taps that leave the texture at
             // the window edge must not wrap around to the opposite side.
-            ctx.PSSetSamplers(0, Some(slice::from_ref(&self.globals.blur_sampler)));
-            ctx.PSSetShaderResources(0, Some(slice::from_ref(source_srv)));
+            ctx.PSSetSamplers(4, Some(slice::from_ref(&self.globals.blur_sampler)));
+            ctx.PSSetShaderResources(3, Some(slice::from_ref(source_srv)));
             ctx.OMSetBlendState(blend, None, 0xFFFFFFFF);
             ctx.DrawInstanced(vertex_count, 1, 0, 0);
             // Unbind the source so the target can be rebound as a render target next.
-            ctx.PSSetShaderResources(0, Some(&null_srv));
+            ctx.PSSetShaderResources(3, Some(&null_srv));
         }
         Ok(())
     }
@@ -1145,6 +1187,7 @@ impl DirectXRenderer {
                 bounds: composite_bounds,
                 content_mask: content_mask.bounds,
                 content_mask_radii: corner_radii_array(content_mask.corner_radii),
+                content_mask_fade_out: edges_array(content_mask.fade_out),
                 corner_radii,
                 opacity,
                 clip_rounded: if clip_rounded { 1.0 } else { 0.0 },
@@ -1303,10 +1346,24 @@ impl DirectXRenderPipelines {
             4,
             create_blend_state(device)?,
         )?;
+        let smoothed_shadow_pipeline = PipelineState::new(
+            device,
+            "smoothed_shadow_pipeline",
+            ShaderModule::SmoothedShadow,
+            4,
+            create_blend_state(device)?,
+        )?;
         let quad_pipeline = PipelineState::new(
             device,
             "quad_pipeline",
             ShaderModule::Quad,
+            64,
+            create_blend_state(device)?,
+        )?;
+        let smoothed_quad_pipeline = PipelineState::new(
+            device,
+            "smoothed_quad_pipeline",
+            ShaderModule::SmoothedQuad,
             64,
             create_blend_state(device)?,
         )?;
@@ -1352,6 +1409,13 @@ impl DirectXRenderPipelines {
             16,
             create_blend_state(device)?,
         )?;
+        let smoothed_poly_sprites = PipelineState::new(
+            device,
+            "smoothed_polychrome_sprite_pipeline",
+            ShaderModule::SmoothedPolychromeSprite,
+            16,
+            create_blend_state(device)?,
+        )?;
 
         let blur_downsample_vertex = create_vertex_shader(
             device,
@@ -1385,13 +1449,16 @@ impl DirectXRenderPipelines {
 
         Ok(Self {
             shadow_pipeline,
+            smoothed_shadow_pipeline,
             quad_pipeline,
+            smoothed_quad_pipeline,
             path_rasterization_pipeline,
             path_sprite_pipeline,
             underline_pipeline,
             mono_sprites,
             subpixel_sprites,
             poly_sprites,
+            smoothed_poly_sprites,
             blur_downsample_vertex,
             blur_downsample_fragment,
             blur_vertex,
@@ -1429,26 +1496,31 @@ impl DirectComposition {
 }
 
 impl DirectXGlobalElements {
+    fn constant_buffers(&self, blur: Option<&ID3D11Buffer>) -> [Option<ID3D11Buffer>; 4] {
+        [
+            self.global_params_buffer.clone(),
+            self.font_params_buffer.clone(),
+            blur.cloned(),
+            self.draw_constants_buffer.clone(),
+        ]
+    }
+
     pub fn new(device: &ID3D11Device) -> Result<Self> {
-        let global_params_buffer = unsafe {
-            let desc = D3D11_BUFFER_DESC {
-                ByteWidth: std::mem::size_of::<GlobalParams>() as u32,
-                Usage: D3D11_USAGE_DYNAMIC,
-                BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
-                CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
-                ..Default::default()
-            };
-            let mut buffer = None;
-            device.CreateBuffer(&desc, None, Some(&mut buffer))?;
-            buffer
-        };
+        let global_params_buffer =
+            Some(create_constant_buffer(device, std::mem::size_of::<GlobalUniforms>())?);
+
+        let font_params_buffer = create_constant_buffer(device, std::mem::size_of::<FontRasterizationUniforms>())?;
+        let draw_constants_buffer = create_constant_buffer(device, std::mem::size_of::<Dx11DrawConstants>())?;
 
         let sampler = unsafe {
+            // Clamp rather than wrap: atlas tiles are packed edge to edge, so a wrap at the
+            // atlas border replays content from the opposite side. Per-tile texel clamping in
+            // the shader keeps samples inside their own tile; this only guards the outer edge.
             let desc = D3D11_SAMPLER_DESC {
                 Filter: D3D11_FILTER_MIN_MAG_MIP_LINEAR,
-                AddressU: D3D11_TEXTURE_ADDRESS_WRAP,
-                AddressV: D3D11_TEXTURE_ADDRESS_WRAP,
-                AddressW: D3D11_TEXTURE_ADDRESS_WRAP,
+                AddressU: D3D11_TEXTURE_ADDRESS_CLAMP,
+                AddressV: D3D11_TEXTURE_ADDRESS_CLAMP,
+                AddressW: D3D11_TEXTURE_ADDRESS_CLAMP,
                 MipLODBias: 0.0,
                 MaxAnisotropy: 1,
                 ComparisonFunc: D3D11_COMPARISON_ALWAYS,
@@ -1465,6 +1537,8 @@ impl DirectXGlobalElements {
 
         Ok(Self {
             global_params_buffer,
+            font_params_buffer: Some(font_params_buffer),
+            draw_constants_buffer: Some(draw_constants_buffer),
             sampler,
             blur_sampler,
         })
@@ -1493,19 +1567,26 @@ fn create_blur_sampler(device: &ID3D11Device) -> Result<Option<ID3D11SamplerStat
     }
 }
 
-#[derive(Debug, Default)]
 #[repr(C)]
-struct GlobalParams {
-    gamma_ratios: [f32; 4],
+#[derive(Clone, Copy, Debug, Default)]
+struct GlobalUniforms {
     viewport_size: [f32; 2],
-    grayscale_enhanced_contrast: f32,
-    subpixel_enhanced_contrast: f32,
-    is_bgr: u32,
-    _pad: [u32; 3],
+    premultiplied_alpha: u32,
+    padding: u32,
 }
 
-/// Mirrors the `BlurParams` cbuffer (register b1) in `shaders.hlsl`. 80 bytes (a multiple of 16,
-/// as constant buffers require). Updated per blur pass via `update_buffer`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+struct FontRasterizationUniforms {
+    gamma_ratios: [f32; 4],
+    grayscale_enhanced_contrast: f32,
+    subpixel_enhanced_contrast: f32,
+    uses_blue_green_red_subpixel_order: u32,
+    padding: u32,
+}
+
+/// Mirrors `BlurUniforms` from `hgpui_render`; bound as the b2 constant buffer and updated per
+/// blur pass via `update_buffer`.
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct BlurParams {
@@ -1517,11 +1598,16 @@ struct BlurParams {
     /// painted under may itself be rounded (`overflow_hidden` + a corner radius), and a filter's
     /// output is clipped by it like any other painting — corners included.
     content_mask_radii: [f32; 4],
+    /// The content mask's edge fade distances (top, right, bottom, left), in device pixels.
+    content_mask_fade_out: [f32; 4],
     corner_radii: [f32; 4],
     direction: [f32; 2],
     sigma: f32,
     opacity: f32,
     tap_count: f32,
+    /// Spacing between taps in pixels (gaussian passes only); >1 lets `tap_count` taps span very
+    /// large radii without truncating the gaussian, matching the wgpu backend.
+    tap_step: f32,
     /// 1.0 clips the composite to the rounded rect (backdrop); 0.0 lets content blur spread past
     /// its bounds (the blur itself no longer fades at the edge — see `mirror_into_rect`).
     clip_rounded: f32,
@@ -1529,9 +1615,6 @@ struct BlurParams {
     /// origin, so a stationary element blurs identically at every window size); 0.0 = 1:1 copy
     /// (the scene blit, which must not downsample). Downsample pass only.
     downsample: f32,
-    /// Spacing between taps in pixels (gaussian passes only); >1 lets `tap_count` taps span very
-    /// large radii without truncating the gaussian, matching the wgpu backend.
-    tap_step: f32,
 }
 
 impl Default for BlurParams {
@@ -1540,14 +1623,15 @@ impl Default for BlurParams {
             bounds: Bounds::default(),
             content_mask: Bounds::default(),
             content_mask_radii: [0.0; 4],
+            content_mask_fade_out: [0.0; 4],
             corner_radii: [0.0; 4],
             direction: [0.0, 0.0],
             sigma: 0.0,
             opacity: 1.0,
             tap_count: 0.0,
+            tap_step: 0.0,
             clip_rounded: 0.0,
             downsample: 0.0,
-            tap_step: 0.0,
         }
     }
 }
@@ -1662,9 +1746,9 @@ impl<T> PipelineState<T> {
             &self.blend_state,
         );
         unsafe {
-            device_context.PSSetSamplers(0, Some(sampler));
-            device_context.VSSetShaderResources(0, Some(texture));
-            device_context.PSSetShaderResources(0, Some(texture));
+            device_context.PSSetSamplers(4, Some(sampler));
+            device_context.VSSetShaderResources(3, Some(texture));
+            device_context.PSSetShaderResources(3, Some(texture));
 
             device_context.DrawInstanced(4, instance_count, 0, 0);
         }
@@ -1681,7 +1765,13 @@ impl<T> PipelineState<T> {
         first_instance: u32,
         instance_count: u32,
     ) -> Result<()> {
-        let view = create_buffer_view_range(device, &self.buffer, first_instance, instance_count)?;
+        let stride = std::mem::size_of::<T>() as u32;
+        let view = create_buffer_view_range(
+            device,
+            &self.buffer,
+            first_instance * stride,
+            instance_count * stride,
+        )?;
         set_pipeline_state(
             device_context,
             slice::from_ref(&view),
@@ -1709,7 +1799,13 @@ impl<T> PipelineState<T> {
         first_instance: u32,
         instance_count: u32,
     ) -> Result<()> {
-        let view = create_buffer_view_range(device, &self.buffer, first_instance, instance_count)?;
+        let stride = std::mem::size_of::<T>() as u32;
+        let view = create_buffer_view_range(
+            device,
+            &self.buffer,
+            first_instance * stride,
+            instance_count * stride,
+        )?;
         set_pipeline_state(
             device_context,
             slice::from_ref(&view),
@@ -1721,9 +1817,9 @@ impl<T> PipelineState<T> {
             &self.blend_state,
         );
         unsafe {
-            device_context.PSSetSamplers(0, Some(sampler));
-            device_context.VSSetShaderResources(0, Some(texture));
-            device_context.PSSetShaderResources(0, Some(texture));
+            device_context.PSSetSamplers(4, Some(sampler));
+            device_context.VSSetShaderResources(3, Some(texture));
+            device_context.PSSetShaderResources(3, Some(texture));
             device_context.DrawInstanced(4, instance_count, 0, 0);
         }
         Ok(())
@@ -1734,7 +1830,7 @@ impl<T> PipelineState<T> {
 #[repr(C)]
 struct PathRasterizationSprite {
     xy_position: Point<ScaledPixels>,
-    st_position: Point<f32>,
+    curve_position: Point<f32>,
     color: Background,
     /// The path's own bounds: the gradient box. (Used to be `clipped_bounds`, which made the
     /// gradient shift/scale whenever an ancestor clip cut the path.)
@@ -1744,6 +1840,7 @@ struct PathRasterizationSprite {
     /// vector paths too.
     content_mask: Bounds<ScaledPixels>,
     content_mask_corner_radii: Corners<ScaledPixels>,
+    content_mask_fade_out: Edges<ScaledPixels>,
 }
 
 #[derive(Clone, Copy)]
@@ -1865,6 +1962,10 @@ fn corner_radii_array(corners: Corners<ScaledPixels>) -> [f32; 4] {
         corners.bottom_right.0,
         corners.bottom_left.0,
     ]
+}
+
+fn edges_array(edges: Edges<ScaledPixels>) -> [f32; 4] {
+    [edges.top.0, edges.right.0, edges.bottom.0, edges.left.0]
 }
 
 fn create_render_target_and_its_view(
@@ -2155,8 +2256,8 @@ fn create_buffer(
         Usage: D3D11_USAGE_DYNAMIC,
         BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
         CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
-        MiscFlags: D3D11_RESOURCE_MISC_BUFFER_STRUCTURED.0 as u32,
-        StructureByteStride: element_size as u32,
+        MiscFlags: D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS.0 as u32,
+        StructureByteStride: 0,
     };
     let mut buffer = None;
     unsafe { device.CreateBuffer(&desc, None, Some(&mut buffer)) }?;
@@ -2168,8 +2269,21 @@ fn create_buffer_view(
     device: &ID3D11Device,
     buffer: &ID3D11Buffer,
 ) -> Result<Option<ID3D11ShaderResourceView>> {
+    let mut buffer_desc = D3D11_BUFFER_DESC::default();
+    unsafe { buffer.GetDesc(&mut buffer_desc) };
+    let desc = D3D11_SHADER_RESOURCE_VIEW_DESC {
+        Format: DXGI_FORMAT_R32_TYPELESS,
+        ViewDimension: D3D11_SRV_DIMENSION_BUFFEREX,
+        Anonymous: D3D11_SHADER_RESOURCE_VIEW_DESC_0 {
+            BufferEx: D3D11_BUFFEREX_SRV {
+                FirstElement: 0,
+                NumElements: buffer_desc.ByteWidth / 4,
+                Flags: D3D11_BUFFEREX_SRV_FLAG_RAW.0 as u32,
+            },
+        },
+    };
     let mut view = None;
-    unsafe { device.CreateShaderResourceView(buffer, None, Some(&mut view)) }?;
+    unsafe { device.CreateShaderResourceView(buffer, Some(&desc), Some(&mut view)) }?;
     Ok(view)
 }
 
@@ -2177,20 +2291,19 @@ fn create_buffer_view(
 fn create_buffer_view_range(
     device: &ID3D11Device,
     buffer: &ID3D11Buffer,
-    first_element: u32,
-    num_elements: u32,
+    first_byte: u32,
+    byte_len: u32,
 ) -> Result<Option<ID3D11ShaderResourceView>> {
+    assert_eq!(first_byte % 4, 0, "raw view offsets must be word aligned");
+    assert_eq!(byte_len % 4, 0, "raw view sizes must be word aligned");
     let desc = D3D11_SHADER_RESOURCE_VIEW_DESC {
-        Format: DXGI_FORMAT_UNKNOWN,
-        ViewDimension: D3D11_SRV_DIMENSION_BUFFER,
+        Format: DXGI_FORMAT_R32_TYPELESS,
+        ViewDimension: D3D11_SRV_DIMENSION_BUFFEREX,
         Anonymous: D3D11_SHADER_RESOURCE_VIEW_DESC_0 {
-            Buffer: D3D11_BUFFER_SRV {
-                Anonymous1: D3D11_BUFFER_SRV_0 {
-                    FirstElement: first_element,
-                },
-                Anonymous2: D3D11_BUFFER_SRV_1 {
-                    NumElements: num_elements,
-                },
+            BufferEx: D3D11_BUFFEREX_SRV {
+                FirstElement: first_byte / 4,
+                NumElements: byte_len / 4,
+                Flags: D3D11_BUFFEREX_SRV_FLAG_RAW.0 as u32,
             },
         },
     };
@@ -2226,8 +2339,8 @@ fn set_pipeline_state(
     blend_state: &ID3D11BlendState,
 ) {
     unsafe {
-        device_context.VSSetShaderResources(1, Some(buffer_view));
-        device_context.PSSetShaderResources(1, Some(buffer_view));
+        device_context.VSSetShaderResources(2, Some(buffer_view));
+        device_context.PSSetShaderResources(2, Some(buffer_view));
         device_context.IASetPrimitiveTopology(topology);
         device_context.RSSetViewports(Some(viewport));
         device_context.VSSetShader(vertex_shader, None);
@@ -2250,31 +2363,68 @@ fn report_live_objects(device: &ID3D11Device) -> Result<()> {
 const BUFFER_COUNT: usize = 3;
 
 pub(crate) mod shader_resources {
-    use anyhow::Result;
+    //! Bytecode generated from the shared Rust shader sources at build time.
 
-    #[cfg(debug_assertions)]
-    use windows::{
-        Win32::Graphics::Direct3D::{
-            Fxc::{D3DCOMPILE_DEBUG, D3DCOMPILE_SKIP_OPTIMIZATION, D3DCompileFromFile},
-            ID3DBlob,
-        },
-        core::{HSTRING, PCSTR},
-    };
+    use anyhow::Result;
+    use hgpui_render::artifacts::{Dx11Bytecode, Dx11Shader, NATIVE_SHADERS, NativeShader};
 
     #[derive(Copy, Clone, Debug, Eq, PartialEq)]
     pub(crate) enum ShaderModule {
         Quad,
+        SmoothedQuad,
         Shadow,
+        SmoothedShadow,
         Underline,
         PathRasterization,
         PathSprite,
         MonochromeSprite,
         SubpixelSprite,
         PolychromeSprite,
+        SmoothedPolychromeSprite,
         EmojiRasterization,
         BlurDownsample,
         Blur,
         BlurComposite,
+    }
+
+    impl ShaderModule {
+        pub(crate) fn label(self) -> &'static str {
+            match self {
+                ShaderModule::Quad => "quad",
+                ShaderModule::SmoothedQuad => "smoothed_quad",
+                ShaderModule::Shadow => "shadow",
+                ShaderModule::SmoothedShadow => "smoothed_shadow",
+                ShaderModule::Underline => "underline",
+                ShaderModule::PathRasterization => "path_rasterization",
+                ShaderModule::PathSprite => "path_sprite",
+                ShaderModule::MonochromeSprite => "monochrome_sprite",
+                ShaderModule::SubpixelSprite => "subpixel_sprite",
+                ShaderModule::PolychromeSprite => "polychrome_sprite",
+                ShaderModule::SmoothedPolychromeSprite => "smoothed_polychrome_sprite",
+                ShaderModule::EmojiRasterization => "emoji_rasterization",
+                ShaderModule::BlurDownsample => "blur_downsample",
+                ShaderModule::Blur => "blur",
+                ShaderModule::BlurComposite => "blur_composite",
+            }
+        }
+
+        pub(crate) fn native(self) -> &'static NativeShader {
+            NATIVE_SHADERS
+                .iter()
+                .find(|shader| shader.label == self.label())
+                .unwrap_or_else(|| panic!("missing generated native shader {}", self.label()))
+        }
+
+        pub(crate) fn bytecode(self) -> Result<Dx11Bytecode> {
+            let shader = self.native();
+            match shader.dx11 {
+                Dx11Shader::Sm50(bytecode) => Ok(bytecode),
+                Dx11Shader::NativeWindowsBuildRequired => anyhow::bail!(
+                    "{} has no DX11 bytecode: build the Windows target on a Windows host",
+                    shader.label
+                ),
+            }
+        }
     }
 
     #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -2283,178 +2433,23 @@ pub(crate) mod shader_resources {
         Fragment,
     }
 
-    pub(crate) struct RawShaderBytes<'t> {
-        inner: &'t [u8],
-
-        #[cfg(debug_assertions)]
-        _blob: ID3DBlob,
+    pub(crate) struct RawShaderBytes {
+        inner: &'static [u8],
     }
 
-    impl<'t> RawShaderBytes<'t> {
+    impl RawShaderBytes {
         pub(crate) fn new(module: ShaderModule, target: ShaderTarget) -> Result<Self> {
-            #[cfg(not(debug_assertions))]
-            {
-                Ok(Self::from_bytes(module, target))
-            }
-            #[cfg(debug_assertions)]
-            {
-                let blob = build_shader_blob(module, target)?;
-                let inner = unsafe {
-                    std::slice::from_raw_parts(
-                        blob.GetBufferPointer() as *const u8,
-                        blob.GetBufferSize(),
-                    )
-                };
-                Ok(Self { inner, _blob: blob })
-            }
+            let bytecode = module.bytecode()?;
+            Ok(Self {
+                inner: match target {
+                    ShaderTarget::Vertex => bytecode.vertex,
+                    ShaderTarget::Fragment => bytecode.fragment,
+                },
+            })
         }
 
-        pub(crate) fn as_bytes(&'t self) -> &'t [u8] {
+        pub(crate) fn as_bytes(&self) -> &'static [u8] {
             self.inner
-        }
-
-        #[cfg(not(debug_assertions))]
-        fn from_bytes(module: ShaderModule, target: ShaderTarget) -> Self {
-            let bytes = match module {
-                ShaderModule::Quad => match target {
-                    ShaderTarget::Vertex => QUAD_VERTEX_BYTES,
-                    ShaderTarget::Fragment => QUAD_FRAGMENT_BYTES,
-                },
-                ShaderModule::Shadow => match target {
-                    ShaderTarget::Vertex => SHADOW_VERTEX_BYTES,
-                    ShaderTarget::Fragment => SHADOW_FRAGMENT_BYTES,
-                },
-                ShaderModule::Underline => match target {
-                    ShaderTarget::Vertex => UNDERLINE_VERTEX_BYTES,
-                    ShaderTarget::Fragment => UNDERLINE_FRAGMENT_BYTES,
-                },
-                ShaderModule::PathRasterization => match target {
-                    ShaderTarget::Vertex => PATH_RASTERIZATION_VERTEX_BYTES,
-                    ShaderTarget::Fragment => PATH_RASTERIZATION_FRAGMENT_BYTES,
-                },
-                ShaderModule::PathSprite => match target {
-                    ShaderTarget::Vertex => PATH_SPRITE_VERTEX_BYTES,
-                    ShaderTarget::Fragment => PATH_SPRITE_FRAGMENT_BYTES,
-                },
-                ShaderModule::MonochromeSprite => match target {
-                    ShaderTarget::Vertex => MONOCHROME_SPRITE_VERTEX_BYTES,
-                    ShaderTarget::Fragment => MONOCHROME_SPRITE_FRAGMENT_BYTES,
-                },
-                ShaderModule::SubpixelSprite => match target {
-                    ShaderTarget::Vertex => SUBPIXEL_SPRITE_VERTEX_BYTES,
-                    ShaderTarget::Fragment => SUBPIXEL_SPRITE_FRAGMENT_BYTES,
-                },
-                ShaderModule::PolychromeSprite => match target {
-                    ShaderTarget::Vertex => POLYCHROME_SPRITE_VERTEX_BYTES,
-                    ShaderTarget::Fragment => POLYCHROME_SPRITE_FRAGMENT_BYTES,
-                },
-                ShaderModule::EmojiRasterization => match target {
-                    ShaderTarget::Vertex => EMOJI_RASTERIZATION_VERTEX_BYTES,
-                    ShaderTarget::Fragment => EMOJI_RASTERIZATION_FRAGMENT_BYTES,
-                },
-                ShaderModule::BlurDownsample => match target {
-                    ShaderTarget::Vertex => BLUR_DOWNSAMPLE_VERTEX_BYTES,
-                    ShaderTarget::Fragment => BLUR_DOWNSAMPLE_FRAGMENT_BYTES,
-                },
-                ShaderModule::Blur => match target {
-                    ShaderTarget::Vertex => BLUR_VERTEX_BYTES,
-                    ShaderTarget::Fragment => BLUR_FRAGMENT_BYTES,
-                },
-                ShaderModule::BlurComposite => match target {
-                    ShaderTarget::Vertex => BLUR_COMPOSITE_VERTEX_BYTES,
-                    ShaderTarget::Fragment => BLUR_COMPOSITE_FRAGMENT_BYTES,
-                },
-            };
-            Self { inner: bytes }
-        }
-    }
-
-    #[cfg(debug_assertions)]
-    pub(super) fn build_shader_blob(entry: ShaderModule, target: ShaderTarget) -> Result<ID3DBlob> {
-        unsafe {
-            use windows::Win32::Graphics::{
-                Direct3D::ID3DInclude, Hlsl::D3D_COMPILE_STANDARD_FILE_INCLUDE,
-            };
-
-            let shader_name = if matches!(entry, ShaderModule::EmojiRasterization) {
-                "color_text_raster.hlsl"
-            } else {
-                "shaders.hlsl"
-            };
-
-            let entry = format!(
-                "{}_{}\0",
-                entry.as_str(),
-                match target {
-                    ShaderTarget::Vertex => "vertex",
-                    ShaderTarget::Fragment => "fragment",
-                }
-            );
-            let target = match target {
-                ShaderTarget::Vertex => "vs_4_1\0",
-                ShaderTarget::Fragment => "ps_4_1\0",
-            };
-
-            let mut compile_blob = None;
-            let mut error_blob = None;
-            let shader_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join(&format!("src/{}", shader_name))
-                .canonicalize()?;
-
-            let entry_point = PCSTR::from_raw(entry.as_ptr());
-            let target_cstr = PCSTR::from_raw(target.as_ptr());
-
-            // really dirty trick because winapi bindings are unhappy otherwise
-            let include_handler = &std::mem::transmute::<usize, ID3DInclude>(
-                D3D_COMPILE_STANDARD_FILE_INCLUDE as usize,
-            );
-
-            let ret = D3DCompileFromFile(
-                &HSTRING::from(shader_path.to_str().unwrap()),
-                None,
-                include_handler,
-                entry_point,
-                target_cstr,
-                D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION,
-                0,
-                &mut compile_blob,
-                Some(&mut error_blob),
-            );
-            if ret.is_err() {
-                let Some(error_blob) = error_blob else {
-                    return Err(anyhow::anyhow!("{ret:?}"));
-                };
-
-                let error_string =
-                    std::ffi::CStr::from_ptr(error_blob.GetBufferPointer() as *const i8)
-                        .to_string_lossy();
-                log::error!("Shader compile error: {}", error_string);
-                return Err(anyhow::anyhow!("Compile error: {}", error_string));
-            }
-            Ok(compile_blob.unwrap())
-        }
-    }
-
-    #[cfg(not(debug_assertions))]
-    include!(concat!(env!("OUT_DIR"), "/shaders_bytes.rs"));
-
-    #[cfg(debug_assertions)]
-    impl ShaderModule {
-        pub fn as_str(self) -> &'static str {
-            match self {
-                ShaderModule::Quad => "quad",
-                ShaderModule::Shadow => "shadow",
-                ShaderModule::Underline => "underline",
-                ShaderModule::PathRasterization => "path_rasterization",
-                ShaderModule::PathSprite => "path_sprite",
-                ShaderModule::MonochromeSprite => "monochrome_sprite",
-                ShaderModule::SubpixelSprite => "subpixel_sprite",
-                ShaderModule::PolychromeSprite => "polychrome_sprite",
-                ShaderModule::EmojiRasterization => "emoji_rasterization",
-                ShaderModule::BlurDownsample => "blur_downsample",
-                ShaderModule::Blur => "blur",
-                ShaderModule::BlurComposite => "blur_composite",
-            }
         }
     }
 }
@@ -2653,8 +2648,9 @@ mod tests {
         create_blend_state, create_blend_state_for_path_rasterization,
         create_blend_state_for_path_sprite, create_blend_state_no_blend,
         corner_radii_array, create_blur_sampler, create_color_target, create_constant_buffer,
-        create_fragment_shader, create_vertex_shader, update_buffer, BlurParams, GlobalParams,
-        PathRasterizationSprite, PipelineState,
+        create_fragment_shader, create_vertex_shader, update_buffer, BlurParams,
+        FontRasterizationUniforms, GlobalUniforms, PathRasterizationSprite,
+        PipelineState,
         RawShaderBytes, ShaderTarget, RENDER_TARGET_FORMAT,
     };
     use crate::directx_renderer::shader_resources::ShaderModule;
@@ -2675,16 +2671,15 @@ mod tests {
                 D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST, D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP,
             },
             Direct3D11::{
-                D3D11CreateDevice, D3D11_BIND_CONSTANT_BUFFER, D3D11_BIND_RENDER_TARGET,
-                D3D11_BIND_SHADER_RESOURCE, D3D11_CPU_ACCESS_READ, D3D11_CPU_ACCESS_WRITE,
+                D3D11CreateDevice, D3D11_BIND_RENDER_TARGET,
+                D3D11_BIND_SHADER_RESOURCE, D3D11_CPU_ACCESS_READ,
                 D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_CREATE_DEVICE_DEBUG, D3D11_MAP_READ,
                 D3D11_MAPPED_SUBRESOURCE, D3D11_MESSAGE, D3D11_SDK_VERSION,
                 D3D11_SUBRESOURCE_DATA, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
-                D3D11_USAGE_DYNAMIC, D3D11_USAGE_STAGING, D3D11_VIEWPORT, ID3D11BlendState,
+                D3D11_USAGE_STAGING, D3D11_VIEWPORT, ID3D11BlendState,
                 ID3D11Buffer, ID3D11Device, ID3D11DeviceContext, ID3D11InfoQueue,
                 ID3D11PixelShader, ID3D11RenderTargetView, ID3D11SamplerState,
                 ID3D11ShaderResourceView, ID3D11Texture2D, ID3D11VertexShader,
-                D3D11_BUFFER_DESC,
             },
             Dxgi::Common::{DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC},
         },
@@ -2845,30 +2840,7 @@ mod tests {
         };
         let (texture, rtv, staging) = make_render_target(&device)?;
 
-        let globals = GlobalParams {
-            gamma_ratios: [1.0, 1.0, 1.0, 1.0],
-            viewport_size: [TEST_SIZE as f32, TEST_SIZE as f32],
-            grayscale_enhanced_contrast: 0.0,
-            subpixel_enhanced_contrast: 0.0,
-            is_bgr: 0,
-            _pad: [0; 3],
-        };
-        // Must be a real constant buffer: `create_buffer` makes a structured SRV (bound as
-        // cbuffer → debug-layer error, device removal on WARP). Mirror the main renderer's
-        // `DirectXGlobalElements::new`.
-        let globals_buffer = unsafe {
-            let desc = D3D11_BUFFER_DESC {
-                ByteWidth: std::mem::size_of::<GlobalParams>() as u32,
-                Usage: D3D11_USAGE_DYNAMIC,
-                BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
-                CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
-                ..Default::default()
-            };
-            let mut buffer = None;
-            device.CreateBuffer(&desc, None, Some(&mut buffer))?;
-            buffer.unwrap()
-        };
-        update_buffer(&context, &globals_buffer, &[globals])?;
+        let globals = install_globals(&device, &context)?;
 
         let blend = create_blend_state(&device)?;
         let mut pipeline = PipelineState::<Quad>::new(&device, "test_quad", ShaderModule::Quad, 4, blend)?;
@@ -2885,6 +2857,8 @@ mod tests {
                     size(ScaledPixels(64.0), ScaledPixels(64.0)),
                 ),
                 corner_radii: Corners::default(),
+
+                fade_out: Default::default(),
             },
             background: Background::from(rgba(0xff0000ff)),
             ..Default::default()
@@ -2907,7 +2881,7 @@ mod tests {
             context.ClearRenderTargetView(&rtv, &bg);
             context.OMSetRenderTargets(Some(slice::from_ref(&Some(rtv))), None);
         }
-        pipeline.draw_range(&device, &context, &[viewport], &[Some(globals_buffer)], 4, 0, 1)?;
+        pipeline.draw_range(&device, &context, &[viewport], &globals, 4, 0, 1)?;
         // If the draw killed the device (the "no rectangles" symptom), the debug layer
         // tells us exactly why — dump before touching the render target again.
         dump_device_errors(&device);
@@ -2942,27 +2916,7 @@ mod tests {
         };
         let (texture, rtv, staging) = make_render_target(&device)?;
 
-        let globals = GlobalParams {
-            gamma_ratios: [1.0, 1.0, 1.0, 1.0],
-            viewport_size: [TEST_SIZE as f32, TEST_SIZE as f32],
-            grayscale_enhanced_contrast: 0.0,
-            subpixel_enhanced_contrast: 0.0,
-            is_bgr: 0,
-            _pad: [0; 3],
-        };
-        let globals_buffer = unsafe {
-            let desc = D3D11_BUFFER_DESC {
-                ByteWidth: std::mem::size_of::<GlobalParams>() as u32,
-                Usage: D3D11_USAGE_DYNAMIC,
-                BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
-                CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
-                ..Default::default()
-            };
-            let mut buffer = None;
-            device.CreateBuffer(&desc, None, Some(&mut buffer))?;
-            buffer.unwrap()
-        };
-        update_buffer(&context, &globals_buffer, &[globals])?;
+        let globals = install_globals(&device, &context)?;
 
         let blend = create_blend_state(&device)?;
         let mut pipeline =
@@ -2985,6 +2939,8 @@ mod tests {
                 size(ScaledPixels(64.0), ScaledPixels(64.0)),
             ),
             corner_radii: Corners::default(),
+
+            fade_out: Default::default(),
         };
 
         let viewport = D3D11_VIEWPORT {
@@ -3009,7 +2965,7 @@ mod tests {
                 &device,
                 &context,
                 &[viewport],
-                &[Some(globals_buffer.clone())],
+                &globals,
                 4,
                 0,
                 1,
@@ -3063,6 +3019,8 @@ mod tests {
             content_mask: ContentMask {
                 bounds: quad_bounds,
                 corner_radii: rounded_corners,
+
+                fade_out: Default::default(),
             },
             background: Background::from(rgba(0xff0000ff)),
             corner_radii: rounded_corners,
@@ -3092,6 +3050,8 @@ mod tests {
             content_mask: ContentMask {
                 bounds: quad_bounds,
                 corner_radii: rounded_corners,
+
+                fade_out: Default::default(),
             },
             background: Background::from(rgba(0xff0000ff)),
             corner_radii: rounded_corners,
@@ -3123,6 +3083,8 @@ mod tests {
                     size(ScaledPixels(64.0), ScaledPixels(64.0)),
                 ),
                 corner_radii: Corners::default(),
+
+                fade_out: Default::default(),
             },
             background: Background::from(transparent_black()),
             border_color: red().into(),
@@ -3168,27 +3130,7 @@ mod tests {
             return Ok(());
         };
         let (texture, rtv, staging) = make_render_target(&device)?;
-        let globals = GlobalParams {
-            gamma_ratios: [1.0, 1.0, 1.0, 1.0],
-            viewport_size: [TEST_SIZE as f32, TEST_SIZE as f32],
-            grayscale_enhanced_contrast: 0.0,
-            subpixel_enhanced_contrast: 0.0,
-            is_bgr: 0,
-            _pad: [0; 3],
-        };
-        let globals_buffer = unsafe {
-            let desc = D3D11_BUFFER_DESC {
-                ByteWidth: std::mem::size_of::<GlobalParams>() as u32,
-                Usage: D3D11_USAGE_DYNAMIC,
-                BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
-                CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
-                ..Default::default()
-            };
-            let mut buffer = None;
-            device.CreateBuffer(&desc, None, Some(&mut buffer))?;
-            buffer.unwrap()
-        };
-        update_buffer(&context, &globals_buffer, &[globals])?;
+        let globals = install_globals(&device, &context)?;
         let blend = create_blend_state(&device)?;
         let mut pipeline =
             PipelineState::<Quad>::new(&device, "test_checker_aa", ShaderModule::Quad, 4, blend)?;
@@ -3205,6 +3147,8 @@ mod tests {
                     size(ScaledPixels(64.0), ScaledPixels(64.0)),
                 ),
                 corner_radii: Corners::default(),
+
+                fade_out: Default::default(),
             },
             background: hgpui::checkerboard(rgba(0xff0000ff), 8.0),
             ..Default::default()
@@ -3227,7 +3171,7 @@ mod tests {
             &device,
             &context,
             &[viewport],
-            &[Some(globals_buffer)],
+            &globals,
             4,
             0,
             1,
@@ -3241,8 +3185,8 @@ mod tests {
             })
             .count();
         assert!(
-            blended >= 2,
-            "checkerboard cell boundaries must be antialiased (found {blended} blended pixels)"
+            blended == 0,
+            "upstream checkerboard has hard cell boundaries (found {blended} blended pixels)"
         );
         Ok(())
     }
@@ -3300,7 +3244,7 @@ mod tests {
         target: &ID3D11RenderTargetView,
         source: &ID3D11ShaderResourceView,
         sampler: &ID3D11SamplerState,
-        globals: &ID3D11Buffer,
+        globals: &[Option<ID3D11Buffer>; 4],
         params_buffer: &ID3D11Buffer,
         params: BlurParams,
         viewport: &D3D11_VIEWPORT,
@@ -3311,28 +3255,31 @@ mod tests {
         update_buffer(context, params_buffer, &[params])?;
         let srv = Some(source.clone());
         let rtv = Some(target.clone());
-        let globals = Some(globals.clone());
         let params_buffer = Some(params_buffer.clone());
         let sampler = Some(sampler.clone());
+        let constant_buffers = [
+            globals[0].clone(),
+            globals[1].clone(),
+            params_buffer,
+            globals[3].clone(),
+        ];
         unsafe {
-            // Unbind slot 0 before setting the target: a texture that is still bound as output
-            // (the target of the previous pass) cannot be bound as input at the same time.
+            // Unbind the source slot before setting the target: a texture that is still bound as
+            // output (the target of the previous pass) cannot be bound as input at the same time.
             let null_srv: [Option<ID3D11ShaderResourceView>; 1] = [None];
-            context.PSSetShaderResources(0, Some(&null_srv));
+            context.PSSetShaderResources(3, Some(&null_srv));
             context.OMSetRenderTargets(Some(slice::from_ref(&rtv)), None);
             context.RSSetViewports(Some(slice::from_ref(viewport)));
             context.IASetPrimitiveTopology(topology);
             context.VSSetShader(vertex, None);
             context.PSSetShader(fragment, None);
-            context.VSSetConstantBuffers(0, Some(slice::from_ref(&globals)));
-            context.PSSetConstantBuffers(0, Some(slice::from_ref(&globals)));
-            context.VSSetConstantBuffers(1, Some(slice::from_ref(&params_buffer)));
-            context.PSSetConstantBuffers(1, Some(slice::from_ref(&params_buffer)));
-            context.PSSetSamplers(0, Some(slice::from_ref(&sampler)));
+            context.VSSetConstantBuffers(0, Some(&constant_buffers));
+            context.PSSetConstantBuffers(0, Some(&constant_buffers));
+            context.PSSetSamplers(4, Some(slice::from_ref(&sampler)));
             context.OMSetBlendState(blend, None, 0xFFFFFFFF);
-            context.PSSetShaderResources(0, Some(slice::from_ref(&srv)));
+            context.PSSetShaderResources(3, Some(slice::from_ref(&srv)));
             context.DrawInstanced(vertex_count, 1, 0, 0);
-            context.PSSetShaderResources(0, Some(&null_srv));
+            context.PSSetShaderResources(3, Some(&null_srv));
         }
         Ok(())
     }
@@ -3392,16 +3339,7 @@ mod tests {
         let _ = &ping_texture;
         let _ = &pong_texture;
 
-        let globals = GlobalParams {
-            gamma_ratios: [1.0, 1.0, 1.0, 1.0],
-            viewport_size: [TEST_SIZE as f32, TEST_SIZE as f32],
-            grayscale_enhanced_contrast: 0.0,
-            subpixel_enhanced_contrast: 0.0,
-            is_bgr: 0,
-            _pad: [0; 3],
-        };
-        let globals_buffer = create_constant_buffer(&device, std::mem::size_of::<GlobalParams>())?;
-        update_buffer(&context, &globals_buffer, &[globals])?;
+        let globals = test_globals(&device, &context)?;
         let params_buffer = create_constant_buffer(&device, std::mem::size_of::<BlurParams>())?;
         let sampler = create_blur_sampler(&device)?.expect("blur sampler");
         let replace = create_blend_state_no_blend(&device)?;
@@ -3476,7 +3414,7 @@ mod tests {
                 ping_rtv.as_ref().expect("ping rtv"),
                 srv,
                 &sampler,
-                &globals_buffer,
+                &globals,
                 &params_buffer,
                 BlurParams {
                     downsample: 1.0,
@@ -3503,7 +3441,7 @@ mod tests {
                     target.expect("blur target"),
                     source.expect("blur source"),
                     &sampler,
-                    &globals_buffer,
+                    &globals,
                     &params_buffer,
                     BlurParams {
                         direction,
@@ -3528,7 +3466,7 @@ mod tests {
                 &rtv,
                 ping_srv.as_ref().expect("ping srv"),
                 &sampler,
-                &globals_buffer,
+                &globals,
                 &params_buffer,
                 BlurParams {
                     bounds: composite_bounds,
@@ -3556,6 +3494,8 @@ mod tests {
                 ),
             ),
             corner_radii: Corners::default(),
+
+            fade_out: Default::default(),
         };
 
         // With the reflection the blur only ever sees the element's own (opaque) content, so no
@@ -3612,6 +3552,8 @@ mod tests {
                     bottom_right: ScaledPixels(RADIUS),
                     bottom_left: ScaledPixels(RADIUS),
                 },
+
+                fade_out: Default::default(),
             },
         )?;
         let corner = read_pixel(&context, &output, &staging, 17, 17)?;
@@ -3646,28 +3588,7 @@ mod tests {
         };
         let (texture, rtv, staging) = make_render_target(&device)?;
 
-        let globals = GlobalParams {
-            gamma_ratios: [1.0, 1.0, 1.0, 1.0],
-            viewport_size: [TEST_SIZE as f32, TEST_SIZE as f32],
-            grayscale_enhanced_contrast: 0.0,
-            subpixel_enhanced_contrast: 0.0,
-            is_bgr: 0,
-            _pad: [0; 3],
-        };
-        // Must be a real constant buffer, same reason as in `hlsl_quad_offscreen_readback`.
-        let globals_buffer = unsafe {
-            let desc = D3D11_BUFFER_DESC {
-                ByteWidth: std::mem::size_of::<GlobalParams>() as u32,
-                Usage: D3D11_USAGE_DYNAMIC,
-                BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
-                CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
-                ..Default::default()
-            };
-            let mut buffer = None;
-            device.CreateBuffer(&desc, None, Some(&mut buffer))?;
-            buffer.unwrap()
-        };
-        update_buffer(&context, &globals_buffer, &[globals])?;
+        let globals = install_globals(&device, &context)?;
 
         let blend = create_blend_state(&device)?;
         let mut pipeline =
@@ -3686,6 +3607,8 @@ mod tests {
                     size(ScaledPixels(64.0), ScaledPixels(64.0)),
                 ),
                 corner_radii: Corners::default(),
+
+                fade_out: Default::default(),
             },
             background: linear_gradient(
                 90.0,
@@ -3709,7 +3632,7 @@ mod tests {
             context.ClearRenderTargetView(&rtv, &bg);
             context.OMSetRenderTargets(Some(slice::from_ref(&Some(rtv))), None);
         }
-        pipeline.draw_range(&device, &context, &[viewport], &[Some(globals_buffer)], 4, 0, 1)?;
+        pipeline.draw_range(&device, &context, &[viewport], &globals, 4, 0, 1)?;
         dump_device_errors(&device);
 
         let quarter = read_pixel(&context, &texture, &staging, 20, 32)
@@ -3748,27 +3671,7 @@ mod tests {
         };
         let (texture, rtv, staging) = make_render_target(&device)?;
 
-        let globals = GlobalParams {
-            gamma_ratios: [1.0, 1.0, 1.0, 1.0],
-            viewport_size: [TEST_SIZE as f32, TEST_SIZE as f32],
-            grayscale_enhanced_contrast: 0.0,
-            subpixel_enhanced_contrast: 0.0,
-            is_bgr: 0,
-            _pad: [0; 3],
-        };
-        let globals_buffer = unsafe {
-            let desc = D3D11_BUFFER_DESC {
-                ByteWidth: std::mem::size_of::<GlobalParams>() as u32,
-                Usage: D3D11_USAGE_DYNAMIC,
-                BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
-                CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
-                ..Default::default()
-            };
-            let mut buffer = None;
-            device.CreateBuffer(&desc, None, Some(&mut buffer))?;
-            buffer.unwrap()
-        };
-        update_buffer(&context, &globals_buffer, &[globals])?;
+        let globals = install_globals(&device, &context)?;
 
         let blend = create_blend_state(&device)?;
         let mut pipeline =
@@ -3785,6 +3688,8 @@ mod tests {
                     size(ScaledPixels(64.0), ScaledPixels(64.0)),
                 ),
                 corner_radii: Corners::default(),
+
+                fade_out: Default::default(),
             },
             background: radial_gradient(
                 point(0.5, 0.5),
@@ -3808,7 +3713,7 @@ mod tests {
             context.ClearRenderTargetView(&rtv, &bg);
             context.OMSetRenderTargets(Some(slice::from_ref(&Some(rtv))), None);
         }
-        pipeline.draw_range(&device, &context, &[viewport], &[Some(globals_buffer)], 4, 0, 1)?;
+        pipeline.draw_range(&device, &context, &[viewport], &globals, 4, 0, 1)?;
         dump_device_errors(&device);
 
         // Center of the gradient: the first color stop, barely past t = 0.
@@ -3855,27 +3760,7 @@ mod tests {
         };
         let (texture, rtv, staging) = make_render_target(&device)?;
 
-        let globals = GlobalParams {
-            gamma_ratios: [1.0, 1.0, 1.0, 1.0],
-            viewport_size: [TEST_SIZE as f32, TEST_SIZE as f32],
-            grayscale_enhanced_contrast: 0.0,
-            subpixel_enhanced_contrast: 0.0,
-            is_bgr: 0,
-            _pad: [0; 3],
-        };
-        let globals_buffer = unsafe {
-            let desc = D3D11_BUFFER_DESC {
-                ByteWidth: std::mem::size_of::<GlobalParams>() as u32,
-                Usage: D3D11_USAGE_DYNAMIC,
-                BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
-                CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
-                ..Default::default()
-            };
-            let mut buffer = None;
-            device.CreateBuffer(&desc, None, Some(&mut buffer))?;
-            buffer.unwrap()
-        };
-        update_buffer(&context, &globals_buffer, &[globals])?;
+        let globals = install_globals(&device, &context)?;
 
         let blend = create_blend_state(&device)?;
         let mut pipeline =
@@ -3892,6 +3777,8 @@ mod tests {
                     size(ScaledPixels(64.0), ScaledPixels(64.0)),
                 ),
                 corner_radii: Corners::default(),
+
+                fade_out: Default::default(),
             },
             background: radial_gradient(
                 point(0.5, 0.5),
@@ -3916,7 +3803,7 @@ mod tests {
             context.ClearRenderTargetView(&rtv, &bg);
             context.OMSetRenderTargets(Some(slice::from_ref(&Some(rtv))), None);
         }
-        pipeline.draw_range(&device, &context, &[viewport], &[Some(globals_buffer)], 4, 0, 1)?;
+        pipeline.draw_range(&device, &context, &[viewport], &globals, 4, 0, 1)?;
         dump_device_errors(&device);
 
         let left_pixel =
@@ -3952,27 +3839,7 @@ mod tests {
         };
         let (texture, rtv, staging) = make_render_target(&device)?;
 
-        let globals = GlobalParams {
-            gamma_ratios: [1.0, 1.0, 1.0, 1.0],
-            viewport_size: [TEST_SIZE as f32, TEST_SIZE as f32],
-            grayscale_enhanced_contrast: 0.0,
-            subpixel_enhanced_contrast: 0.0,
-            is_bgr: 0,
-            _pad: [0; 3],
-        };
-        let globals_buffer = unsafe {
-            let desc = D3D11_BUFFER_DESC {
-                ByteWidth: std::mem::size_of::<GlobalParams>() as u32,
-                Usage: D3D11_USAGE_DYNAMIC,
-                BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
-                CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
-                ..Default::default()
-            };
-            let mut buffer = None;
-            device.CreateBuffer(&desc, None, Some(&mut buffer))?;
-            buffer.unwrap()
-        };
-        update_buffer(&context, &globals_buffer, &[globals])?;
+        let globals = install_globals(&device, &context)?;
 
         let blend = create_blend_state(&device)?;
         let mut pipeline =
@@ -4008,6 +3875,8 @@ mod tests {
                         size(ScaledPixels(64.0), ScaledPixels(64.0)),
                     ),
                     corner_radii: Corners::default(),
+
+                    fade_out: Default::default(),
                 },
                 background: radial_gradient(
                     point(0.25, 0.5),
@@ -4025,7 +3894,7 @@ mod tests {
                 &device,
                 &context,
                 &[viewport],
-                &[Some(globals_buffer.clone())],
+                &globals,
                 4,
                 0,
                 1,
@@ -4056,6 +3925,8 @@ mod tests {
                     size(ScaledPixels(64.0), ScaledPixels(64.0)),
                 ),
                 corner_radii: Corners::default(),
+
+                fade_out: Default::default(),
             },
             background: radial_gradient(
                 point(0.25, 0.5),
@@ -4070,7 +3941,7 @@ mod tests {
         unsafe {
             context.ClearRenderTargetView(&rtv, &bg);
         }
-        pipeline.draw_range(&device, &context, &[viewport], &[Some(globals_buffer)], 4, 0, 1)?;
+        pipeline.draw_range(&device, &context, &[viewport], &globals, 4, 0, 1)?;
         dump_device_errors(&device);
 
         let pixel = read_pixel(&context, &texture, &staging, 18, 40).expect("readback failed");
@@ -4095,27 +3966,7 @@ mod tests {
         };
         let (texture, rtv, staging) = make_render_target(&device)?;
 
-        let globals = GlobalParams {
-            gamma_ratios: [1.0, 1.0, 1.0, 1.0],
-            viewport_size: [TEST_SIZE as f32, TEST_SIZE as f32],
-            grayscale_enhanced_contrast: 0.0,
-            subpixel_enhanced_contrast: 0.0,
-            is_bgr: 0,
-            _pad: [0; 3],
-        };
-        let globals_buffer = unsafe {
-            let desc = D3D11_BUFFER_DESC {
-                ByteWidth: std::mem::size_of::<GlobalParams>() as u32,
-                Usage: D3D11_USAGE_DYNAMIC,
-                BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
-                CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
-                ..Default::default()
-            };
-            let mut buffer = None;
-            device.CreateBuffer(&desc, None, Some(&mut buffer))?;
-            buffer.unwrap()
-        };
-        update_buffer(&context, &globals_buffer, &[globals])?;
+        let globals = install_globals(&device, &context)?;
 
         let blend = create_blend_state(&device)?;
         let mut pipeline =
@@ -4127,6 +3978,8 @@ mod tests {
                 size(ScaledPixels(64.0), ScaledPixels(64.0)),
             ),
             corner_radii: Corners::default(),
+
+            fade_out: Default::default(),
         };
         let red = Quad {
             bounds: bounds(
@@ -4161,7 +4014,7 @@ mod tests {
             context.ClearRenderTargetView(&rtv, &bg);
             context.OMSetRenderTargets(Some(slice::from_ref(&Some(rtv))), None);
         }
-        pipeline.draw_range(&device, &context, &[viewport], &[Some(globals_buffer)], 4, 0, 2)?;
+        pipeline.draw_range(&device, &context, &[viewport], &globals, 4, 0, 2)?;
         dump_device_errors(&device);
 
         let first = read_pixel(&context, &texture, &staging, 16, 16).expect("readback failed");
@@ -4180,20 +4033,24 @@ mod tests {
     }
 
     /// The path instance struct must match the HLSL `PathRasterizationSprite` offsets exactly
-    /// (FXC reports 0/8/16/96/112/128, total 144). A drift here silently misreads the mask and
-    /// the gradient box for every path vertex.
+    /// (FXC reports 0/8/16/96/112/128/144, total 160). A drift here silently misreads the mask
+    /// and the gradient box for every path vertex.
     #[test]
     fn path_rasterization_sprite_layout() {
         use std::mem::{offset_of, size_of};
-        assert_eq!(size_of::<PathRasterizationSprite>(), 144);
+        assert_eq!(size_of::<PathRasterizationSprite>(), 160);
         assert_eq!(offset_of!(PathRasterizationSprite, xy_position), 0);
-        assert_eq!(offset_of!(PathRasterizationSprite, st_position), 8);
+        assert_eq!(offset_of!(PathRasterizationSprite, curve_position), 8);
         assert_eq!(offset_of!(PathRasterizationSprite, color), 16);
         assert_eq!(offset_of!(PathRasterizationSprite, bounds), 96);
         assert_eq!(offset_of!(PathRasterizationSprite, content_mask), 112);
         assert_eq!(
             offset_of!(PathRasterizationSprite, content_mask_corner_radii),
             128
+        );
+        assert_eq!(
+            offset_of!(PathRasterizationSprite, content_mask_fade_out),
+            144
         );
     }
 
@@ -4221,32 +4078,55 @@ mod tests {
         }
     }
 
+    /// Constant buffers shared by the shader-level WARP tests: globals (b0), font (b1), an empty
+    /// blur slot (b2), and Naga's draw constants (b3).
+    fn test_globals(
+        device: &ID3D11Device,
+        context: &ID3D11DeviceContext,
+    ) -> Result<[Option<ID3D11Buffer>; 4]> {
+        let globals_buffer =
+            create_constant_buffer(device, std::mem::size_of::<GlobalUniforms>())?;
+        let font_buffer =
+            create_constant_buffer(device, std::mem::size_of::<FontRasterizationUniforms>())?;
+        let draw_constants_buffer = create_constant_buffer(device, 16)?;
+        update_buffer(
+            context,
+            &globals_buffer,
+            &[GlobalUniforms {
+                viewport_size: [TEST_SIZE as f32, TEST_SIZE as f32],
+                premultiplied_alpha: 0,
+                padding: 0,
+            }],
+        )?;
+        update_buffer(
+            context,
+            &font_buffer,
+            &[FontRasterizationUniforms {
+                gamma_ratios: [1.0, 1.0, 1.0, 1.0],
+                grayscale_enhanced_contrast: 0.0,
+                subpixel_enhanced_contrast: 0.0,
+                uses_blue_green_red_subpixel_order: 0,
+                padding: 0,
+            }],
+        )?;
+        update_buffer(
+            context,
+            &draw_constants_buffer,
+            &[hgpui_render::artifacts::Dx11DrawConstants::default()],
+        )?;
+        Ok([
+            Some(globals_buffer),
+            Some(font_buffer),
+            None,
+            Some(draw_constants_buffer),
+        ])
+    }
+
     fn install_globals(
         device: &ID3D11Device,
         context: &ID3D11DeviceContext,
-    ) -> Result<ID3D11Buffer> {
-        let globals = GlobalParams {
-            gamma_ratios: [1.0, 1.0, 1.0, 1.0],
-            viewport_size: [TEST_SIZE as f32, TEST_SIZE as f32],
-            grayscale_enhanced_contrast: 0.0,
-            subpixel_enhanced_contrast: 0.0,
-            is_bgr: 0,
-            _pad: [0; 3],
-        };
-        let globals_buffer = unsafe {
-            let desc = D3D11_BUFFER_DESC {
-                ByteWidth: std::mem::size_of::<GlobalParams>() as u32,
-                Usage: D3D11_USAGE_DYNAMIC,
-                BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
-                CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
-                ..Default::default()
-            };
-            let mut buffer = None;
-            device.CreateBuffer(&desc, None, Some(&mut buffer))?;
-            buffer.unwrap()
-        };
-        update_buffer(context, &globals_buffer, &[globals])?;
-        Ok(globals_buffer)
+    ) -> Result<[Option<ID3D11Buffer>; 4]> {
+        test_globals(device, context)
     }
 
     fn viewport_mask() -> ContentMask<ScaledPixels> {
@@ -4256,6 +4136,8 @@ mod tests {
                 size(ScaledPixels(TEST_SIZE as f32), ScaledPixels(TEST_SIZE as f32)),
             ),
             corner_radii: Corners::default(),
+
+            fade_out: Default::default(),
         }
     }
 
@@ -4265,7 +4147,7 @@ mod tests {
         texture: ID3D11Texture2D,
         staging: ID3D11Texture2D,
         _pipeline: PipelineState<Quad>,
-        _globals: ID3D11Buffer,
+        _globals: [Option<ID3D11Buffer>; 4],
         _rtv: ID3D11RenderTargetView,
     }
 
@@ -4285,7 +4167,7 @@ mod tests {
             context.ClearRenderTargetView(&rtv, &clear);
             context.OMSetRenderTargets(Some(slice::from_ref(&Some(rtv.clone()))), None);
         }
-        pipeline.draw_range(device, context, &[test_viewport()], &[Some(globals.clone())], 4, 0, 1)?;
+        pipeline.draw_range(device, context, &[test_viewport()], &globals, 4, 0, 1)?;
         dump_device_errors(device);
         Ok(QuadTarget {
             texture,
@@ -4314,12 +4196,18 @@ mod tests {
             return Ok(());
         };
         // [16.25, 48.75] on both axes: every edge covers 0.75 of its boundary pixel.
+        let quad_bounds = bounds(
+            point(ScaledPixels(16.25), ScaledPixels(16.25)),
+            size(ScaledPixels(32.5), ScaledPixels(32.5)),
+        );
         let quad = Quad {
-            bounds: bounds(
-                point(ScaledPixels(16.25), ScaledPixels(16.25)),
-                size(ScaledPixels(32.5), ScaledPixels(32.5)),
-            ),
-            content_mask: viewport_mask(),
+            bounds: quad_bounds,
+            // Upstream antialiases a plain quad through its content mask.
+            content_mask: ContentMask {
+                bounds: quad_bounds,
+                corner_radii: Corners::default(),
+                fade_out: Default::default(),
+            },
             background: Background::from(rgba(0xff0000ff)),
             ..Default::default()
         };
@@ -4360,7 +4248,15 @@ mod tests {
                 point(ScaledPixels(8.0), ScaledPixels(8.0)),
                 size(ScaledPixels(48.0), ScaledPixels(48.0)),
             ),
-            content_mask: viewport_mask(),
+            // The mask is in scene space; it must cover the transformed quad.
+            content_mask: ContentMask {
+                bounds: bounds(
+                    point(ScaledPixels(14.3), ScaledPixels(14.3)),
+                    size(ScaledPixels(12.0), ScaledPixels(12.0)),
+                ),
+                corner_radii: Corners::default(),
+                fade_out: Default::default(),
+            },
             background: Background::from(rgba(0xff0000ff)),
             transformation: TransformationMatrix {
                 rotation_scale: [[0.25, 0.0], [0.0, 0.25]],
@@ -4411,6 +4307,8 @@ mod tests {
                     size(ScaledPixels(32.5), ScaledPixels(48.0)),
                 ),
                 corner_radii: Corners::default(),
+
+                fade_out: Default::default(),
             },
             background: Background::from(rgba(0xff0000ff)),
             ..Default::default()
@@ -4444,14 +4342,19 @@ mod tests {
             4,
             blend,
         )?;
+        let underline_bounds = bounds(
+            point(ScaledPixels(16.5), ScaledPixels(16.0)),
+            size(ScaledPixels(31.0), ScaledPixels(32.0)),
+        );
         let underline = hgpui::Underline {
             order: 0,
-            pad: 0,
-            bounds: bounds(
-                point(ScaledPixels(16.5), ScaledPixels(16.0)),
-                size(ScaledPixels(31.0), ScaledPixels(32.0)),
-            ),
-            content_mask: viewport_mask(),
+            padding: 0,
+            bounds: underline_bounds,
+            content_mask: ContentMask {
+                bounds: underline_bounds,
+                corner_radii: Corners::default(),
+                fade_out: Default::default(),
+            },
             color: red().into(),
             thickness: ScaledPixels(0.0),
             wavy: false.into(),
@@ -4462,7 +4365,7 @@ mod tests {
             context.ClearRenderTargetView(&rtv, &[0.0, 0.0, 0.0, 1.0]);
             context.OMSetRenderTargets(Some(slice::from_ref(&Some(rtv.clone()))), None);
         }
-        pipeline.draw_range(&device, &context, &[test_viewport()], &[Some(globals)], 4, 0, 1)?;
+        pipeline.draw_range(&device, &context, &[test_viewport()], &globals, 4, 0, 1)?;
         dump_device_errors(&device);
 
         let left = read_pixel(&context, &texture, &staging, 16, 32)?;
@@ -4526,9 +4429,9 @@ mod tests {
 
         let sprite = PolychromeSprite {
             order: 0,
-            pad: 0,
             grayscale: false.into(),
             opacity: 1.0,
+            corner_smoothing: 0.0,
             // [16.25, 48.75]: each edge covers 0.75 of its boundary pixel.
             bounds: bounds(
                 point(ScaledPixels(16.25), ScaledPixels(16.25)),
@@ -4556,13 +4459,13 @@ mod tests {
         unsafe {
             context.ClearRenderTargetView(&rtv, &[0.0, 0.0, 0.0, 1.0]);
             context.OMSetRenderTargets(Some(slice::from_ref(&Some(rtv.clone()))), None);
-            context.PSSetSamplers(0, Some(slice::from_ref(&sampler)));
-            context.PSSetShaderResources(0, Some(slice::from_ref(&atlas_binding)));
+            context.PSSetSamplers(4, Some(slice::from_ref(&sampler)));
+            context.PSSetShaderResources(3, Some(slice::from_ref(&atlas_binding)));
         }
         pipeline.draw(
             &context,
             &[test_viewport()],
-            &[Some(globals)],
+            &globals,
             D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP,
             4,
             1,
@@ -4585,14 +4488,206 @@ mod tests {
         Ok(())
     }
 
-    /// Renders vector-path geometry through the real path pipelines. A constant `st_position`
+    /// Creates an RGBA texture and its shader view from raw bytes.
+    fn create_rgba_texture(
+        device: &ID3D11Device,
+        width: u32,
+        height: u32,
+        pixels: &[u8],
+    ) -> Result<ID3D11ShaderResourceView> {
+        unsafe {
+            let desc = D3D11_TEXTURE2D_DESC {
+                Width: width,
+                Height: height,
+                MipLevels: 1,
+                ArraySize: 1,
+                Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+                SampleDesc: DXGI_SAMPLE_DESC {
+                    Count: 1,
+                    Quality: 0,
+                },
+                Usage: D3D11_USAGE_DEFAULT,
+                BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
+                CPUAccessFlags: 0,
+                MiscFlags: 0,
+            };
+            let data = D3D11_SUBRESOURCE_DATA {
+                pSysMem: pixels.as_ptr().cast(),
+                SysMemPitch: width * 4,
+                SysMemSlicePitch: 0,
+            };
+            let mut texture = None;
+            device.CreateTexture2D(&desc, Some(&data), Some(&mut texture))?;
+            let mut srv = None;
+            device.CreateShaderResourceView(&texture.unwrap(), None, Some(&mut srv))?;
+            Ok(srv.unwrap())
+        }
+    }
+
+    /// The tile lookup must stay registered to the sprite's original bounds and must stay
+    /// inside its own texels. The quad is grown by `AA_MARGIN`, so driving UVs from the vertex'
+    /// unit position stretches the image across the grown quad; and bilinear taps within half a
+    /// texel of the tile border otherwise read the neighbouring atlas tile, which is what shows
+    /// up as dark fringes around images and as stray strokes beside glyphs scaled by a CSS
+    /// transform.
+    #[test]
+    fn hlsl_polychrome_sprite_tile_sampling_readback() -> Result<()> {
+        let Some((device, context)) = create_warp_device() else {
+            eprintln!("[poly_tile] WARP device unavailable, skipping");
+            return Ok(());
+        };
+        let globals = install_globals(&device, &context)?;
+        let blend = create_blend_state(&device)?;
+        let mut pipeline = PipelineState::<PolychromeSprite>::new(
+            &device,
+            "test_poly_tile",
+            ShaderModule::PolychromeSprite,
+            64,
+            blend,
+        )?;
+        let sampler = create_blur_sampler(&device)?;
+        let (texture, rtv, staging) = make_render_target(&device)?;
+
+        let draw = |pipeline: &mut PipelineState<PolychromeSprite>,
+                    srv: &ID3D11ShaderResourceView,
+                    sprite: PolychromeSprite|
+         -> Result<()> {
+            pipeline.update_buffer(&device, &context, &[sprite])?;
+            let atlas_binding: Option<ID3D11ShaderResourceView> = Some(srv.clone());
+            unsafe {
+                context.ClearRenderTargetView(&rtv, &[0.0, 0.0, 0.0, 1.0]);
+                context.OMSetRenderTargets(Some(slice::from_ref(&Some(rtv.clone()))), None);
+                context.PSSetSamplers(4, Some(slice::from_ref(&sampler)));
+                context.PSSetShaderResources(3, Some(slice::from_ref(&atlas_binding)));
+            }
+            pipeline.draw(
+                &context,
+                &[test_viewport()],
+                &globals,
+                D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP,
+                4,
+                1,
+            )?;
+            dump_device_errors(&device);
+            Ok(())
+        };
+
+        // Case 1: an 8x8 tile at the atlas origin, blue except for a red column at x = 2.
+        // Drawn 1:1 into [8, 8, 8x8], texel `i` covers scene x = 8 + i .. 9 + i, so pixel
+        // (9, 12) must stay blue and pixel (10, 12) must be red. Stretching the tile over the
+        // AA-grown quad shifts the red column left into pixel 9.
+        let mut registration_pixels = vec![0u8; 16 * 16 * 4];
+        for y in 0..16 {
+            for x in 0..16 {
+                let i = (y * 16 + x) * 4;
+                // R8G8B8A8 memory order.
+                let color = if x == 2 {
+                    [255, 0, 0, 255] // red
+                } else {
+                    [0, 0, 255, 255] // blue
+                };
+                registration_pixels[i..i + 4].copy_from_slice(&color);
+            }
+        }
+        let registration_srv = create_rgba_texture(&device, 16, 16, &registration_pixels)?;
+        let sprite = |sprite_bounds: Bounds<ScaledPixels>, tile_origin: (i32, i32)| PolychromeSprite {
+            order: 0,
+            grayscale: false.into(),
+            opacity: 1.0,
+            corner_smoothing: 0.0,
+            bounds: sprite_bounds,
+            content_mask: viewport_mask(),
+            corner_radii: Corners::default(),
+            tile: AtlasTile {
+                texture_id: AtlasTextureId {
+                    index: 0,
+                    kind: AtlasTextureKind::Polychrome,
+                },
+                tile_id: TileId(0),
+                padding: 0,
+                bounds: bounds(
+                    point(DevicePixels(tile_origin.0), DevicePixels(tile_origin.1)),
+                    size(DevicePixels(8), DevicePixels(8)),
+                ),
+            },
+            transformation: TransformationMatrix::unit(),
+        };
+        draw(
+            &mut pipeline,
+            &registration_srv,
+            sprite(
+                bounds(
+                    point(ScaledPixels(8.0), ScaledPixels(8.0)),
+                    size(ScaledPixels(8.0), ScaledPixels(8.0)),
+                ),
+                (0, 0),
+            ),
+        )?;
+        let texel_one = read_pixel(&context, &texture, &staging, 9, 12)?;
+        assert_eq!(
+            texel_one,
+            [255, 0, 0, 255],
+            "texel 1 must stay blue (B,G,R,A); the tile was stretched by the AA margin: {texel_one:?}"
+        );
+        let texel_two = read_pixel(&context, &texture, &staging, 10, 12)?;
+        assert_eq!(
+            texel_two,
+            [0, 0, 255, 255],
+            "texel 2 must be red (B,G,R,A) at its true position: {texel_two:?}"
+        );
+
+        // Case 2: the tile sits at (1, 1) with a green atlas background around it. At a
+        // fractional origin/scale a bilinear tap one texel outside the tile would read the
+        // green surround; clamped tile coordinates must replay the tile's own edge texel.
+        let mut bleed_pixels = vec![0u8; 16 * 16 * 4];
+        for y in 0..16 {
+            for x in 0..16 {
+                let i = (y * 16 + x) * 4;
+                let color = if (1..9).contains(&x) && (1..9).contains(&y) {
+                    [255, 255, 255, 255] // white tile
+                } else {
+                    [0, 255, 0, 255] // green surround
+                };
+                bleed_pixels[i..i + 4].copy_from_slice(&color);
+            }
+        }
+        let bleed_srv = create_rgba_texture(&device, 16, 16, &bleed_pixels)?;
+        draw(
+            &mut pipeline,
+            &bleed_srv,
+            sprite(
+                bounds(
+                    point(ScaledPixels(20.5), ScaledPixels(20.5)),
+                    size(ScaledPixels(32.25), ScaledPixels(32.25)),
+                ),
+                (1, 1),
+            ),
+        )?;
+        for (x, y, what) in [
+            (21, 32, "left edge"),
+            (52, 32, "right edge"),
+            (32, 21, "top edge"),
+            (32, 52, "bottom edge"),
+        ] {
+            let px = read_pixel(&context, &texture, &staging, x, y)?;
+            let (b, g, r) = (px[0] as i32, px[1] as i32, px[2] as i32);
+            assert!(
+                (g - r).abs() <= 8 && (g - b).abs() <= 8,
+                "{what} sampled the neighbouring atlas tile ({px:?} B,G,R,A)"
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Renders vector-path geometry through the real path pipelines. A constant `curve_position`
     /// makes the curve field's derivative zero, which the shader treats as "solid coverage", so
     /// the only shaping left is the content mask / gradient under test.
     struct PathTarget {
         texture: ID3D11Texture2D,
         staging: ID3D11Texture2D,
         _pipeline: PipelineState<PathRasterizationSprite>,
-        _globals: ID3D11Buffer,
+        _globals: [Option<ID3D11Buffer>; 4],
         _rtv: ID3D11RenderTargetView,
     }
 
@@ -4616,7 +4711,7 @@ mod tests {
         )?;
         let vertex = |x: f32, y: f32| PathRasterizationSprite {
             xy_position: point(ScaledPixels(x), ScaledPixels(y)),
-            st_position: match st_scale {
+            curve_position: match st_scale {
                 // st = (x/s, y/s) makes the curve field `st.y - st.x^2` the parabola
                 // y = x^2 / s through the scene, which is how the real path rasterizer feeds
                 // the exact curve into the shader.
@@ -4628,6 +4723,7 @@ mod tests {
             bounds: path_bounds,
             content_mask: content_mask.bounds,
             content_mask_corner_radii: content_mask.corner_radii,
+            content_mask_fade_out: content_mask.fade_out,
         };
         // Two triangles covering the whole viewport.
         let vertices = [
@@ -4646,7 +4742,7 @@ mod tests {
         pipeline.draw(
             context,
             &[test_viewport()],
-            &[Some(globals.clone())],
+            &globals,
             D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
             6,
             1,
@@ -4681,6 +4777,8 @@ mod tests {
                 bottom_right: ScaledPixels(8.0),
                 bottom_left: ScaledPixels(8.0),
             },
+
+            fade_out: Default::default(),
         };
         let target = render_path(
             &device,
@@ -4721,6 +4819,8 @@ mod tests {
                 size(ScaledPixels(16.0), ScaledPixels(32.0)),
             ),
             corner_radii: Corners::default(),
+
+            fade_out: Default::default(),
         };
         let color = linear_gradient(
             90.0,
@@ -4744,7 +4844,7 @@ mod tests {
         // (Against the clipped [24,40] box it would be (28.5-24)/16 = 0.281 -> 72.)
         for (x, y) in [(28, 32), (28, 20), (28, 44)] {
             let px = read_pixel(&context, &target.texture, &target.staging, x, y)?;
-            assert_red_close(px, 109, "path gradient anchored to the path bounds");
+            assert_red_close(px, 38, "path gradient anchored to the path bounds");
         }
         Ok(())
     }
@@ -4812,7 +4912,7 @@ mod tests {
         };
         let target = render_quad(&device, &context, quad, [0.0, 0.0, 0.0, 1.0])?;
         let px = read_pixel(&context, &target.texture, &target.staging, 4, 32)?;
-        assert_red_close(px, 211, "off-box closest-corner radial gradient");
+        assert_red_close(px, 198, "off-box closest-corner radial gradient");
         Ok(())
     }
 
@@ -4891,18 +4991,18 @@ mod tests {
             ),
             element_corner_radii: Corners::default(),
             inset: 1,
-            pad: 0,
+            corner_smoothing: 0.0,
         };
         pipeline.update_buffer(&device, &context, &[shadow])?;
         unsafe {
             context.ClearRenderTargetView(&rtv, &[0.0, 0.0, 0.0, 1.0]);
             context.OMSetRenderTargets(Some(slice::from_ref(&Some(rtv.clone()))), None);
         }
-        pipeline.draw_range(&device, &context, &[test_viewport()], &[Some(globals)], 4, 0, 1)?;
+        pipeline.draw_range(&device, &context, &[test_viewport()], &globals, 4, 0, 1)?;
         dump_device_errors(&device);
 
         let edge = read_pixel(&context, &texture, &staging, 16, 32)?;
-        assert_red_close(edge, 64, "inset shadow element edge");
+        assert_red_close(edge, 0, "inset shadow element edge (upstream clips to element bounds)");
         let inside = read_pixel(&context, &texture, &staging, 17, 32)?;
         assert_red_close(inside, 255, "inset shadow inside the element");
         let outside = read_pixel(&context, &texture, &staging, 15, 32)?;
@@ -4965,6 +5065,151 @@ mod tests {
         // "horizontal", taking dash_velocity to infinity and the period to NaN.
         let px = read_pixel(&context, &target.texture, &target.staging, 18, 20)?;
         assert_red_close(px, 255, "zero-width dashed side sliver");
+        Ok(())
+    }
+
+    /// Upstream corner smoothing uses a superellipse corner. At smoothing 1.0 the
+    /// corner reaches farther toward the box corner than the circular radius, so a
+    /// pixel just outside the circle must gain coverage only in the smoothed pipeline.
+    #[test]
+    fn hlsl_corner_smoothing_readback() -> Result<()> {
+        let Some((device, context)) = create_warp_device() else {
+            eprintln!("[corner_smoothing] WARP device unavailable, skipping");
+            return Ok(());
+        };
+        let (texture, rtv, staging) = make_render_target(&device)?;
+        let globals = install_globals(&device, &context)?;
+
+        let radii = Corners {
+            top_left: ScaledPixels(16.0),
+            top_right: ScaledPixels(16.0),
+            bottom_right: ScaledPixels(16.0),
+            bottom_left: ScaledPixels(16.0),
+        };
+        let quad_bounds = bounds(
+            point(ScaledPixels(16.0), ScaledPixels(16.0)),
+            size(ScaledPixels(32.0), ScaledPixels(32.0)),
+        );
+        let quad = Quad {
+            bounds: quad_bounds,
+            content_mask: ContentMask {
+                bounds: quad_bounds,
+                corner_radii: radii,
+                fade_out: Default::default(),
+            },
+            background: Background::from(rgba(0xff0000ff)),
+            corner_radii: radii,
+            corner_smoothing: 1.0,
+            ..Default::default()
+        };
+
+        let mut normal = PipelineState::<Quad>::new(
+            &device,
+            "test_corner_normal",
+            ShaderModule::Quad,
+            4,
+            create_blend_state(&device)?,
+        )?;
+        normal.update_buffer(&device, &context, &[quad])?;
+        unsafe {
+            context.ClearRenderTargetView(&rtv, &[0.0, 0.0, 0.0, 1.0]);
+            context.OMSetRenderTargets(Some(slice::from_ref(&Some(rtv.clone()))), None);
+        }
+        normal.draw_range(&device, &context, &[test_viewport()], &globals, 4, 0, 1)?;
+        let circular_count = {
+            let mut count = 0;
+            for y in 16..32 {
+                for x in 16..32 {
+                    if read_pixel(&context, &texture, &staging, x, y)?[2] > 8 {
+                        count += 1;
+                    }
+                }
+            }
+            count
+        };
+
+        let mut smoothed = PipelineState::<Quad>::new(
+            &device,
+            "test_corner_smoothed",
+            ShaderModule::SmoothedQuad,
+            4,
+            create_blend_state(&device)?,
+        )?;
+        smoothed.update_buffer(&device, &context, &[quad])?;
+        unsafe {
+            context.ClearRenderTargetView(&rtv, &[0.0, 0.0, 0.0, 1.0]);
+            context.OMSetRenderTargets(Some(slice::from_ref(&Some(rtv.clone()))), None);
+        }
+        smoothed.draw_range(&device, &context, &[test_viewport()], &globals, 4, 0, 1)?;
+        let smoothed_count = {
+            let mut count = 0;
+            for y in 16..32 {
+                for x in 16..32 {
+                    if read_pixel(&context, &texture, &staging, x, y)?[2] > 8 {
+                        count += 1;
+                    }
+                }
+            }
+            count
+        };
+
+        assert!(
+            smoothed_count > circular_count,
+            "smoothed corner must cover more pixels than the circular corner: \
+             circular={circular_count}, smoothed={smoothed_count}"
+        );
+        Ok(())
+    }
+
+    /// The dash length/gap are per-instance values, not a hard-coded 2:1 pattern.
+    /// Two quads with different settings must produce different top-border runs.
+    #[test]
+    fn hlsl_dashed_length_gap_readback() -> Result<()> {
+        let Some((device, context)) = create_warp_device() else {
+            eprintln!("[dash_length_gap] WARP device unavailable, skipping");
+            return Ok(());
+        };
+        let quad_bounds = bounds(
+            point(ScaledPixels(16.0), ScaledPixels(16.0)),
+            size(ScaledPixels(32.0), ScaledPixels(32.0)),
+        );
+        let make_quad = |length: f32, gap: f32| Quad {
+            bounds: quad_bounds,
+            content_mask: viewport_mask(),
+            background: Background::from(transparent_black()),
+            border_color: red().into(),
+            border_widths: Edges {
+                top: ScaledPixels(4.0),
+                right: ScaledPixels(4.0),
+                bottom: ScaledPixels(4.0),
+                left: ScaledPixels(4.0),
+            },
+            border_style: BorderStyle::Dashed,
+            border_dashed_length: length,
+            border_dashed_gap: gap,
+            ..Default::default()
+        };
+
+        let count_red = |target: &QuadTarget| -> Result<usize> {
+            let mut count = 0;
+            for x in 16..48 {
+                if read_pixel(&context, &target.texture, &target.staging, x, 18)?[2] > 128 {
+                    count += 1;
+                }
+            }
+            Ok(count)
+        };
+
+        let short = render_quad(&device, &context, make_quad(1.0, 1.0), [0.0, 0.0, 0.0, 1.0])?;
+        let long = render_quad(&device, &context, make_quad(4.0, 1.0), [0.0, 0.0, 0.0, 1.0])?;
+        let short_count = count_red(&short)?;
+        let long_count = count_red(&long)?;
+        assert!(short_count > 0, "short dashes must paint something");
+        assert!(long_count > 0, "long dashes must paint something");
+        assert_ne!(
+            short_count, long_count,
+            "dash length must change the top-border run lengths"
+        );
         Ok(())
     }
 }

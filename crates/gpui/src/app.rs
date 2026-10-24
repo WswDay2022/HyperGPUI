@@ -146,7 +146,7 @@ impl Drop for AppRefMut<'_> {
 /// You won't interact with this type much outside of initial configuration and startup.
 pub struct Application(Rc<AppCell>);
 
-/// A strong handle to an [`Application`] started with [`Application::run_embedded`].
+/// A strong handle to an [`Application`] started with [`Application::run`].
 ///
 /// Dropping this handle releases the app, so an embedder must hold it for as long as the
 /// app should run. While held, it is the embedder's entry point back into GPUI each time
@@ -245,30 +245,12 @@ impl Application {
         self
     }
 
-    /// Start the application. The provided callback will be called once the
-    /// app is fully launched.
-    pub fn run<F>(self, on_finish_launching: F)
-    where
-        F: 'static + FnOnce(&mut App),
-    {
-        let this = self.0.clone();
-        let platform = self.0.borrow().platform.clone();
-        platform.run(Box::new(move || {
-            let cx = &mut *this.borrow_mut();
-            on_finish_launching(cx);
-        }));
-    }
-
-    /// Start the application for an embedder that drives the run loop itself.
+    /// Start the application and call `on_finish_launching` once it has launched.
     ///
-    /// On ordinary platforms `Platform::run` blocks for the lifetime of the app, and the
-    /// app state is kept alive by [`Application::run`]'s stack frame. Embedded platforms —
-    /// where the run loop belongs to someone else, e.g. GPUI compiled into a Wasm guest,
-    /// or a GPUI view hosted inside a foreign native application — implement
-    /// `Platform::run` to invoke the launch callback and return immediately. This method
-    /// supports that shape: it returns an [`ApplicationHandle`] that keeps the app alive
-    /// and lets the embedder re-enter it whenever the external run loop yields control.
-    pub fn run_embedded<F>(self, on_finish_launching: F) -> ApplicationHandle
+    /// This blocks until shutdown on standalone native platforms. Web and embedded
+    /// platforms return immediately. Keep the returned [`ApplicationHandle`] alive
+    /// for as long as the app should run. The handle also lets the host update the app.
+    pub fn run<F>(self, on_finish_launching: F) -> ApplicationHandle
     where
         F: 'static + FnOnce(&mut App),
     {
@@ -279,6 +261,15 @@ impl Application {
             on_finish_launching(cx);
         }));
         ApplicationHandle { app: self.0 }
+    }
+
+    /// Deprecated alias for [`Application::run`].
+    #[deprecated(note = "Use [Application::run] instead.")]
+    pub fn run_embedded<F>(self, on_finish_launching: F) -> ApplicationHandle
+    where
+        F: 'static + FnOnce(&mut App),
+    {
+        self.run(on_finish_launching)
     }
 
     /// Register a handler to be invoked when the platform instructs the application
@@ -648,7 +639,7 @@ impl SystemWindowTabController {
         let next_index = (current_index + 1) % tabs.len();
 
         let _ = &tabs[next_index].handle.update(cx, |_, window, _| {
-            window.activate_window();
+            window.activate();
         });
     }
 
@@ -667,7 +658,7 @@ impl SystemWindowTabController {
         };
 
         let _ = &tabs[previous_index].handle.update(cx, |_, window, _| {
-            window.activate_window();
+            window.activate();
         });
     }
 }
