@@ -2950,6 +2950,7 @@ impl Window {
     /// the contents of the new [`Scene`], use [`Self::present`].
     #[profiling::function]
     pub fn draw(&mut self, cx: &mut App) -> ArenaClearNeeded {
+        record_draw_timestamp();
         // Drain unconditionally so a stale first-invalidation timestamp can't
         // leak into a later frame across enable/disable of frame tracing.
         let frame_dirty = self.invalidator.take_frame_dirty();
@@ -7143,6 +7144,27 @@ impl PaintQuad {
             ..self
         }
     }
+}
+
+// TEMP DEBUG: draw heartbeat for the About-hang watchdog. One relaxed atomic store per frame.
+static DRAW_CLOCK: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+static LAST_DRAW_MICROS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn record_draw_timestamp() {
+    let start = DRAW_CLOCK.get_or_init(std::time::Instant::now);
+    LAST_DRAW_MICROS.store(
+        start.elapsed().as_micros() as u64,
+        std::sync::atomic::Ordering::Relaxed,
+    );
+}
+
+/// TEMP DEBUG: how long ago the last frame was drawn, or `None` before the first draw.
+/// Used by the IshiTone About-hang watchdog to prove whether the render loop stopped.
+pub fn last_draw_age() -> Option<std::time::Duration> {
+    let start = DRAW_CLOCK.get()?;
+    let now = start.elapsed().as_micros() as u64;
+    let last = LAST_DRAW_MICROS.load(std::sync::atomic::Ordering::Relaxed);
+    Some(std::time::Duration::from_micros(now.saturating_sub(last)))
 }
 
 /// Creates a quad with the given parameters.
