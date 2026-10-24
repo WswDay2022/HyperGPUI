@@ -215,8 +215,12 @@ pub mod blur {
             return transparent();
         }
 
-        let blur_span = 2.0 * floor(get!(GLOBALS).viewport_size * 0.5);
-        let uv = input.position.xy() / blur_span;
+        // The half-resolution blur texture covers the same window as the scene, so the
+        // full-resolution position maps to it through the viewport size. Rounding the span down
+        // to an even size (the old `2 * floor(viewport / 2)`) stretches the blur by up to one
+        // pixel on odd-sized windows, which shows up as the blurred backdrop sliding relative to
+        // the sharp content painted over it.
+        let uv = input.position.xy() / get!(GLOBALS).viewport_size;
         let blurred = texture_sample_level(BLUR_TEXTURE, BLUR_SAMPLER, uv, 0.0);
 
         let corner_radii = Corners {
