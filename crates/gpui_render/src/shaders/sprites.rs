@@ -307,6 +307,14 @@ pub mod polychrome_sprite {
         }
         let sprite = get!(POLYCHROME_SPRITES)[input.sprite_id as usize];
         let color = polychrome_color(sprite, input.tile_position);
+        // Same corner SDF on both the sprite and its mask means the mask is the sprite's own
+        // cutout; applying it twice would square the edge coverage.
+        let mask_is_own = same_origin(sprite.content_mask.bounds, sprite.bounds)
+            && same_size(sprite.content_mask.bounds, sprite.bounds)
+            && sprite.content_mask.corner_radii.top_left == sprite.corner_radii.top_left
+            && sprite.content_mask.corner_radii.top_right == sprite.corner_radii.top_right
+            && sprite.content_mask.corner_radii.bottom_left == sprite.corner_radii.bottom_left
+            && sprite.content_mask.corner_radii.bottom_right == sprite.corner_radii.bottom_right;
         blend_color(
             color,
             sprite.opacity
@@ -315,7 +323,11 @@ pub mod polychrome_sprite {
                     sprite.bounds,
                     sprite.corner_radii,
                 ))
-                * ContentMask::alpha(sprite.content_mask, input.scene_position),
+                * ContentMask::alpha_with_own(
+                    sprite.content_mask,
+                    input.scene_position,
+                    mask_is_own,
+                ),
         )
     }
 

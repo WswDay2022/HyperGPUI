@@ -4680,6 +4680,52 @@ mod tests {
         Ok(())
     }
 
+    /// When a primitive's content mask is its own rounded cutout, the mask's distance field is
+    /// the same field the primitive already uses for its outline. Applying both squares the
+    /// coverage of every edge pixel (0.5 × 0.5 = 0.25), which shows up as a dark one-pixel rim
+    /// around rounded elements. The mask must contribute only its edge fade in that case.
+    #[test]
+    fn hlsl_quad_own_mask_coverage_not_squared() -> Result<()> {
+        let Some((device, context)) = create_warp_device() else {
+            eprintln!("[own_mask] WARP device unavailable, skipping");
+            return Ok(());
+        };
+        let quad_bounds = bounds(
+            point(ScaledPixels(8.25), ScaledPixels(8.25)),
+            size(ScaledPixels(48.0), ScaledPixels(48.0)),
+        );
+        // A border exercises the path that computes the shape's own outer distance field on a
+        // straight edge (an unrounded, unbordered quad delegates that to the mask instead).
+        let border_widths = Edges {
+            top: ScaledPixels(4.0),
+            right: ScaledPixels(4.0),
+            bottom: ScaledPixels(4.0),
+            left: ScaledPixels(4.0),
+        };
+        let quad = Quad {
+            bounds: quad_bounds,
+            content_mask: ContentMask {
+                bounds: quad_bounds,
+                corner_radii: Corners::default(),
+                fade_out: Default::default(),
+            },
+            background: Background::from(rgba(0xff0000ff)),
+            border_color: red().into(),
+            border_widths,
+            ..Default::default()
+        };
+        let target = render_quad(&device, &context, quad, [0.0, 0.0, 0.0, 1.0])?;
+
+        // Bounds left edge is x = 8.25; pixel 8's centre is 0.25 px inside, so the shape's own
+        // coverage is 0.75 (191). If the own mask is multiplied in as well the pixel drops to
+        // 0.5625 (143).
+        let edge = read_pixel(&context, &target.texture, &target.staging, 8, 32)?;
+        assert_red_close(edge, 191, "own-mask straight edge");
+        let inside = read_pixel(&context, &target.texture, &target.staging, 32, 32)?;
+        assert_eq!(inside[2], 255, "own-mask interior must stay opaque, got {inside:?}");
+        Ok(())
+    }
+
     /// Renders vector-path geometry through the real path pipelines. A constant `curve_position`
     /// makes the curve field's derivative zero, which the shader treats as "solid coverage", so
     /// the only shaping left is the content mask / gradient under test.

@@ -608,7 +608,7 @@ pub mod quad {
             && quad.content_mask.corner_radii.bottom_right == quad.corner_radii.bottom_right;
 
         let mask_position = select(input.scene_position, input.local_position, mask_is_own);
-        let fade = ContentMask::alpha(quad.content_mask, mask_position);
+        let fade = ContentMask::alpha_with_own(quad.content_mask, mask_position, mask_is_own);
 
         let fill_color = paint_color(
             Paint::new(quad.background, quad.bounds),
@@ -616,12 +616,23 @@ pub mod quad {
             PreparedPaint::new(input.fill_solid, input.fill_color0, input.fill_color1),
         );
         if Edges::is_zero(quad.border_widths) && Corners::is_zero(quad.corner_radii) {
-            return blend_color(fill_color, fade);
+            // No corners and no border means this path never builds a shape distance field:
+            // the mask's field is what antialiases the quad's straight edges, so it must not be
+            // skipped even when the mask is the quad's own cutout.
+            return blend_color(
+                fill_color,
+                ContentMask::alpha(quad.content_mask, mask_position),
+            );
         }
 
         let geometry = quad_geometry(quad, input.local_position);
         if is_unaffected_background(geometry) {
-            return blend_color(fill_color, fade);
+            // Interior fragments of a straight-edged quad take their straight-edge coverage
+            // from the mask field, so keep the full mask coverage here (see the note above).
+            return blend_color(
+                fill_color,
+                ContentMask::alpha(quad.content_mask, mask_position),
+            );
         }
 
         let distances = border_distances(geometry);
@@ -742,9 +753,9 @@ pub mod quad {
             && quad.content_mask.corner_radii.bottom_left == quad.corner_radii.bottom_left
             && quad.content_mask.corner_radii.bottom_right == quad.corner_radii.bottom_right;
 
-        let fade = select(
-            ContentMask::alpha(quad.content_mask, input.scene_position),
-            1.0,
+        let fade = ContentMask::alpha_with_own(
+            quad.content_mask,
+            select(input.scene_position, input.local_position, mask_is_own),
             mask_is_own,
         );
 

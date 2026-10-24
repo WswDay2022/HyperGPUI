@@ -154,6 +154,19 @@ mod source {
         /// The mask's coverage at the given window-space position: 1 inside,
         /// 0 outside, and a linear ramp to 0 across each edge's fade distance.
         pub fn alpha(content_mask: ContentMask, position: Vec2f) -> f32 {
+            ContentMask::alpha_with_own(content_mask, position, false)
+        }
+
+        /// Like [`ContentMask::alpha`], but when the mask is the primitive's own cutout the
+        /// shape's distance field is skipped: the primitive already applies it for its own
+        /// outline, and multiplying the two half-covered edge pixels squares the coverage
+        /// (0.5 × 0.5), which reads as a dark one-pixel rim on rounded elements. Edge fades
+        /// still apply because they are not part of the outline.
+        pub fn alpha_with_own(
+            content_mask: ContentMask,
+            position: Vec2f,
+            owns_cutout: bool,
+        ) -> f32 {
             let bounds = content_mask.bounds;
             let fade = content_mask.fade_out;
             let mut alpha = 1.0;
@@ -168,6 +181,9 @@ mod source {
             }
             if fade.bottom > 0.0 {
                 alpha *= saturate((bounds.origin.y + bounds.size.y - position.y) / fade.bottom);
+            }
+            if owns_cutout {
+                return alpha;
             }
             alpha * antialiased_coverage(rounded_rectangle_signed_distance(
                 position,
@@ -297,8 +313,19 @@ mod source {
         vec4f(0.0, 0.0, 0.0, 0.0)
     }
 
+    /// One-device-pixel coverage ramp for a signed distance field.
+    ///
+    /// The distance fields are evaluated in the primitive's local space, which is only the
+    /// screen space while no CSS transform is active and the scale is 1. Dividing by the
+    /// screen-space gradient (`dpdx`/`dpdy`) converts the distance to device pixels at the
+    /// current fragment, so scaled, rotated and skewed primitives keep a one-pixel transition
+    /// instead of a transition measured in local units (which reads as a jagged edge when the
+    /// primitive is scaled down, and as over-blurred when scaled up). For an untransformed
+    /// distance field the gradient magnitude is one and this is identical to `0.5 - d`.
     pub fn antialiased_coverage(signed_distance: f32) -> f32 {
-        saturate(PIXEL_ANTIALIAS_RADIUS - signed_distance)
+        let gradient = vec2f(dpdx(signed_distance), dpdy(signed_distance));
+        let device_distance = signed_distance / max(length(gradient), 1e-5);
+        saturate(PIXEL_ANTIALIAS_RADIUS - device_distance)
     }
 
     pub fn premultiply(color: Vec4f, coverage: f32) -> Vec4f {
