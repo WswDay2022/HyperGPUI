@@ -4680,6 +4680,56 @@ mod tests {
         Ok(())
     }
 
+    /// A rounded parent content mask must clip on its arc, not on the mask's bounding box: the
+    /// corner region outside the arc stays clear, the mask's straight edges keep their one-pixel
+    /// ramp, and the interior is untouched.
+    #[test]
+    fn hlsl_quad_rounded_content_mask_readback() -> Result<()> {
+        let Some((device, context)) = create_warp_device() else {
+            eprintln!("[rounded_mask] WARP device unavailable, skipping");
+            return Ok(());
+        };
+        let radius = ScaledPixels(8.0);
+        let quad = Quad {
+            bounds: bounds(
+                point(ScaledPixels(0.0), ScaledPixels(0.0)),
+                size(ScaledPixels(64.0), ScaledPixels(64.0)),
+            ),
+            content_mask: ContentMask {
+                bounds: bounds(
+                    point(ScaledPixels(8.25), ScaledPixels(8.25)),
+                    size(ScaledPixels(47.5), ScaledPixels(47.5)),
+                ),
+                corner_radii: Corners {
+                    top_left: radius,
+                    top_right: radius,
+                    bottom_right: radius,
+                    bottom_left: radius,
+                },
+                fade_out: Default::default(),
+            },
+            background: Background::from(rgba(0xff0000ff)),
+            ..Default::default()
+        };
+        let target = render_quad(&device, &context, quad, [0.0, 0.0, 0.0, 1.0])?;
+
+        let corner = read_pixel(&context, &target.texture, &target.staging, 9, 9)?;
+        assert_eq!(
+            corner[2], 0,
+            "the mask corner arc must clip the pixel outside the arc, got {corner:?}"
+        );
+        let inside_corner = read_pixel(&context, &target.texture, &target.staging, 13, 13)?;
+        assert_eq!(
+            inside_corner[2], 255,
+            "the mask interior must stay opaque, got {inside_corner:?}"
+        );
+        let edge = read_pixel(&context, &target.texture, &target.staging, 8, 32)?;
+        assert_red_close(edge, 191, "rounded-mask straight edge");
+        let center = read_pixel(&context, &target.texture, &target.staging, 32, 32)?;
+        assert_eq!(center[2], 255, "mask center must stay opaque, got {center:?}");
+        Ok(())
+    }
+
     /// A scaled primitive's edge transition must be one *device* pixel wide. The distance field
     /// is evaluated in local space, so a 0.5 scale halves a local-unit ramp; before the
     /// derivative-based coverage, the pixel just outside the intended edge on screen could still
