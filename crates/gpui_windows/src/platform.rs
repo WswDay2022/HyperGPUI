@@ -368,7 +368,12 @@ impl WindowsPlatform {
                                 &all_windows,
                                 &text_system,
                             ) {
-                                panic!("Device lost: {err}");
+                                // This used to panic, which silently killed the only thread
+                                // that re-invalidates windows every vblank: the window kept
+                                // accepting input and updating the cursor, but stopped
+                                // repainting until an unrelated event forced a redraw. Keep
+                                // the thread (and the retry next vsync) alive instead.
+                                log::error!("Device lost: {err}");
                             }
                         }
                     }
