@@ -1,10 +1,10 @@
 use crate::{CompositorGpuHint, WgpuAtlas, WgpuContext, WgpuDeviceRequirements};
 use bytemuck::{Pod, Zeroable};
 use hgpui::{
-    AtlasTextureId, BackdropFilter, Background, Bounds, ContentMask, Corners, DevicePixels,
+    AtlasTextureId, BackdropFilter, Background, Bounds, ContentMask, DevicePixels,
     FilterBoundary, GpuSpecs, MonochromeSprite, PaintSurface, Path, Point, PolychromeSprite,
     PrimitiveBatch, Quad, ScaledFilter, ScaledPixels, Scene, Shadow, Size, SubpixelSprite,
-    Underline, Edges, get_gamma_correction_ratios,
+    Underline, get_gamma_correction_ratios,
 };
 use log::warn;
 
@@ -1457,8 +1457,18 @@ impl WgpuRenderer {
             Self::create_path_intermediate(&resources.device, format, blur_width, blur_height);
         resources.blur_pong_texture = Some(t);
         resources.blur_pong_view = Some(v);
+        // Content-filter group targets are allocated on demand (`ensure_group_textures`):
+        // full-resolution targets for every nesting level would be a large fixed VRAM cost for
+        // apps that only use backdrop filters or no filters at all.
+    }
 
-        for _ in 0..MAX_FILTER_DEPTH {
+    /// Creates content-filter group targets up to `required` nesting levels.
+    fn ensure_group_textures(&mut self, required: usize) {
+        let format = self.surface_config.format;
+        let width = self.surface_config.width;
+        let height = self.surface_config.height;
+        let resources = self.resources_mut();
+        while resources.group_views.len() < required {
             let (t, v) = Self::create_path_intermediate(&resources.device, format, width, height);
             resources.group_textures.push(t);
             resources.group_views.push(v);
@@ -1605,8 +1615,11 @@ impl WgpuRenderer {
             }
         };
 
-        // Now that we know the surface is healthy, ensure intermediate textures exist
-        self.ensure_intermediate_textures();
+        // Path intermediates are full-resolution (plus an MSAA target); only allocate them on
+        // frames that actually paint vector paths.
+        if !scene.paths.is_empty() {
+            self.ensure_intermediate_textures();
+        }
 
         // Blur is the only thing that needs the offscreen scene texture; allocate it (and the
         // ping/pong/group targets) lazily so non-blurring apps pay no extra VRAM or blit.
@@ -1614,6 +1627,15 @@ impl WgpuRenderer {
             !scene.backdrop_filters.is_empty() || !scene.filter_boundaries.is_empty();
         if use_offscreen {
             self.ensure_blur_textures();
+            let required_groups = scene
+                .filter_boundaries
+                .iter()
+                .filter(|boundary| boundary.is_start)
+                .count()
+                .min(MAX_FILTER_DEPTH);
+            if required_groups > 0 {
+                self.ensure_group_textures(required_groups);
+            }
         }
 
         let frame_view = frame

@@ -97,10 +97,12 @@ struct DirectXResources {
     render_target: Option<ID3D11Texture2D>,
     render_target_view: Option<ID3D11RenderTargetView>,
 
-    // Path intermediate textures (with MSAA)
-    path_intermediate_texture: ID3D11Texture2D,
+    // Path intermediate textures (with MSAA). Allocated on the first path batch instead of at
+    // window creation: the 4x MSAA target is full-resolution and cost tens of MB even for apps
+    // that never paint a vector path.
+    path_intermediate_texture: Option<ID3D11Texture2D>,
     path_intermediate_srv: Option<ID3D11ShaderResourceView>,
-    path_intermediate_msaa_texture: ID3D11Texture2D,
+    path_intermediate_msaa_texture: Option<ID3D11Texture2D>,
     path_intermediate_msaa_view: Option<ID3D11RenderTargetView>,
 
     // Offscreen targets for blur filters (each is render-target + shader-resource).
@@ -116,6 +118,7 @@ struct DirectXResources {
 /// (indexed by isolation depth), up to [`MAX_FILTER_DEPTH`], so nested content blurs isolate
 /// correctly; deeper nests render inline.
 struct BlurResources {
+    #[expect(dead_code)]
     scene_color: ID3D11Texture2D,
     scene_color_rtv: Option<ID3D11RenderTargetView>,
     scene_color_srv: Option<ID3D11ShaderResourceView>,
@@ -128,7 +131,6 @@ struct BlurResources {
     pong_rtv: Option<ID3D11RenderTargetView>,
     pong_srv: Option<ID3D11ShaderResourceView>,
     // Kept alive for the lifetime of their views; indexed by isolation depth.
-    #[expect(dead_code)]
     groups: Vec<ID3D11Texture2D>,
     group_rtvs: Vec<Option<ID3D11RenderTargetView>>,
     group_srvs: Vec<Option<ID3D11ShaderResourceView>>,
@@ -142,15 +144,9 @@ impl BlurResources {
             create_color_target(device, width, height)?;
         let (ping, ping_rtv, ping_srv) = create_color_target(device, half_w, half_h)?;
         let (pong, pong_rtv, pong_srv) = create_color_target(device, half_w, half_h)?;
-        let mut groups = Vec::with_capacity(MAX_FILTER_DEPTH);
-        let mut group_rtvs = Vec::with_capacity(MAX_FILTER_DEPTH);
-        let mut group_srvs = Vec::with_capacity(MAX_FILTER_DEPTH);
-        for _ in 0..MAX_FILTER_DEPTH {
-            let (group, group_rtv, group_srv) = create_color_target(device, width, height)?;
-            groups.push(group);
-            group_rtvs.push(group_rtv);
-            group_srvs.push(group_srv);
-        }
+        // Content-filter group targets are full-resolution and only needed by nested `filter`
+        // subtrees. Allocate them lazily from `ensure_group_targets` instead of reserving two
+        // full-size targets for every window.
         Ok(Self {
             scene_color,
             scene_color_rtv,
@@ -161,10 +157,27 @@ impl BlurResources {
             pong,
             pong_rtv,
             pong_srv,
-            groups,
-            group_rtvs,
-            group_srvs,
+            groups: Vec::new(),
+            group_rtvs: Vec::new(),
+            group_srvs: Vec::new(),
         })
+    }
+
+    /// Creates content-filter group targets up to `required` nesting levels.
+    fn ensure_group_targets(
+        &mut self,
+        device: &ID3D11Device,
+        width: u32,
+        height: u32,
+        required: usize,
+    ) -> Result<()> {
+        while self.groups.len() < required {
+            let (group, group_rtv, group_srv) = create_color_target(device, width, height)?;
+            self.groups.push(group);
+            self.group_rtvs.push(group_rtv);
+            self.group_srvs.push(group_srv);
+        }
+        Ok(())
     }
 }
 
@@ -478,6 +491,38 @@ impl DirectXRenderer {
         // otherwise render straight to the swapchain exactly as before.
         let use_offscreen =
             !scene.backdrop_filters.is_empty() || !scene.filter_boundaries.is_empty();
+
+        // Allocate only the content-filter group targets this frame actually uses. Each is a
+        // full-resolution color target; reserving the maximum depth for every window was a
+        // significant fixed VRAM cost for apps that only use backdrop filters.
+        if use_offscreen {
+            let required_groups = scene
+                .filter_boundaries
+                .iter()
+                .filter(|boundary| boundary.is_start)
+                .count()
+                .min(MAX_FILTER_DEPTH);
+            if required_groups > 0 {
+                let device = self
+                    .devices
+                    .as_ref()
+                    .context("devices missing")?
+                    .device
+                    .clone();
+                let (width, height) = {
+                    let resources = self.resources.as_ref().context("resources missing")?;
+                    (
+                        resources.viewport.Width.max(1.0) as u32,
+                        resources.viewport.Height.max(1.0) as u32,
+                    )
+                };
+                self.resources
+                    .as_mut()
+                    .context("resources missing")?
+                    .blur
+                    .ensure_group_targets(&device, width, height, required_groups)?;
+            }
+        }
 
         // Clone the views we need (AddRef) so the loop can rebind render targets without holding a
         // borrow of `self` across the `&mut self` draw_* calls.
@@ -832,24 +877,48 @@ impl DirectXRenderer {
         )
     }
 
+    /// Allocates the path intermediate targets on first use (or after a resize). The MSAA target
+    /// is full-resolution and would otherwise cost tens of MB for apps that never paint paths.
+    fn ensure_path_intermediate_textures(&mut self) -> Result<()> {
+        let devices = self.devices.as_ref().context("devices missing")?;
+        let resources = self.resources.as_mut().context("resources missing")?;
+        if resources.path_intermediate_texture.is_some() {
+            return Ok(());
+        }
+        let width = resources.viewport.Width.max(1.0) as u32;
+        let height = resources.viewport.Height.max(1.0) as u32;
+        let (texture, srv) = create_path_intermediate_texture(&devices.device, width, height)?;
+        let (msaa_texture, msaa_view) =
+            create_path_intermediate_msaa_texture_and_view(&devices.device, width, height)?;
+        resources.path_intermediate_texture = Some(texture);
+        resources.path_intermediate_srv = srv;
+        resources.path_intermediate_msaa_texture = Some(msaa_texture);
+        resources.path_intermediate_msaa_view = msaa_view;
+        Ok(())
+    }
+
     fn draw_paths_to_intermediate(&mut self, paths: &[Path<ScaledPixels>]) -> Result<()> {
         if paths.is_empty() {
             return Ok(());
         }
+        self.ensure_path_intermediate_textures()?;
 
         let devices = self.devices.as_ref().context("devices missing")?;
         let resources = self.resources.as_ref().context("resources missing")?;
+        let msaa_view = resources
+            .path_intermediate_msaa_view
+            .as_ref()
+            .context("path intermediate MSAA view missing")?;
+        let msaa_target = resources.path_intermediate_msaa_view.clone();
         // Clear intermediate MSAA texture
         unsafe {
-            devices.device_context.ClearRenderTargetView(
-                resources.path_intermediate_msaa_view.as_ref().unwrap(),
-                &[0.0; 4],
-            );
+            devices
+                .device_context
+                .ClearRenderTargetView(msaa_view, &[0.0; 4]);
             // Set intermediate MSAA texture as render target
-            devices.device_context.OMSetRenderTargets(
-                Some(slice::from_ref(&resources.path_intermediate_msaa_view)),
-                None,
-            );
+            devices
+                .device_context
+                .OMSetRenderTargets(Some(slice::from_ref(&msaa_target)), None);
         }
 
         // Collect all vertices and sprites for a single draw call
@@ -883,11 +952,19 @@ impl DirectXRenderer {
         )?;
 
         // Resolve MSAA to non-MSAA intermediate texture
+        let intermediate = resources
+            .path_intermediate_texture
+            .as_ref()
+            .context("path intermediate texture missing")?;
+        let msaa_texture = resources
+            .path_intermediate_msaa_texture
+            .as_ref()
+            .context("path intermediate MSAA texture missing")?;
         unsafe {
             devices.device_context.ResolveSubresource(
-                &resources.path_intermediate_texture,
+                intermediate,
                 0,
-                &resources.path_intermediate_msaa_texture,
+                msaa_texture,
                 0,
                 RENDER_TARGET_FORMAT,
             );
@@ -1336,15 +1413,8 @@ impl DirectXResources {
             )?
         };
 
-        let (
-            render_target,
-            render_target_view,
-            path_intermediate_texture,
-            path_intermediate_srv,
-            path_intermediate_msaa_texture,
-            path_intermediate_msaa_view,
-            viewport,
-        ) = create_resources(devices, &swap_chain, width, height)?;
+        let (render_target, render_target_view, viewport) =
+            create_resources(devices, &swap_chain, width, height)?;
         set_rasterizer_state(&devices.device, &devices.device_context)?;
         let blur = BlurResources::new(&devices.device, width, height)?;
 
@@ -1352,10 +1422,10 @@ impl DirectXResources {
             swap_chain,
             render_target: Some(render_target),
             render_target_view,
-            path_intermediate_texture,
-            path_intermediate_msaa_texture,
-            path_intermediate_msaa_view,
-            path_intermediate_srv,
+            path_intermediate_texture: None,
+            path_intermediate_msaa_texture: None,
+            path_intermediate_msaa_view: None,
+            path_intermediate_srv: None,
             blur,
             viewport,
         })
@@ -1368,21 +1438,15 @@ impl DirectXResources {
         width: u32,
         height: u32,
     ) -> Result<()> {
-        let (
-            render_target,
-            render_target_view,
-            path_intermediate_texture,
-            path_intermediate_srv,
-            path_intermediate_msaa_texture,
-            path_intermediate_msaa_view,
-            viewport,
-        ) = create_resources(devices, &self.swap_chain, width, height)?;
+        let (render_target, render_target_view, viewport) =
+            create_resources(devices, &self.swap_chain, width, height)?;
         self.render_target = Some(render_target);
         self.render_target_view = render_target_view;
-        self.path_intermediate_texture = path_intermediate_texture;
-        self.path_intermediate_msaa_texture = path_intermediate_msaa_texture;
-        self.path_intermediate_msaa_view = path_intermediate_msaa_view;
-        self.path_intermediate_srv = path_intermediate_srv;
+        // Lazily recreated at the new size on the next path batch.
+        self.path_intermediate_texture = None;
+        self.path_intermediate_msaa_texture = None;
+        self.path_intermediate_msaa_view = None;
+        self.path_intermediate_srv = None;
         self.blur = BlurResources::new(&devices.device, width, height)?;
         self.viewport = viewport;
         Ok(())
@@ -2063,28 +2127,12 @@ fn create_resources(
 ) -> Result<(
     ID3D11Texture2D,
     Option<ID3D11RenderTargetView>,
-    ID3D11Texture2D,
-    Option<ID3D11ShaderResourceView>,
-    ID3D11Texture2D,
-    Option<ID3D11RenderTargetView>,
     D3D11_VIEWPORT,
 )> {
     let (render_target, render_target_view) =
         create_render_target_and_its_view(swap_chain, &devices.device)?;
-    let (path_intermediate_texture, path_intermediate_srv) =
-        create_path_intermediate_texture(&devices.device, width, height)?;
-    let (path_intermediate_msaa_texture, path_intermediate_msaa_view) =
-        create_path_intermediate_msaa_texture_and_view(&devices.device, width, height)?;
     let viewport = set_viewport(&devices.device_context, width as f32, height as f32);
-    Ok((
-        render_target,
-        render_target_view,
-        path_intermediate_texture,
-        path_intermediate_srv,
-        path_intermediate_msaa_texture,
-        path_intermediate_msaa_view,
-        viewport,
-    ))
+    Ok((render_target, render_target_view, viewport))
 }
 
 #[inline]
