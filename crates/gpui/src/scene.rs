@@ -69,6 +69,16 @@ pub struct Scene {
     /// shader, so descendants inset from the window corner (titlebar buttons, for example) are
     /// still clipped by the real arc instead of the lossy intersected mask.
     pub window_mask: Option<ContentMask<ScaledPixels>>,
+    /// Every distinct chain of nested content masks used by this frame, flattened one after
+    /// another. Primitives reference a `(offset, len)` span in this arena through their
+    /// `mask_chain` field; fragment shaders evaluate the whole chain (`max` of the individual
+    /// rounded-rect signed distances) instead of the single lossy intersected mask. A chain
+    /// stores the *raw* masks of every `overflow_hidden` ancestor, so an inset child is still
+    /// clipped by its parent's real corner arc.
+    pub mask_chains: Vec<ContentMask<ScaledPixels>>,
+    /// `(offset, len)` of each distinct chain inside [`Scene::mask_chains`]. Only used for
+    /// deduplication while painting; it is not uploaded to the GPU.
+    mask_chain_spans: Vec<(usize, usize)>,
 }
 
 #[expect(missing_docs)]
@@ -88,6 +98,36 @@ impl Scene {
         self.backdrop_filters.clear();
         self.filter_boundaries.clear();
         self.window_mask = None;
+        self.mask_chains.clear();
+        self.mask_chain_spans.clear();
+    }
+
+    /// Interns a chain of raw content masks and returns the reference stored on primitives.
+    ///
+    /// The reference packs `len` in the top byte and the arena offset in the low 24 bits, so
+    /// zero means "no clip chain" and the shader can loop over exactly `len` masks. Chains are
+    /// deduplicated by content: most primitives in a frame share the same ancestor stack.
+    pub fn intern_mask_chain(&mut self, masks: &[ContentMask<ScaledPixels>]) -> u32 {
+        if masks.is_empty() {
+            return 0;
+        }
+        for &(offset, len) in &self.mask_chain_spans {
+            if len == masks.len() && self.mask_chains[offset..offset + len] == *masks {
+                return Self::pack_mask_chain(offset, len);
+            }
+        }
+        let offset = self.mask_chains.len();
+        self.mask_chains.extend_from_slice(masks);
+        self.mask_chain_spans.push((offset, masks.len()));
+        Self::pack_mask_chain(offset, masks.len())
+    }
+
+    fn pack_mask_chain(offset: usize, len: usize) -> u32 {
+        assert!(
+            offset <= 0x00FF_FFFF && len <= 0xFF,
+            "content-mask chain arena overflow (offset {offset}, len {len})"
+        );
+        ((len as u32) << 24) | offset as u32
     }
 
     pub fn len(&self) -> usize {
@@ -208,11 +248,39 @@ impl Scene {
     pub fn replay(&mut self, range: Range<usize>, prev_scene: &Scene) {
         for operation in &prev_scene.paint_operations[range] {
             match operation {
-                PaintOperation::Primitive(primitive) => self.insert_primitive(primitive.clone()),
+                PaintOperation::Primitive(primitive) => {
+                    let mut primitive = primitive.clone();
+                    // A replayed primitive still carries the previous frame's chain reference;
+                    // the new frame's arena starts empty, so copy its masks across and remap.
+                    self.remap_mask_chain(&mut primitive, prev_scene);
+                    self.insert_primitive(primitive)
+                }
                 PaintOperation::StartLayer(bounds) => self.push_layer(*bounds),
                 PaintOperation::EndLayer => self.pop_layer(),
             }
         }
+    }
+
+    fn remap_mask_chain(&mut self, primitive: &mut Primitive, prev_scene: &Scene) {
+        let chain = match primitive {
+            Primitive::Shadow(shadow) => &mut shadow.mask_chain,
+            Primitive::Quad(quad) => &mut quad.mask_chain,
+            Primitive::Path(path) => &mut path.mask_chain,
+            Primitive::Underline(underline) => &mut underline.mask_chain,
+            Primitive::MonochromeSprite(sprite) => &mut sprite.mask_chain,
+            Primitive::SubpixelSprite(sprite) => &mut sprite.mask_chain,
+            Primitive::PolychromeSprite(sprite) => &mut sprite.mask_chain,
+            Primitive::Surface(_) => return,
+            Primitive::BackdropFilter(filter) => &mut filter.mask_chain,
+            Primitive::FilterBoundary(boundary) => &mut boundary.mask_chain,
+        };
+        let old = *chain;
+        if old == 0 {
+            return;
+        }
+        let len = (old >> 24) as usize;
+        let offset = (old & 0x00FF_FFFF) as usize;
+        *chain = self.intern_mask_chain(&prev_scene.mask_chains[offset..offset + len]);
     }
 
     pub fn finish(&mut self) {
@@ -782,7 +850,9 @@ pub struct Quad {
     pub corner_radii: Corners<ScaledPixels>,
     pub border_widths: Edges<ScaledPixels>,
     pub corner_smoothing: f32,
-    pub padding: u32,
+    /// Reference to the clip chain this quad was painted under (see [`Scene::mask_chains`]);
+    /// `0` means no chain.
+    pub mask_chain: u32,
     /// Transform applied at draw time, around the element's center (defaults to the identity).
     pub transformation: TransformationMatrix,
 }
@@ -801,7 +871,7 @@ impl Default for Quad {
             corner_radii: Default::default(),
             border_widths: Default::default(),
             corner_smoothing: 0.0,
-            padding: 0,
+            mask_chain: 0,
             transformation: TransformationMatrix::default(),
         }
     }
@@ -818,7 +888,8 @@ impl From<Quad> for Primitive {
 #[expect(missing_docs)]
 pub struct Underline {
     pub order: DrawOrder,
-    pub padding: u32,
+    /// Reference to the clip chain (see [`Scene::mask_chains`]); `0` means no chain.
+    pub mask_chain: u32,
 
     pub bounds: Bounds<ScaledPixels>,
     pub content_mask: ContentMask<ScaledPixels>,
@@ -858,6 +929,13 @@ pub struct Shadow {
     /// 0 = drop shadow (rendered outside the element), 1 = inset shadow (rendered inside).
     pub inset: u32,
     pub corner_smoothing: f32,
+    /// Reference to the clip chain (see [`Scene::mask_chains`]); `0` means no chain.
+    pub mask_chain: u32,
+    /// Pads the stride to 224 bytes so every instance address stays 16-byte aligned, as D3D11
+    /// raw-buffer views require. See [`Underline::padding0`].
+    pub padding0: u32,
+    pub padding1: u32,
+    pub padding2: u32,
 }
 
 impl From<Shadow> for Primitive {
@@ -885,6 +963,8 @@ pub struct BackdropFilter {
     pub filters: SmallVec<[ScaledFilter; 4]>,
     /// Element opacity captured at paint time, multiplied into the composited result.
     pub opacity: f32,
+    /// Reference to the clip chain (see [`Scene::mask_chains`]); `0` means no chain.
+    pub mask_chain: u32,
 }
 
 impl From<BackdropFilter> for Primitive {
@@ -911,6 +991,8 @@ pub struct FilterBoundary {
     pub opacity: f32,
     /// `true` for the start marker (opens the group), `false` for the end marker (closes it).
     pub is_start: bool,
+    /// Reference to the clip chain (see [`Scene::mask_chains`]); `0` means no chain.
+    pub mask_chain: u32,
 }
 
 impl From<FilterBoundary> for Primitive {
@@ -1105,7 +1187,8 @@ impl Default for TransformationMatrix {
 #[expect(missing_docs)]
 pub struct MonochromeSprite {
     pub order: DrawOrder,
-    pub padding: u32,
+    /// Reference to the clip chain (see [`Scene::mask_chains`]); `0` means no chain.
+    pub mask_chain: u32,
     pub bounds: Bounds<ScaledPixels>,
     pub content_mask: ContentMask<ScaledPixels>,
     pub color: SceneHsla,
@@ -1124,7 +1207,8 @@ impl From<MonochromeSprite> for Primitive {
 #[expect(missing_docs)]
 pub struct SubpixelSprite {
     pub order: DrawOrder,
-    pub padding: u32,
+    /// Reference to the clip chain (see [`Scene::mask_chains`]); `0` means no chain.
+    pub mask_chain: u32,
 
     pub bounds: Bounds<ScaledPixels>,
     pub content_mask: ContentMask<ScaledPixels>,
@@ -1155,9 +1239,10 @@ pub struct PolychromeSprite {
     /// Only the vertex positions are transformed; the fragment shader samples
     /// the tile via `local_position` in the untransformed (pre-paint) space.
     pub transformation: TransformationMatrix,
+    /// Reference to the clip chain (see [`Scene::mask_chains`]); `0` means no chain.
+    pub mask_chain: u32,
     /// Pads the stride to 160 bytes so every instance address is 16-byte aligned, as D3D11
     /// raw-buffer views require. See [`Underline::padding0`].
-    pub padding0: u32,
     pub padding1: u32,
 }
 
@@ -1201,6 +1286,8 @@ pub struct Path<P: Clone + Debug + Default + PartialEq> {
     pub content_mask: ContentMask<P>,
     pub vertices: Vec<PathVertex<P>>,
     pub color: Background,
+    /// Reference to the clip chain (see [`Scene::mask_chains`]); `0` means no chain.
+    pub mask_chain: u32,
     start: Point<P>,
     current: Point<P>,
     contour_count: usize,
@@ -1221,6 +1308,7 @@ impl Path<Pixels> {
             },
             content_mask: Default::default(),
             color: Default::default(),
+            mask_chain: 0,
             contour_count: 0,
         }
     }
@@ -1241,6 +1329,7 @@ impl Path<Pixels> {
             current: self.current.scale(factor),
             contour_count: self.contour_count,
             color: self.color,
+            mask_chain: self.mask_chain,
         }
     }
 
@@ -1431,6 +1520,7 @@ mod tests {
             filters: smallvec::smallvec![ScaledFilter::Blur(sp(8.0))],
             opacity: 1.0,
             is_start,
+            mask_chain: 0,
         }
     }
 

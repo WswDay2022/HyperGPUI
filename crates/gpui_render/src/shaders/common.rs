@@ -156,6 +156,11 @@ mod source {
         pub fade_out: Edges,
     }
 
+    // Flat arena of every distinct ancestor-mask chain used by the frame (`Scene::mask_chains`).
+    // A primitive's `mask_chain` field packs the chain length in the top byte and its offset into
+    // this arena in the low 24 bits; zero means "no chain".
+    storage!(group(0), binding(2), CONTENT_MASKS: RuntimeArray<ContentMask>);
+
     impl ContentMask {
         /// The mask's coverage at the given window-space position: 1 inside,
         /// 0 outside, and a linear ramp to 0 across each edge's fade distance.
@@ -228,6 +233,15 @@ mod source {
                 && corners.top_right == 0.0
                 && corners.bottom_right == 0.0
                 && corners.bottom_left == 0.0
+        }
+    }
+
+    pub fn zero_corners() -> Corners {
+        Corners {
+            top_left: 0.0,
+            top_right: 0.0,
+            bottom_right: 0.0,
+            bottom_left: 0.0,
         }
     }
 
@@ -964,6 +978,81 @@ mod source {
             );
         }
         alpha
+    }
+
+    /// Whether `mask` is exactly the primitive's own outline.
+    pub fn mask_is_own_cutout(mask: ContentMask, own_bounds: Bounds, own_radii: Corners) -> bool {
+        same_origin(mask.bounds, own_bounds)
+            && same_size(mask.bounds, own_bounds)
+            && mask.corner_radii.top_left == own_radii.top_left
+            && mask.corner_radii.top_right == own_radii.top_right
+            && mask.corner_radii.bottom_left == own_radii.bottom_left
+            && mask.corner_radii.bottom_right == own_radii.bottom_right
+    }
+
+    /// Exact clip coverage at `position` for a chain of nested content masks.
+    ///
+    /// Every raw ancestor mask (and the window's own shaped clip) contributes its rounded-rect
+    /// signed distance; the clip region is their intersection, so the distances combine with
+    /// `max` and antialiasing is applied **once** to the combined field. This is what preserves
+    /// a parent's corner arc when a child is inset from it — the CPU-side `intersect` can only
+    /// approximate that arc with a single rounded rectangle.
+    ///
+    /// `owns_cutout` lets a primitive that already antialiases its own outline (a rounded quad,
+    /// sprite or shadow) exclude masks identical to that outline. Such a mask carries no extra
+    /// clipping information, and multiplying its half-covered edge pixel with the primitive's
+    /// own half-covered pixel would darken the rim (0.5 × 0.5).
+    pub fn content_mask_chain_alpha(
+        chain: u32,
+        position: Vec2f,
+        single_mask: ContentMask,
+        // Position at which the legacy single mask is evaluated (local space for a quad whose
+        // mask is its own outline, scene space otherwise).
+        single_mask_position: Vec2f,
+        own_bounds: Bounds,
+        own_radii: Corners,
+        owns_cutout: bool,
+    ) -> f32 {
+        let count = chain >> 24u32;
+        let offset = chain & 16777215u32;
+        let window_active = get!(GLOBALS).window_mask_params.x >= 0.5;
+        if count == 0u32 {
+            // No chain: either no clip scope is active at all, or this is content built outside
+            // the normal painter (tests / backends that do not upload the arena). Fall back to
+            // the single pre-intersected mask, which is the legacy behaviour.
+            return ContentMask::alpha_with_own(single_mask, single_mask_position, owns_cutout)
+                * window_mask_alpha(position);
+        }
+
+        let mut fade = 1.0;
+        // `-1e30` is far inside every mask; if every mask is skipped as the primitive's own
+        // cutout (or no mask is bound) the coverage stays exactly 1.
+        let mut distance = -1.0e30;
+        if window_active {
+            let mask = get!(GLOBALS).window_mask;
+            fade = fade * content_mask_fade(mask.bounds, mask.fade_out, position);
+            if !(owns_cutout && mask_is_own_cutout(mask, own_bounds, own_radii)) {
+                distance = max(
+                    distance,
+                    rounded_rectangle_signed_distance(position, mask.bounds, mask.corner_radii),
+                );
+            }
+        }
+
+        let mut index = 0u32;
+        while index < count {
+            let mask = get!(CONTENT_MASKS)[(offset + index) as usize];
+            fade = fade * content_mask_fade(mask.bounds, mask.fade_out, position);
+            if !(owns_cutout && mask_is_own_cutout(mask, own_bounds, own_radii)) {
+                distance = max(
+                    distance,
+                    rounded_rectangle_signed_distance(position, mask.bounds, mask.corner_radii),
+                );
+            }
+            index = index + 1u32;
+        }
+
+        antialiased_coverage(distance) * fade
     }
 
     pub fn content_mask_coverage(

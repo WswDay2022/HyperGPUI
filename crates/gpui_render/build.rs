@@ -211,11 +211,20 @@ fn write_hlsl(
     let mut binding_map = naga_old::back::hlsl::BindingMap::default();
     for (_, variable) in module.global_variables.iter() {
         if let Some(binding) = &variable.binding {
+            // Group 0 holds the globals + font uniforms (b0/b1) and the content-mask chain
+            // arena. The arena is a storage buffer (t register); t2/t3 are already taken by the
+            // per-draw instance buffer and atlas textures, so give it the next free texture
+            // register instead of the default `binding.binding`.
+            let register = if variable.name.as_deref() == Some("CONTENT_MASKS") {
+                shaders::interface::CONTENT_MASKS_TEXTURE_REGISTER
+            } else {
+                binding.binding + if binding.group == 0 { 0 } else { 2 }
+            };
             binding_map.insert(
                 binding.clone(),
                 naga_old::back::hlsl::BindTarget {
                     space: 0,
-                    register: binding.binding + if binding.group == 0 { 0 } else { 2 },
+                    register,
                     ..Default::default()
                 },
             );
@@ -282,8 +291,15 @@ fn write_msl(module: &naga::Module, info: &naga::valid::ModuleInfo, label: &str)
         };
         let target = match variable.space {
             naga::AddressSpace::Uniform | naga::AddressSpace::Storage { .. } => {
+                // `buffer(2)` is the per-draw instance buffer; the content-mask chain arena is
+                // shared by every pipeline for the whole frame, so it lives in a dedicated slot.
+                let buffer = if variable.name.as_deref() == Some("CONTENT_MASKS") {
+                    shaders::interface::CONTENT_MASKS_MSL_BUFFER
+                } else {
+                    (binding.binding + if binding.group == 0 { 0 } else { 2 }) as u8
+                };
                 naga::back::msl::BindTarget {
-                    buffer: Some((binding.binding + if binding.group == 0 { 0 } else { 2 }) as u8),
+                    buffer: Some(buffer),
                     ..Default::default()
                 }
             }

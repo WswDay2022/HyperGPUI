@@ -1390,6 +1390,12 @@ impl MetalRenderer {
                 content_mask: path.content_mask.bounds,
                 content_mask_corner_radii: path.content_mask.corner_radii,
                 content_mask_fade_out: path.content_mask.fade_out,
+                // TODO(macos): chains are disabled until the Metal backend binds the arena;
+                // the shader falls back to the single mask when this is zero.
+                mask_chain: path.mask_chain,
+                padding0: 0,
+                padding1: 0,
+                padding2: 0,
             }));
         }
         let vertices_bytes_len = mem::size_of_val(vertices.as_slice());

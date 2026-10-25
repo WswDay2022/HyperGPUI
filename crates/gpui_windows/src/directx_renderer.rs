@@ -198,6 +198,11 @@ struct DirectXGlobalElements {
     global_params_buffer: Option<ID3D11Buffer>,
     font_params_buffer: Option<ID3D11Buffer>,
     draw_constants_buffer: Option<ID3D11Buffer>,
+    /// Per-frame arena of every content-mask chain (see `Scene::mask_chains`). Bound as a raw
+    /// buffer at `t5` for the whole frame; primitives index it through their `mask_chain` field.
+    mask_buffer: Option<ID3D11Buffer>,
+    mask_view: Option<ID3D11ShaderResourceView>,
+    mask_capacity: usize,
     sampler: Option<ID3D11SamplerState>,
     /// Clamp-addressed sampler used by the blur passes: gaussian taps may leave the texture at
     /// the window edges, and must clamp like CSS rather than wrap around to the far side.
@@ -521,6 +526,16 @@ impl DirectXRenderer {
             .device_context
             .clone();
 
+        // The content-mask chain arena is shared by every primitive pipeline for the whole
+        // frame; no other pass binds t5, so one bind here is enough.
+        if let Some(mask_view) = self.globals.mask_view.clone() {
+            let binding = Some(mask_view);
+            unsafe {
+                ctx.PSSetShaderResources(5, Some(slice::from_ref(&binding)));
+                ctx.VSSetShaderResources(5, Some(slice::from_ref(&binding)));
+            }
+        }
+
         if use_offscreen {
             unsafe {
                 if let Some(rtv) = scene_rtv.as_ref() {
@@ -590,6 +605,7 @@ impl DirectXRenderer {
                                 &current_rtv,
                                 filter.bounds,
                                 filter.content_mask,
+                                filter.mask_chain,
                                 corner_radii_array(filter.corner_radii),
                                 max_blur_radius(&filter.filters),
                                 filter.opacity,
@@ -634,6 +650,7 @@ impl DirectXRenderer {
                                 &parent_rtv,
                                 boundary.bounds,
                                 boundary.content_mask,
+                                boundary.mask_chain,
                                 corner_radii_array(boundary.corner_radii),
                                 max_blur_radius(&boundary.filters),
                                 boundary.opacity,
@@ -736,6 +753,12 @@ impl DirectXRenderer {
 
     fn upload_scene_buffers(&mut self, scene: &Scene) -> Result<()> {
         let devices = self.devices.as_ref().context("devices missing")?;
+
+        self.globals.update_content_masks(
+            &devices.device,
+            &devices.device_context,
+            &scene.mask_chains,
+        )?;
 
         if !scene.shadows.is_empty() {
             self.pipelines.shadow_pipeline.update_buffer(
@@ -874,6 +897,10 @@ impl DirectXRenderer {
                 content_mask: path.content_mask.bounds,
                 content_mask_corner_radii: path.content_mask.corner_radii,
                 content_mask_fade_out: path.content_mask.fade_out,
+                mask_chain: path.mask_chain,
+                padding0: 0,
+                padding1: 0,
+                padding2: 0,
             }));
         }
 
@@ -1125,6 +1152,7 @@ impl DirectXRenderer {
         target_rtv: &Option<ID3D11RenderTargetView>,
         bounds: Bounds<ScaledPixels>,
         content_mask: ContentMask<ScaledPixels>,
+        mask_chain: u32,
         corner_radii: [f32; 4],
         blur_radius: f32,
         opacity: f32,
@@ -1238,6 +1266,7 @@ impl DirectXRenderer {
                 corner_radii,
                 opacity,
                 clip_rounded: if clip_rounded { 1.0 } else { 0.0 },
+                mask_chain,
                 ..Default::default()
             },
             &full_vp,
@@ -1605,13 +1634,63 @@ impl DirectXGlobalElements {
 
         let blur_sampler = create_blur_sampler(device)?;
 
+        // Always keep one mask resident so the binding is valid even on frames with no clips.
+        let mask_capacity = 8;
+        let mask_buffer = create_buffer(
+            device,
+            std::mem::size_of::<ContentMask<ScaledPixels>>(),
+            mask_capacity,
+        )?;
+        let mask_view = create_buffer_view(device, &mask_buffer)?;
+
         Ok(Self {
             global_params_buffer,
             font_params_buffer: Some(font_params_buffer),
             draw_constants_buffer: Some(draw_constants_buffer),
+            mask_buffer: Some(mask_buffer),
+            mask_view,
+            mask_capacity,
             sampler,
             blur_sampler,
         })
+    }
+
+    /// Uploads the frame's content-mask chain arena (`Scene::mask_chains`) into the raw buffer
+    /// indexed by every primitive's `mask_chain` field.
+    fn update_content_masks(
+        &mut self,
+        device: &ID3D11Device,
+        device_context: &ID3D11DeviceContext,
+        masks: &[ContentMask<ScaledPixels>],
+    ) -> Result<()> {
+        let capacity = self.mask_capacity.max(1);
+        if masks.len() > capacity {
+            let new_capacity = masks.len().next_power_of_two();
+            let buffer = create_buffer(
+                device,
+                std::mem::size_of::<ContentMask<ScaledPixels>>(),
+                new_capacity,
+            )?;
+            let view = create_buffer_view(device, &buffer)?;
+            self.mask_buffer = Some(buffer);
+            self.mask_view = view;
+            self.mask_capacity = new_capacity;
+        }
+        let buffer = self.mask_buffer.as_ref().context("mask buffer missing")?;
+        let mut data = masks.to_vec();
+        if data.is_empty() {
+            // A sentinel that covers the whole scene; chain reference 0 never indexes it, but a
+            // valid first element keeps accidental reads from clipping everything away.
+            data.push(ContentMask {
+                bounds: Bounds {
+                    origin: point(ScaledPixels(-1.0e9), ScaledPixels(-1.0e9)),
+                    size: size(ScaledPixels(2.0e9), ScaledPixels(2.0e9)),
+                },
+                corner_radii: Default::default(),
+                fade_out: Default::default(),
+            });
+        }
+        update_buffer(device_context, buffer, &data)
     }
 }
 
@@ -1687,6 +1766,11 @@ struct BlurParams {
     /// origin, so a stationary element blurs identically at every window size); 0.0 = 1:1 copy
     /// (the scene blit, which must not downsample). Downsample pass only.
     downsample: f32,
+    /// Packed reference into the frame's content-mask chain arena.
+    mask_chain: u32,
+    padding0: u32,
+    padding1: u32,
+    padding2: u32,
 }
 
 impl Default for BlurParams {
@@ -1704,6 +1788,10 @@ impl Default for BlurParams {
             tap_step: 0.0,
             clip_rounded: 0.0,
             downsample: 0.0,
+            mask_chain: 0,
+            padding0: 0,
+            padding1: 0,
+            padding2: 0,
         }
     }
 }
@@ -1942,6 +2030,11 @@ struct PathRasterizationSprite {
     content_mask: Bounds<ScaledPixels>,
     content_mask_corner_radii: Corners<ScaledPixels>,
     content_mask_fade_out: Edges<ScaledPixels>,
+    /// Packed reference into the frame's content-mask chain arena.
+    mask_chain: u32,
+    padding0: u32,
+    padding1: u32,
+    padding2: u32,
 }
 
 #[derive(Clone, Copy)]
@@ -2748,7 +2841,7 @@ mod tests {
     use super::{
         create_blend_state, create_blend_state_for_path_rasterization,
         create_blend_state_for_path_sprite, create_blend_state_no_blend,
-        create_buffer, create_buffer_view_range, corner_radii_array, create_blur_sampler,
+        create_buffer, create_buffer_view, create_buffer_view_range, corner_radii_array, create_blur_sampler,
         create_color_target, create_constant_buffer,
         create_fragment_shader, create_vertex_shader, set_pipeline_state, update_buffer,
         BlurParams,
@@ -4173,12 +4266,12 @@ mod tests {
     }
 
     /// The path instance struct must match the HLSL `PathRasterizationSprite` offsets exactly
-    /// (FXC reports 0/8/16/96/112/128/144, total 160). A drift here silently misreads the mask
-    /// and the gradient box for every path vertex.
+    /// (FXC reports 0/8/16/96/112/128/144/160, total 176). A drift here silently misreads the
+    /// mask, the gradient box and the clip chain for every path vertex.
     #[test]
     fn path_rasterization_sprite_layout() {
         use std::mem::{offset_of, size_of};
-        assert_eq!(size_of::<PathRasterizationSprite>(), 160);
+        assert_eq!(size_of::<PathRasterizationSprite>(), 176);
         assert_eq!(offset_of!(PathRasterizationSprite, xy_position), 0);
         assert_eq!(offset_of!(PathRasterizationSprite, curve_position), 8);
         assert_eq!(offset_of!(PathRasterizationSprite, color), 16);
@@ -4192,6 +4285,7 @@ mod tests {
             offset_of!(PathRasterizationSprite, content_mask_fade_out),
             144
         );
+        assert_eq!(offset_of!(PathRasterizationSprite, mask_chain), 160);
     }
 
     // --- Antialiasing / clipping precision tests -------------------------------------------
@@ -4291,6 +4385,8 @@ mod tests {
         _pipeline: PipelineState<Quad>,
         _globals: [Option<ID3D11Buffer>; 4],
         _rtv: ID3D11RenderTargetView,
+        _mask_buffer: Option<ID3D11Buffer>,
+        _mask_view: Option<ID3D11ShaderResourceView>,
     }
 
     fn render_quad(
@@ -4317,6 +4413,51 @@ mod tests {
             _pipeline: pipeline,
             _globals: globals,
             _rtv: rtv,
+            _mask_buffer: None,
+            _mask_view: None,
+        })
+    }
+
+    /// Renders a quad with a real content-mask chain bound at `t5`, exactly like the production
+    /// renderer (the chain arena is one raw structured buffer indexed by each instance).
+    fn render_quad_with_mask_chain(
+        device: &ID3D11Device,
+        context: &ID3D11DeviceContext,
+        quad: Quad,
+        masks: &[ContentMask<ScaledPixels>],
+        clear: [f32; 4],
+    ) -> Result<QuadTarget> {
+        let (texture, rtv, staging) = make_render_target(device)?;
+        let globals = install_globals(device, context)?;
+        let blend = create_blend_state(device)?;
+        let mut pipeline =
+            PipelineState::<Quad>::new(device, "test_mask_chain", ShaderModule::Quad, 4, blend)?;
+        pipeline.update_buffer(device, context, &[quad])?;
+
+        let mask_buffer = create_buffer(
+            device,
+            std::mem::size_of::<ContentMask<ScaledPixels>>(),
+            masks.len().max(1),
+        )?;
+        update_buffer(context, &mask_buffer, masks)?;
+        let mask_view = create_buffer_view(device, &mask_buffer)?;
+
+        unsafe {
+            context.ClearRenderTargetView(&rtv, &clear);
+            context.OMSetRenderTargets(Some(slice::from_ref(&Some(rtv.clone()))), None);
+            context.PSSetShaderResources(5, Some(slice::from_ref(&mask_view)));
+            context.VSSetShaderResources(5, Some(slice::from_ref(&mask_view)));
+        }
+        pipeline.draw_range(device, context, &[test_viewport()], &globals, 4, 0, 1)?;
+        dump_device_errors(device);
+        Ok(QuadTarget {
+            texture,
+            staging,
+            _pipeline: pipeline,
+            _globals: globals,
+            _rtv: rtv,
+            _mask_buffer: Some(mask_buffer),
+            _mask_view: mask_view,
         })
     }
 
@@ -4490,7 +4631,7 @@ mod tests {
         );
         let underline = hgpui::Underline {
             order: 0,
-            padding: 0,
+            mask_chain: 0,
             bounds: underline_bounds,
             content_mask: ContentMask {
                 bounds: underline_bounds,
@@ -4596,7 +4737,7 @@ mod tests {
                 ),
             },
             transformation: TransformationMatrix::unit(),
-            padding0: 0,
+            mask_chain: 0,
             padding1: 0,
         };
         pipeline.update_buffer(&device, &context, &[sprite])?;
@@ -4757,7 +4898,7 @@ mod tests {
                 ),
             },
             transformation: TransformationMatrix::unit(),
-            padding0: 0,
+            mask_chain: 0,
             padding1: 0,
         };
         draw(
@@ -4875,6 +5016,136 @@ mod tests {
         assert_red_close(edge, 191, "rounded-mask straight edge");
         let center = read_pixel(&context, &target.texture, &target.staging, 32, 32)?;
         assert_eq!(center[2], 255, "mask center must stay opaque, got {center:?}");
+        Ok(())
+    }
+
+    /// A rounded parent must keep clipping a child that is inset from it.
+    ///
+    /// Intersecting two rounded rectangles on the CPU produces one rounded rectangle and loses
+    /// the parent's arc as soon as the child is inset: the child's corner no longer coincides
+    /// with the parent's, so `ContentMask::intersect` leaves the shared corner square and content
+    /// leaks through the parent's rounded corner. Primitives therefore carry the *raw* ancestor
+    /// chain; the fragment shader intersects the distance fields instead of the rectangles.
+    #[test]
+    fn hlsl_mask_chain_nested_rounded_parent_readback() -> Result<()> {
+        let Some((device, context)) = create_warp_device() else {
+            eprintln!("[mask_chain] WARP device unavailable, skipping");
+            return Ok(());
+        };
+        let quad_bounds = bounds(
+            point(ScaledPixels(0.0), ScaledPixels(0.0)),
+            size(ScaledPixels(64.0), ScaledPixels(64.0)),
+        );
+
+        // Parent: 4..60 rounded by 16. Child: 5..59, square. The child's corner at (5, 5) is
+        // ~5 px outside the parent (TL circle centre (20, 20), radius 16). A single intersected
+        // mask would be the square child, so (6, 6) would leak; the chain must clip it.
+        let parent = ContentMask {
+            bounds: bounds(
+                point(ScaledPixels(4.0), ScaledPixels(4.0)),
+                size(ScaledPixels(56.0), ScaledPixels(56.0)),
+            ),
+            corner_radii: Corners {
+                top_left: ScaledPixels(16.0),
+                top_right: ScaledPixels(16.0),
+                bottom_right: ScaledPixels(16.0),
+                bottom_left: ScaledPixels(16.0),
+            },
+            fade_out: Default::default(),
+        };
+        let child = ContentMask {
+            bounds: bounds(
+                point(ScaledPixels(5.0), ScaledPixels(5.0)),
+                size(ScaledPixels(54.0), ScaledPixels(54.0)),
+            ),
+            corner_radii: Corners::default(),
+            fade_out: Default::default(),
+        };
+        let quad = Quad {
+            bounds: quad_bounds,
+            // The lossy single mask is what the pre-chain code would have used.
+            content_mask: child,
+            mask_chain: (2 << 24) | 0,
+            background: Background::from(rgba(0xff0000ff)),
+            ..Default::default()
+        };
+        let target = render_quad_with_mask_chain(
+            &device,
+            &context,
+            quad,
+            &[parent, child],
+            [0.0, 0.0, 0.0, 1.0],
+        )?;
+        for (x, y, expected, what) in [
+            (6, 6, 0, "inset child corner must be cut by the parent's arc"),
+            (10, 10, 255, "inside the parent arc must stay opaque"),
+            (32, 32, 255, "interior must stay opaque"),
+            (6, 58, 0, "bottom-left parent arc must clip the child"),
+            (58, 58, 0, "bottom-right parent arc must clip the child"),
+            (4, 32, 0, "child's left edge must still clip"),
+        ] {
+            let px = read_pixel(&context, &target.texture, &target.staging, x, y)?;
+            assert_eq!(
+                px[2], expected,
+                "{what} at ({x}, {y}), got {px:?} (B,G,R,A)"
+            );
+        }
+
+        // Same bounds, parent radius 16 and child radius 8: the larger cut governs, so the
+        // parent's arc must win even though the child's radius is smaller. A "smallest radius
+        // wins" intersection would leave (9, 15) red.
+        let concentric_parent = ContentMask {
+            bounds: bounds(
+                point(ScaledPixels(8.0), ScaledPixels(8.0)),
+                size(ScaledPixels(48.0), ScaledPixels(48.0)),
+            ),
+            corner_radii: Corners {
+                top_left: ScaledPixels(16.0),
+                top_right: ScaledPixels(16.0),
+                bottom_right: ScaledPixels(16.0),
+                bottom_left: ScaledPixels(16.0),
+            },
+            fade_out: Default::default(),
+        };
+        let concentric_child = ContentMask {
+            bounds: bounds(
+                point(ScaledPixels(8.0), ScaledPixels(8.0)),
+                size(ScaledPixels(48.0), ScaledPixels(48.0)),
+            ),
+            corner_radii: Corners {
+                top_left: ScaledPixels(8.0),
+                top_right: ScaledPixels(8.0),
+                bottom_right: ScaledPixels(8.0),
+                bottom_left: ScaledPixels(8.0),
+            },
+            fade_out: Default::default(),
+        };
+        let quad = Quad {
+            bounds: quad_bounds,
+            content_mask: concentric_child,
+            mask_chain: (2 << 24) | 0,
+            background: Background::from(rgba(0xff0000ff)),
+            ..Default::default()
+        };
+        let target = render_quad_with_mask_chain(
+            &device,
+            &context,
+            quad,
+            &[concentric_parent, concentric_child],
+            [0.0, 0.0, 0.0, 1.0],
+        )?;
+        for (x, y, expected, what) in [
+            (9, 15, 0, "parent radius 16 must clip more than child radius 8"),
+            (15, 9, 0, "parent radius 16 must clip more than child radius 8"),
+            (14, 14, 255, "inside both arcs must stay opaque"),
+            (32, 32, 255, "interior must stay opaque"),
+        ] {
+            let px = read_pixel(&context, &target.texture, &target.staging, x, y)?;
+            assert_eq!(
+                px[2], expected,
+                "{what} at ({x}, {y}), got {px:?} (B,G,R,A)"
+            );
+        }
         Ok(())
     }
 
@@ -5385,6 +5656,10 @@ mod tests {
             content_mask: content_mask.bounds,
             content_mask_corner_radii: content_mask.corner_radii,
             content_mask_fade_out: content_mask.fade_out,
+            mask_chain: 0,
+            padding0: 0,
+            padding1: 0,
+            padding2: 0,
         };
         // Two triangles covering the whole viewport.
         let vertices = [
@@ -5653,6 +5928,10 @@ mod tests {
             element_corner_radii: Corners::default(),
             inset: 1,
             corner_smoothing: 0.0,
+            mask_chain: 0,
+            padding0: 0,
+            padding1: 0,
+            padding2: 0,
         };
         pipeline.update_buffer(&device, &context, &[shadow])?;
         unsafe {

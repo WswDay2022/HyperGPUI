@@ -154,6 +154,11 @@ struct BlurParams {
     /// origin, so a stationary element blurs identically at every window size); 0.0 = 1:1 copy
     /// (the scene blit, which must not downsample). Downsample pass only.
     downsample: f32,
+    /// Packed reference into the frame's content-mask chain arena.
+    mask_chain: u32,
+    padding0: u32,
+    padding1: u32,
+    padding2: u32,
 }
 
 #[repr(C)]
@@ -187,6 +192,11 @@ struct PathRasterizationVertex {
     content_mask: Bounds<ScaledPixels>,
     content_mask_corner_radii: Corners<ScaledPixels>,
     content_mask_fade_out: Edges<ScaledPixels>,
+    /// Packed reference into the frame's content-mask chain arena.
+    mask_chain: u32,
+    padding0: u32,
+    padding1: u32,
+    padding2: u32,
 }
 
 pub struct WgpuSurfaceConfig {
@@ -254,6 +264,10 @@ struct WgpuResources {
     globals_buffer: wgpu::Buffer,
     globals_bind_group: wgpu::BindGroup,
     path_globals_bind_group: wgpu::BindGroup,
+    /// Frame-wide content-mask chain arena, bound at `@group(0) @binding(2)` in every
+    /// shader pipeline. Grown on demand when a frame needs more chains.
+    content_mask_buffer: wgpu::Buffer,
+    content_mask_capacity: u64,
     instance_buffer: wgpu::Buffer,
     path_intermediate_texture: Option<wgpu::Texture>,
     path_intermediate_view: Option<wgpu::TextureView>,
@@ -606,6 +620,16 @@ impl WgpuRenderer {
             mapped_at_creation: false,
         });
 
+        // The mask arena is bound into both globals bind groups, so it can grow but never be
+        // resized in place; `ensure_content_mask_capacity` recreates the groups on growth.
+        let content_mask_capacity = 8 * std::mem::size_of::<ContentMask<ScaledPixels>>() as u64;
+        let content_mask_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("content_mask_buffer"),
+            size: content_mask_capacity,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         let globals_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("globals_bind_group"),
             layout: &bind_group_layouts.globals,
@@ -625,6 +649,10 @@ impl WgpuRenderer {
                         offset: gamma_offset,
                         size: Some(NonZeroU64::new(gamma_size).unwrap()),
                     }),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: content_mask_buffer.as_entire_binding(),
                 },
             ],
         });
@@ -648,6 +676,10 @@ impl WgpuRenderer {
                         offset: gamma_offset,
                         size: Some(NonZeroU64::new(gamma_size).unwrap()),
                     }),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: content_mask_buffer.as_entire_binding(),
                 },
             ],
         });
@@ -674,6 +706,8 @@ impl WgpuRenderer {
             globals_buffer,
             globals_bind_group,
             path_globals_bind_group,
+            content_mask_buffer,
+            content_mask_capacity,
             instance_buffer,
             // Defer intermediate texture creation to first draw call via ensure_intermediate_textures().
             // This avoids panics when the device/surface is in an invalid state during initialization.
@@ -747,6 +781,16 @@ impl WgpuRenderer {
                             min_binding_size: NonZeroU64::new(
                                 std::mem::size_of::<GammaParams>() as u64
                             ),
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
                         },
                         count: None,
                     },
@@ -1664,6 +1708,21 @@ impl WgpuRenderer {
             );
         }
 
+        // Upload this frame's content-mask chains. The arena is indexed by every primitive's
+        // `mask_chain` field; it must be in place before the render pass records any draws.
+        {
+            let mask_stride = std::mem::size_of::<ContentMask<ScaledPixels>>() as u64;
+            let required = (scene.mask_chains.len().max(1) as u64) * mask_stride;
+            self.ensure_content_mask_capacity(required);
+            if !scene.mask_chains.is_empty() {
+                let data = unsafe { Self::instance_bytes(&scene.mask_chains) };
+                let resources = self.resources();
+                resources
+                    .queue
+                    .write_buffer(&resources.content_mask_buffer, 0, data);
+            }
+        }
+
         // Create viewport bounds for frustum culling (in ScaledPixels, which are device pixels)
         let viewport_bounds = Bounds {
             origin: Point {
@@ -1923,6 +1982,7 @@ impl WgpuRenderer {
                                         &parent,
                                         boundary.bounds,
                                         boundary.content_mask,
+                                        boundary.mask_chain,
                                         [
                                             boundary.corner_radii.top_left.0,
                                             boundary.corner_radii.top_right.0,
@@ -2220,6 +2280,7 @@ impl WgpuRenderer {
         target: &wgpu::TextureView,
         bounds: Bounds<ScaledPixels>,
         content_mask: ContentMask<ScaledPixels>,
+        mask_chain: u32,
         corner_radii: [f32; 4],
         blur_radius: f32,
         opacity: f32,
@@ -2360,6 +2421,7 @@ impl WgpuRenderer {
             corner_radii,
             opacity,
             clip_rounded: if clip_rounded { 1.0 } else { 0.0 },
+            mask_chain,
             ..Default::default()
         };
         let bind_group = self.make_blur_bind_group(params, &ping);
@@ -2397,6 +2459,7 @@ impl WgpuRenderer {
             scene_color_view,
             filter.bounds,
             filter.content_mask,
+            filter.mask_chain,
             [
                 filter.corner_radii.top_left.0,
                 filter.corner_radii.top_right.0,
@@ -2596,6 +2659,10 @@ impl WgpuRenderer {
                 content_mask: path.content_mask.bounds,
                 content_mask_corner_radii: path.content_mask.corner_radii,
                 content_mask_fade_out: path.content_mask.fade_out,
+                mask_chain: path.mask_chain,
+                padding0: 0,
+                padding1: 0,
+                padding2: 0,
             }));
         }
 
@@ -2655,6 +2722,94 @@ impl WgpuRenderer {
         }
 
         true
+    }
+
+    /// Grows the content-mask chain arena when a frame needs more masks than the current buffer
+    /// holds. Both globals bind groups reference the buffer, so they are rebuilt around the new
+    /// allocation.
+    fn ensure_content_mask_capacity(&mut self, required: u64) {
+        let current = match self.resources.as_ref() {
+            Some(resources) => resources.content_mask_capacity,
+            None => return,
+        };
+        if current >= required {
+            return;
+        }
+        let new_capacity = required.next_power_of_two().max(64 * 48);
+        log::info!("increased content-mask buffer size to {}", new_capacity);
+
+        let globals_size = std::mem::size_of::<GlobalParams>() as u64;
+        let gamma_size = std::mem::size_of::<GammaParams>() as u64;
+        let path_globals_offset = self.path_globals_offset;
+        let gamma_offset = self.gamma_offset;
+
+        let resources = self.resources_mut();
+        let buffer = resources.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("content_mask_buffer"),
+            size: new_capacity,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let globals_bind_group = resources
+            .device
+            .create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("globals_bind_group"),
+                layout: &resources.bind_group_layouts.globals,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                            buffer: &resources.globals_buffer,
+                            offset: 0,
+                            size: Some(NonZeroU64::new(globals_size).unwrap()),
+                        }),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                            buffer: &resources.globals_buffer,
+                            offset: gamma_offset,
+                            size: Some(NonZeroU64::new(gamma_size).unwrap()),
+                        }),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: buffer.as_entire_binding(),
+                    },
+                ],
+            });
+        let path_globals_bind_group = resources
+            .device
+            .create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("path_globals_bind_group"),
+                layout: &resources.bind_group_layouts.globals,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                            buffer: &resources.globals_buffer,
+                            offset: path_globals_offset,
+                            size: Some(NonZeroU64::new(globals_size).unwrap()),
+                        }),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                            buffer: &resources.globals_buffer,
+                            offset: gamma_offset,
+                            size: Some(NonZeroU64::new(gamma_size).unwrap()),
+                        }),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: buffer.as_entire_binding(),
+                    },
+                ],
+            });
+        resources.content_mask_buffer = buffer;
+        resources.content_mask_capacity = new_capacity;
+        resources.globals_bind_group = globals_bind_group;
+        resources.path_globals_bind_group = path_globals_bind_group;
     }
 
     fn grow_instance_buffer(&mut self) {

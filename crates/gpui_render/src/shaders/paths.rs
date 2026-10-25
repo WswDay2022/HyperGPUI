@@ -13,6 +13,11 @@ pub mod path_rasterization {
         pub content_mask: Bounds,
         pub content_mask_corner_radii: Corners,
         pub content_mask_fade_out: Edges,
+        /// Packed `(len << 24) | offset` reference into the frame's content-mask chain arena.
+        pub mask_chain: u32,
+        pub padding0: u32,
+        pub padding1: u32,
+        pub padding2: u32,
     }
     storage!(group(1), binding(0), PATH_VERTICES: RuntimeArray<PathRasterizationVertex>);
 
@@ -66,22 +71,22 @@ pub mod path_rasterization {
             return transparent();
         }
         let vertex = get!(PATH_VERTICES)[input.vertex_id as usize];
-        let mask_coverage = content_mask_coverage(
+        let mask_coverage = content_mask_chain_alpha(
+            vertex.mask_chain,
             input.position.xy(),
-            vertex.content_mask,
-            vertex.content_mask_corner_radii,
-            vertex.content_mask_fade_out,
-            vec2f(0.0, 0.0),
-            vec2f(0.0, 0.0),
-            vertex.content_mask_corner_radii,
+            ContentMask {
+                bounds: vertex.content_mask,
+                corner_radii: vertex.content_mask_corner_radii,
+                fade_out: vertex.content_mask_fade_out,
+            },
+            input.position.xy(),
+            vertex.bounds,
+            zero_corners(),
             false,
         );
         let paint = Paint::new(vertex.color, vertex.bounds);
         let color = paint_color(paint, input.position.xy(), prepare_paint(paint));
-        premultiply(
-            color,
-            coverage * mask_coverage * window_mask_alpha(input.position.xy()),
-        )
+        premultiply(color, coverage * mask_coverage)
     }
 }
 

@@ -51,6 +51,11 @@ pub struct PathRasterizationVertex {
     pub content_mask: Bounds<ScaledPixels>,
     pub content_mask_corner_radii: Corners<ScaledPixels>,
     pub content_mask_fade_out: hgpui::Edges<ScaledPixels>,
+    /// Reference to the scene's content-mask chain arena (see `Scene::mask_chains`).
+    pub mask_chain: u32,
+    pub padding0: u32,
+    pub padding1: u32,
+    pub padding2: u32,
 }
 
 /// Parameters shared by the blur downsample / gaussian / composite passes.
@@ -69,6 +74,11 @@ pub struct BlurUniforms {
     pub tap_step: f32,
     pub clip_rounded: f32,
     pub downsample: f32,
+    /// Reference to the scene's content-mask chain arena (see `Scene::mask_chains`).
+    pub mask_chain: u32,
+    pub padding0: u32,
+    pub padding1: u32,
+    pub padding2: u32,
 }
 
 /// Uniform for the surface (YUV/RGBA texture) pipeline.
@@ -92,7 +102,7 @@ const _: () = {
     assert!(std::mem::size_of::<GlobalUniforms>() == 80);
     assert!(std::mem::size_of::<FontRasterizationUniforms>() == 32);
     assert!(std::mem::size_of::<PathSprite>() == 16);
-    assert!(std::mem::size_of::<PathRasterizationVertex>() == 160);
-    assert!(std::mem::size_of::<BlurUniforms>() == 112);
+    assert!(std::mem::size_of::<PathRasterizationVertex>() == 176);
+    assert!(std::mem::size_of::<BlurUniforms>() == 128);
     assert!(std::mem::size_of::<SurfaceUniforms>() == 96);
 };

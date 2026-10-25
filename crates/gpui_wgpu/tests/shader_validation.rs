@@ -55,6 +55,21 @@ fn as_bytes<T>(value: &T) -> &[u8] {
     }
 }
 
+/// Packed `(len << 24) | offset` reference into the frame's content-mask chain arena, matching
+/// `Scene::intern_mask_chain` and the shaders' `CONTENT_MASKS` indexing.
+fn mask_chain_ref(offset: u32, len: u32) -> u32 {
+    (len << 24) | offset
+}
+
+fn mask_bytes(masks: &[ContentMask<ScaledPixels>]) -> &[u8] {
+    unsafe {
+        std::slice::from_raw_parts(
+            masks.as_ptr().cast(),
+            std::mem::size_of_val(masks),
+        )
+    }
+}
+
 fn validate(device: &wgpu::Device, label: &str, source: &str) {
     let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let _module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -259,6 +274,16 @@ fn wgsl_shader_modules_validate_and_render_quad() {
                 },
                 count: None,
             },
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
         ],
     });
     let quad_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -351,6 +376,32 @@ fn wgsl_shader_modules_validate_and_render_quad() {
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
+    // Chain arena: [0] = the fractional quad's own bounds, [1] = the half-covered mask edge.
+    let mask_arena = [
+        ContentMask {
+            bounds: bounds(
+                point(ScaledPixels(16.25), ScaledPixels(16.25)),
+                size(ScaledPixels(32.5), ScaledPixels(32.5)),
+            ),
+            corner_radii: Corners::default(),
+            fade_out: Default::default(),
+        },
+        ContentMask {
+            bounds: bounds(
+                point(ScaledPixels(8.0), ScaledPixels(8.0)),
+                size(ScaledPixels(32.5), ScaledPixels(48.0)),
+            ),
+            corner_radii: Corners::default(),
+            fade_out: Default::default(),
+        },
+    ];
+    let mask_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("quad_test_masks"),
+        size: std::mem::size_of_val(&mask_arena) as u64,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    queue.write_buffer(&mask_buffer, 0, mask_bytes(&mask_arena));
     let globals_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("quad_test_globals_group"),
         layout: &globals_layout,
@@ -362,6 +413,10 @@ fn wgsl_shader_modules_validate_and_render_quad() {
             wgpu::BindGroupEntry {
                 binding: 1,
                 resource: gamma_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: mask_buffer.as_entire_binding(),
             },
         ],
     });
@@ -412,6 +467,7 @@ fn wgsl_shader_modules_validate_and_render_quad() {
             fade_out: Default::default(),
         },
         background: Background::from(rgba(0xff0000ff)),
+        mask_chain: mask_chain_ref(0, 1),
         ..Default::default()
     };
     let data = render_quad(
@@ -454,6 +510,7 @@ fn wgsl_shader_modules_validate_and_render_quad() {
                     fade_out: Default::default(),
         },
         background: Background::from(rgba(0xff0000ff)),
+        mask_chain: mask_chain_ref(1, 1),
         ..Default::default()
     };
     let data = render_quad(

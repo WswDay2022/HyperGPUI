@@ -6,7 +6,8 @@ pub mod underline {
     #[derive(Clone, Copy, Wgsl)]
     pub struct Underline {
         pub order: u32,
-        pub padding: u32,
+        /// Packed `(len << 24) | offset` reference into the frame's content-mask chain arena.
+        pub mask_chain: u32,
         pub bounds: Bounds,
         pub content_mask: ContentMask,
         pub color: Hsla,
@@ -91,18 +92,21 @@ pub mod underline {
             return transparent();
         }
         let underline = get!(UNDERLINES)[input.underline_id as usize];
+        let clip = content_mask_chain_alpha(
+            underline.mask_chain,
+            input.scene_position,
+            underline.content_mask,
+            input.scene_position,
+            underline.bounds,
+            zero_corners(),
+            false,
+        );
         if !is_enabled(underline.wavy) {
-            return blend_color(
-                input.color,
-                ContentMask::alpha(underline.content_mask, input.scene_position)
-                    * window_mask_alpha(input.scene_position),
-            );
+            return blend_color(input.color, clip);
         }
         blend_color(
             input.color,
-            wavy_underline_coverage(underline, input.local_position)
-                * ContentMask::alpha(underline.content_mask, input.scene_position)
-                * window_mask_alpha(input.scene_position),
+            wavy_underline_coverage(underline, input.local_position) * clip,
         )
     }
 }
@@ -115,7 +119,8 @@ pub mod monochrome_sprite {
     #[derive(Clone, Copy, Wgsl)]
     pub struct MonochromeSprite {
         pub order: u32,
-        pub padding: u32,
+        /// Packed `(len << 24) | offset` reference into the frame's content-mask chain arena.
+        pub mask_chain: u32,
         pub bounds: Bounds,
         pub content_mask: ContentMask,
         pub color: Hsla,
@@ -188,8 +193,15 @@ pub mod monochrome_sprite {
         blend_color(
             input.color,
             corrected
-                * ContentMask::alpha(sprite.content_mask, input.scene_position)
-                * window_mask_alpha(input.scene_position),
+                * content_mask_chain_alpha(
+                    sprite.mask_chain,
+                    input.scene_position,
+                    sprite.content_mask,
+                    input.scene_position,
+                    sprite.bounds,
+                    zero_corners(),
+                    false,
+                ),
         )
     }
 }
@@ -212,8 +224,9 @@ pub mod polychrome_sprite {
         pub tile: AtlasTile,
         /// Local-only CSS transform.
         pub transformation: TransformationMatrix,
+        /// Packed `(len << 24) | offset` reference into the frame's content-mask chain arena.
+        pub mask_chain: u32,
         /// Pads the stride to 160 bytes (16-byte-aligned D3D11 raw-view offsets).
-        pub padding0: u32,
         pub padding1: u32,
     }
     storage!(group(1), binding(0), POLYCHROME_SPRITES: RuntimeArray<PolychromeSprite>);
@@ -339,12 +352,15 @@ pub mod polychrome_sprite {
                     ),
                     aa_max_gradient(sprite.transformation),
                 )
-                * ContentMask::alpha_with_own(
+                * content_mask_chain_alpha(
+                    sprite.mask_chain,
+                    input.scene_position,
                     sprite.content_mask,
                     input.scene_position,
+                    sprite.bounds,
+                    sprite.corner_radii,
                     mask_is_own,
-                )
-                * window_mask_alpha(input.scene_position),
+                ),
         )
     }
 
@@ -430,8 +446,15 @@ pub mod polychrome_sprite {
                     ),
                     aa_max_gradient(sprite.transformation),
                 )
-                * ContentMask::alpha(sprite.content_mask, input.scene_position)
-                * window_mask_alpha(input.scene_position),
+                * content_mask_chain_alpha(
+                    sprite.mask_chain,
+                    input.scene_position,
+                    sprite.content_mask,
+                    input.scene_position,
+                    sprite.bounds,
+                    sprite.corner_radii,
+                    false,
+                ),
         )
     }
 }
@@ -445,7 +468,8 @@ pub mod subpixel_sprite {
     #[derive(Clone, Copy, Wgsl)]
     pub struct SubpixelSprite {
         pub order: u32,
-        pub padding: u32,
+        /// Packed `(len << 24) | offset` reference into the frame's content-mask chain arena.
+        pub mask_chain: u32,
         pub bounds: Bounds,
         pub content_mask: ContentMask,
         pub color: Hsla,
@@ -527,8 +551,15 @@ pub mod subpixel_sprite {
             get!(FONT_RASTERIZATION).subpixel_enhanced_contrast,
             get!(FONT_RASTERIZATION).gamma_ratios,
         );
-        let mask_alpha = ContentMask::alpha(sprite.content_mask, input.scene_position)
-            * window_mask_alpha(input.scene_position);
+        let mask_alpha = content_mask_chain_alpha(
+            sprite.mask_chain,
+            input.scene_position,
+            sprite.content_mask,
+            input.scene_position,
+            sprite.bounds,
+            zero_corners(),
+            false,
+        );
         SubpixelSpriteFragmentOutput {
             foreground: vec4f(input.color.x, input.color.y, input.color.z, 1.0),
             alpha: vec4f(

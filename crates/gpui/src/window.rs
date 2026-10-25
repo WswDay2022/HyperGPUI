@@ -889,6 +889,9 @@ pub(crate) struct DeferredDraw {
     element_id_stack: SmallVec<[ElementId; 32]>,
     text_style_stack: Vec<TextStyleRefinement>,
     content_mask: Option<ContentMask<Pixels>>,
+    /// The raw clip masks active where the draw was deferred. The deferred element is replayed
+    /// after the main tree has unwound, so its exact clip chain has to be restored explicitly.
+    raw_content_masks: Vec<ContentMask<Pixels>>,
     /// The composite CSS transform of the deferred element's styled ancestors,
     /// captured at the moment the draw was deferred. The element is reprepainted
     /// and painted under this matrix, since it leaves its ancestor stack once
@@ -1087,6 +1090,13 @@ pub struct Window {
     pub(crate) element_offset_stack: Vec<Point<Pixels>>,
     pub(crate) element_opacity: f32,
     pub(crate) content_mask_stack: Vec<ContentMask<Pixels>>,
+    /// Raw (unintersected) masks of every active clip scope, outermost first. The intersected
+    /// `content_mask_stack` is a rounded-rectangle approximation: intersecting two rounded rects
+    /// loses the outer arc wherever an inner rectangle is inset from it. The shaders therefore
+    /// receive this stack as a chain and evaluate every mask's distance field instead.
+    pub(crate) raw_content_mask_stack: Vec<ContentMask<Pixels>>,
+    /// `Scene::mask_chains` reference for each depth of [`Window::raw_content_mask_stack`].
+    pub(crate) mask_chain_stack: Vec<u32>,
     pub(crate) transform_stack: Vec<TransformationMatrix>,
     pub(crate) requested_autoscroll: Option<Bounds<Pixels>>,
     pub(crate) image_cache_stack: Vec<AnyImageCache>,
@@ -1849,6 +1859,8 @@ impl Window {
             rendered_entity_stack: Vec::new(),
             element_offset_stack: Vec::new(),
             content_mask_stack: Vec::new(),
+            raw_content_mask_stack: Vec::new(),
+            mask_chain_stack: Vec::new(),
             element_opacity: 1.0,
             transform_stack: Vec::new(),
             requested_autoscroll: None,
@@ -3363,15 +3375,18 @@ impl Window {
             let paint_start = self.paint_index();
             let content_mask = deferred_draw.content_mask;
             let transform = deferred_draw.transform;
+            let raw_content_masks = deferred_draw.raw_content_masks.clone();
             if let Some(element) = deferred_draw.element.as_mut() {
                 self.with_rendered_view(deferred_draw.current_view, |window| {
                     // The main tree's transform stack has unwound by the time deferred draws
                     // are painted, so replay under the matrix captured at defer time.
-                    window.with_transform(transform, |window| {
-                        window.with_content_mask(content_mask, |window| {
-                            window.with_rem_size(Some(deferred_draw.rem_size), |window| {
-                                element.paint(window, cx);
-                            });
+                    window.with_restored_raw_masks(&raw_content_masks, |window| {
+                        window.with_transform(transform, |window| {
+                            window.with_content_mask(content_mask, |window| {
+                                window.with_rem_size(Some(deferred_draw.rem_size), |window| {
+                                    element.paint(window, cx);
+                                });
+                            })
                         })
                     })
                 })
@@ -3437,6 +3452,7 @@ impl Window {
                     element_id_stack: deferred_draw.element_id_stack.clone(),
                     text_style_stack: deferred_draw.text_style_stack.clone(),
                     content_mask: deferred_draw.content_mask,
+                    raw_content_masks: deferred_draw.raw_content_masks.clone(),
                     transform: deferred_draw.transform,
                     rem_size: deferred_draw.rem_size,
                     priority: deferred_draw.priority,
@@ -3565,14 +3581,95 @@ impl Window {
                 self.next_frame.scene.window_mask =
                     Some(mask.scale(self.scale_factor()));
             }
+            let raw_mask = mask;
             let mask = mask.intersect(&self.content_mask());
             self.content_mask_stack.push(mask);
+            self.raw_content_mask_stack.push(raw_mask);
+            let chain = self.intern_current_mask_chain();
+            self.mask_chain_stack.push(chain);
             let result = f(self);
+            self.mask_chain_stack.pop();
+            self.raw_content_mask_stack.pop();
             self.content_mask_stack.pop();
             result
         } else {
             f(self)
         }
+    }
+
+    /// Interns the current raw mask stack into the frame's chain arena and returns the packed
+    /// reference primitives carry. The masks are snapped/scaled exactly like
+    /// [`Window::snapped_content_mask`] so the GPU chain lines up with the single mask used for
+    /// culling and clip distances.
+    fn intern_current_mask_chain(&mut self) -> u32 {
+        if cfg!(target_os = "macos") {
+            // TODO(macos): the Metal renderer does not bind the `CONTENT_MASKS` arena yet. An
+            // empty chain makes the shaders fall back to the legacy single intersected mask
+            // (same behaviour as before the chain was introduced).
+            return 0;
+        }
+        let scale_factor = self.scale_factor();
+        let masks: SmallVec<[ContentMask<ScaledPixels>; 8]> = self
+            .raw_content_mask_stack
+            .iter()
+            .map(|mask| ContentMask {
+                bounds: self.cover_bounds(mask.bounds),
+                corner_radii: mask.corner_radii.scale(scale_factor),
+                fade_out: mask.fade_out.scale(scale_factor),
+            })
+            .collect();
+        self.next_frame.scene.intern_mask_chain(&masks)
+    }
+
+    /// The clip chain for primitives painted right now (`0` when no clip scope is active).
+    #[inline]
+    pub(crate) fn mask_chain(&self) -> u32 {
+        self.mask_chain_stack.last().copied().unwrap_or(0)
+    }
+
+    /// Chain reference that additionally clips to `extra`, a synthetic mask in scene space
+    /// (used by the border-strip optimization, whose strips are not ancestor clips).
+    pub(crate) fn mask_chain_with_extra_scaled(
+        &mut self,
+        extra: ContentMask<ScaledPixels>,
+    ) -> u32 {
+        if cfg!(target_os = "macos") {
+            // TODO(macos): see `intern_current_mask_chain`.
+            return 0;
+        }
+        let scale_factor = self.scale_factor();
+        let mut masks: SmallVec<[ContentMask<ScaledPixels>; 9]> = self
+            .raw_content_mask_stack
+            .iter()
+            .map(|mask| ContentMask {
+                bounds: self.cover_bounds(mask.bounds),
+                corner_radii: mask.corner_radii.scale(scale_factor),
+                fade_out: mask.fade_out.scale(scale_factor),
+            })
+            .collect();
+        masks.push(extra);
+        self.next_frame.scene.intern_mask_chain(&masks)
+    }
+
+    /// Replays a deferred draw under the raw clip masks captured when it was deferred. The main
+    /// tree's clip scopes have already unwound by then, so the chain has to be restored for the
+    /// element's primitives (and for any further `with_content_mask` calls it makes).
+    fn with_restored_raw_masks<R>(
+        &mut self,
+        masks: &[ContentMask<Pixels>],
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        if masks.is_empty() {
+            return f(self);
+        }
+        let base = self.raw_content_mask_stack.len();
+        self.raw_content_mask_stack.extend_from_slice(masks);
+        let chain = self.intern_current_mask_chain();
+        self.mask_chain_stack.push(chain);
+        let result = f(self);
+        self.mask_chain_stack.pop();
+        self.raw_content_mask_stack.truncate(base);
+        result
     }
 
     /// Updates the global element offset relative to the current offset. This is used to implement
@@ -4023,6 +4120,7 @@ impl Window {
             element_id_stack: self.element_id_stack.clone(),
             text_style_stack: self.text_style_stack.clone(),
             content_mask,
+            raw_content_masks: self.raw_content_mask_stack.clone(),
             transform: self.transform_stack.last().copied(),
             rem_size: self.rem_size(),
             priority,
@@ -4077,6 +4175,7 @@ impl Window {
         let opacity = self.element_opacity();
         let element_bounds = self.cover_bounds(bounds);
         let element_corner_radii = corner_radii.scale(scale_factor);
+        let mask_chain = self.mask_chain();
         for shadow in shadows {
             if shadow.inset {
                 continue;
@@ -4093,6 +4192,10 @@ impl Window {
                 element_corner_radii,
                 inset: 0,
                 corner_smoothing,
+                mask_chain,
+                padding0: 0,
+                padding1: 0,
+                padding2: 0,
             });
         }
     }
@@ -4114,6 +4217,7 @@ impl Window {
         let opacity = self.element_opacity();
         let element_bounds = self.cover_bounds(bounds);
         let element_corner_radii = corner_radii.scale(scale_factor);
+        let mask_chain = self.mask_chain();
         for shadow in shadows {
             if !shadow.inset {
                 continue;
@@ -4139,6 +4243,10 @@ impl Window {
                 element_corner_radii,
                 inset: 1,
                 corner_smoothing,
+                mask_chain,
+                padding0: 0,
+                padding1: 0,
+                padding2: 0,
             });
         }
     }
@@ -4170,6 +4278,7 @@ impl Window {
             return;
         }
 
+        let mask_chain = self.mask_chain();
         self.next_frame.scene.insert_primitive(BackdropFilter {
             order: 0,
             bounds: self.snap_bounds(bounds),
@@ -4177,6 +4286,7 @@ impl Window {
             corner_radii: corner_radii.scale(scale_factor),
             filters,
             opacity: self.element_opacity(),
+            mask_chain,
         });
     }
 
@@ -4223,6 +4333,7 @@ impl Window {
             filters,
             opacity: 1.0,
             is_start: true,
+            mask_chain: self.mask_chain(),
         };
 
         self.next_frame.scene.insert_primitive(boundary.clone());
@@ -4262,7 +4373,7 @@ impl Window {
             border_dashed_length: quad.border_dashed_length,
             border_dashed_gap: quad.border_dashed_gap,
             corner_smoothing: quad.corner_smoothing,
-            padding: 0,
+            mask_chain: self.mask_chain(),
             transformation: self
                 .current_transform()
                 .compose(quad.transformation.unwrap_or(TransformationMatrix::unit())),
@@ -4376,15 +4487,20 @@ impl Window {
             // flush with the quad), while corners cut straight through the mask's edge
             // stay square — otherwise an interior strip corner would inherit the mask's
             // radius and notch the border ring.
-            let content_mask = quad.content_mask.intersect(&ContentMask {
+            let strip_mask = ContentMask {
                 bounds: strip,
                 corner_radii: Corners::default(),
 
                 fade_out: Default::default(),
-            });
+            };
+            let content_mask = quad.content_mask.intersect(&strip_mask);
             if !content_mask.bounds.is_empty() {
+                // The strip is a synthetic clip, not an ancestor mask, so the shader chain must
+                // carry it explicitly in addition to the raw ancestor stack.
+                let mask_chain = self.mask_chain_with_extra_scaled(strip_mask);
                 self.next_frame.scene.insert_primitive(Quad {
                     content_mask,
+                    mask_chain,
                     ..quad
                 });
             }
@@ -4401,6 +4517,7 @@ impl Window {
         let content_mask = self.content_mask();
         let opacity = self.element_opacity();
         path.content_mask = content_mask;
+        path.mask_chain = self.mask_chain();
         let color: Background = color.into();
         path.color = color.opacity(opacity);
         self.next_frame
@@ -4431,10 +4548,11 @@ impl Window {
             size: size(self.snap_stroke(width), height),
         };
         let element_opacity = self.element_opacity();
+        let mask_chain = self.mask_chain();
 
         self.next_frame.scene.insert_primitive(Underline {
             order: 0,
-            padding: 0,
+            mask_chain,
             bounds,
             content_mask: self.snapped_content_mask(),
             color: style
@@ -4468,10 +4586,11 @@ impl Window {
             size: size(self.snap_stroke(width), self.snap_stroke(height)),
         };
         let opacity = self.element_opacity();
+        let mask_chain = self.mask_chain();
 
         self.next_frame.scene.insert_primitive(Underline {
             order: 0,
-            padding: 0,
+            mask_chain,
             bounds,
             content_mask: self.snapped_content_mask(),
             thickness: self.snap_stroke(style.thickness),
@@ -4544,10 +4663,11 @@ impl Window {
             };
             let content_mask = self.snapped_content_mask();
             let transformation = self.current_transform();
+            let mask_chain = self.mask_chain();
             if subpixel_rendering {
                 self.next_frame.scene.insert_primitive(SubpixelSprite {
                     order: 0,
-                    padding: 0,
+                    mask_chain,
                     bounds,
                     content_mask,
                     color: color.opacity(element_opacity).into(),
@@ -4557,7 +4677,7 @@ impl Window {
             } else {
                 self.next_frame.scene.insert_primitive(MonochromeSprite {
                     order: 0,
-                    padding: 0,
+                    mask_chain,
                     bounds,
                     content_mask,
                     color: color.opacity(element_opacity).into(),
@@ -4635,6 +4755,7 @@ impl Window {
             };
             let content_mask = self.snapped_content_mask();
             let opacity = self.element_opacity();
+            let mask_chain = self.mask_chain();
 
             self.next_frame.scene.insert_primitive(PolychromeSprite {
                 order: 0,
@@ -4646,7 +4767,7 @@ impl Window {
                 opacity,
                 corner_smoothing: 0.0,
                 transformation: self.current_transform(),
-                padding0: 0,
+                mask_chain,
                 padding1: 0,
             });
         }
@@ -4705,9 +4826,10 @@ impl Window {
             .map_origin(|value| ScaledPixels(round_half_toward_zero(value.0)))
             .map_size(|size| size.ceil());
 
+        let mask_chain = self.mask_chain();
         self.next_frame.scene.insert_primitive(MonochromeSprite {
             order: 0,
-            padding: 0,
+            mask_chain,
             bounds: final_bounds,
             content_mask,
             color: color.opacity(element_opacity).into(),
@@ -4830,6 +4952,7 @@ impl Window {
             .clamp_radii_for_quad_size(visible_bounds.size)
             .scale(self.scale_factor());
         let opacity = self.element_opacity();
+        let mask_chain = self.mask_chain();
 
         self.next_frame.scene.insert_primitive(PolychromeSprite {
             order: 0,
@@ -4841,7 +4964,7 @@ impl Window {
             opacity,
             corner_smoothing: 0.0,
             transformation: self.current_transform(),
-            padding0: 0,
+            mask_chain,
             padding1: 0,
         });
         Ok(())

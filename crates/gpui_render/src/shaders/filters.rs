@@ -118,6 +118,11 @@ pub mod blur {
         pub tap_step: f32,
         pub clip_rounded: f32,
         pub downsample: f32,
+        /// Packed `(len << 24) | offset` reference into the frame's content-mask chain arena.
+        pub mask_chain: u32,
+        pub padding0: u32,
+        pub padding1: u32,
+        pub padding2: u32,
     }
     uniform!(group(1), binding(0), BLUR_LOCALS: BlurUniforms);
     texture!(group(1), binding(1), BLUR_TEXTURE: Texture2D<f32>);
@@ -236,33 +241,34 @@ pub mod blur {
             get!(BLUR_LOCALS).clip_rounded > 0.5,
         );
 
-        let mask_radii = Corners {
-            top_left: get!(BLUR_LOCALS).content_mask_radii.x,
-            top_right: get!(BLUR_LOCALS).content_mask_radii.y,
-            bottom_right: get!(BLUR_LOCALS).content_mask_radii.z,
-            bottom_left: get!(BLUR_LOCALS).content_mask_radii.w,
-        };
-        let mask_fade_out = Edges {
-            top: get!(BLUR_LOCALS).content_mask_fade_out.x,
-            right: get!(BLUR_LOCALS).content_mask_fade_out.y,
-            bottom: get!(BLUR_LOCALS).content_mask_fade_out.z,
-            left: get!(BLUR_LOCALS).content_mask_fade_out.w,
-        };
-        let mask_coverage = saturate(
-            0.5 - quad_sdf(
-                input.position.xy(),
-                get!(BLUR_LOCALS).content_mask,
-                mask_radii,
-            ),
-        ) * content_mask_fade(
-            get!(BLUR_LOCALS).content_mask,
-            mask_fade_out,
+        // The composite already antialiases the element's own rounded outline when it clips to
+        // it (`clip_rounded`), so a mask identical to that outline carries no extra clipping
+        // information and must not be multiplied in a second time.
+        let mask_coverage = content_mask_chain_alpha(
+            get!(BLUR_LOCALS).mask_chain,
             input.position.xy(),
+            ContentMask {
+                bounds: get!(BLUR_LOCALS).content_mask,
+                corner_radii: Corners {
+                    top_left: get!(BLUR_LOCALS).content_mask_radii.x,
+                    top_right: get!(BLUR_LOCALS).content_mask_radii.y,
+                    bottom_right: get!(BLUR_LOCALS).content_mask_radii.z,
+                    bottom_left: get!(BLUR_LOCALS).content_mask_radii.w,
+                },
+                fade_out: Edges {
+                    top: get!(BLUR_LOCALS).content_mask_fade_out.x,
+                    right: get!(BLUR_LOCALS).content_mask_fade_out.y,
+                    bottom: get!(BLUR_LOCALS).content_mask_fade_out.z,
+                    left: get!(BLUR_LOCALS).content_mask_fade_out.w,
+                },
+            },
+            input.position.xy(),
+            get!(BLUR_LOCALS).bounds,
+            corner_radii,
+            get!(BLUR_LOCALS).clip_rounded > 0.5,
         );
 
-        let c = min(coverage, mask_coverage)
-            * get!(BLUR_LOCALS).opacity
-            * window_mask_alpha(input.position.xy());
+        let c = min(coverage, mask_coverage) * get!(BLUR_LOCALS).opacity;
         vec4f(blurred.x * c, blurred.y * c, blurred.z * c, blurred.w * c)
     }
 }

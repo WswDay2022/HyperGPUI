@@ -16,6 +16,11 @@ pub mod shadow {
         pub element_corner_radii: Corners,
         pub inset: ShaderBool,
         pub corner_smoothing: f32,
+        /// Packed `(len << 24) | offset` reference into the frame's content-mask chain arena.
+        pub mask_chain: u32,
+        pub padding0: u32,
+        pub padding1: u32,
+        pub padding2: u32,
     }
     storage!(group(1), binding(0), SHADOWS: RuntimeArray<Shadow>);
 
@@ -235,8 +240,15 @@ pub mod shadow {
         blend_color(
             color,
             shadow_coverage(shadow, input.position.xy())
-                * ContentMask::alpha(shadow.content_mask, input.position.xy())
-                * window_mask_alpha(input.position.xy()),
+                * content_mask_chain_alpha(
+                    shadow.mask_chain,
+                    input.position.xy(),
+                    shadow.content_mask,
+                    input.position.xy(),
+                    shadow.bounds,
+                    shadow.corner_radii,
+                    false,
+                ),
         )
     }
 
@@ -340,8 +352,15 @@ pub mod shadow {
         blend_color(
             color,
             coverage
-                * ContentMask::alpha(shadow.content_mask, input.position.xy())
-                * window_mask_alpha(input.position.xy()),
+                * content_mask_chain_alpha(
+                    shadow.mask_chain,
+                    input.position.xy(),
+                    shadow.content_mask,
+                    input.position.xy(),
+                    shadow.bounds,
+                    shadow.corner_radii,
+                    false,
+                ),
         )
     }
 }
