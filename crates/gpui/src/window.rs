@@ -2865,10 +2865,16 @@ impl Window {
 
     #[inline]
     fn snapped_content_mask(&self) -> ContentMask<ScaledPixels> {
+        // Round exactly like `paint_quad`/sprite bounds. Using `cover_bounds` here expanded the
+        // mask by up to one device pixel, which shifted rounded arcs relative to the snapped
+        // primitive edges and broke the "mask is the primitive's own cutout" comparison. For
+        // axis-aligned clips the two are equivalent up to the rounded edge; for rounded masks
+        // the arc must line up with the element it clips.
+        let mask = self.content_mask();
         ContentMask {
-            bounds: self.cover_bounds(self.content_mask().bounds),
-            corner_radii: self.content_mask().corner_radii.scale(self.scale_factor()),
-            fade_out: self.content_mask().fade_out.scale(self.scale_factor()),
+            bounds: self.snap_bounds(mask.bounds),
+            corner_radii: mask.corner_radii.scale(self.scale_factor()),
+            fade_out: mask.fade_out.scale(self.scale_factor()),
         }
     }
 
@@ -3575,7 +3581,7 @@ impl Window {
             .raw_content_mask_stack
             .iter()
             .map(|mask| ContentMask {
-                bounds: self.cover_bounds(mask.bounds),
+                bounds: self.snap_bounds(mask.bounds),
                 corner_radii: mask.corner_radii.scale(scale_factor),
                 fade_out: mask.fade_out.scale(scale_factor),
             })
@@ -3603,7 +3609,7 @@ impl Window {
             .raw_content_mask_stack
             .iter()
             .map(|mask| ContentMask {
-                bounds: self.cover_bounds(mask.bounds),
+                bounds: self.snap_bounds(mask.bounds),
                 corner_radii: mask.corner_radii.scale(scale_factor),
                 fade_out: mask.fade_out.scale(scale_factor),
             })
