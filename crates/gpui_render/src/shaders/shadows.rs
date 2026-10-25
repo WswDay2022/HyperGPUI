@@ -14,20 +14,24 @@ pub mod shadow {
         pub color: Background,
         pub element_bounds: Bounds,
         pub element_corner_radii: Corners,
-        pub inset: ShaderBool,
+        /// Bit 0: inset shadow. Remaining bits: packed clip-chain reference.
+        pub inset_and_mask_chain: u32,
         pub corner_smoothing: f32,
-        /// Packed `(len << 24) | offset` reference into the frame's content-mask chain arena.
-        pub mask_chain: u32,
-        pub padding0: u32,
-        pub padding1: u32,
-        pub padding2: u32,
+    }
+
+    pub fn shadow_is_inset(shadow: Shadow) -> bool {
+        (shadow.inset_and_mask_chain & 1u32) != 0u32
+    }
+
+    pub fn shadow_mask_chain(shadow: Shadow) -> u32 {
+        shadow.inset_and_mask_chain >> 1u32
     }
     storage!(group(1), binding(0), SHADOWS: RuntimeArray<Shadow>);
 
     pub const SHADOW_INTEGRATION_SAMPLE_COUNT: i32 = 4;
 
     pub fn shadow_geometry(shadow: Shadow) -> Bounds {
-        if is_enabled(shadow.inset) {
+        if shadow_is_inset(shadow) {
             return shadow.element_bounds;
         }
 
@@ -40,7 +44,7 @@ pub mod shadow {
 
     pub fn shadow_paint(shadow: Shadow) -> Paint {
         let mut bounds = shadow.bounds;
-        if is_enabled(shadow.inset) {
+        if shadow_is_inset(shadow) {
             bounds = shadow.element_bounds;
         }
 
@@ -89,7 +93,7 @@ pub mod shadow {
             coverage = blurred_shadow_coverage(shadow, position);
         }
 
-        if is_enabled(shadow.inset) {
+        if shadow_is_inset(shadow) {
             coverage = (1.0 - coverage)
                 * antialiased_coverage(rounded_rectangle_signed_distance(
                     position,
@@ -153,7 +157,7 @@ pub mod shadow {
             coverage = blurred_shadow_coverage(shadow, position);
         }
 
-        if is_enabled(shadow.inset) {
+        if shadow_is_inset(shadow) {
             coverage = (1.0 - coverage)
                 * antialiased_coverage(prepared_corner_signed_distance(
                     position,
@@ -241,7 +245,7 @@ pub mod shadow {
             color,
             shadow_coverage(shadow, input.position.xy())
                 * content_mask_chain_alpha(
-                    shadow.mask_chain,
+                    shadow_mask_chain(shadow),
                     input.position.xy(),
                     shadow.content_mask,
                     input.position.xy(),
@@ -353,7 +357,7 @@ pub mod shadow {
             color,
             coverage
                 * content_mask_chain_alpha(
-                    shadow.mask_chain,
+                    shadow_mask_chain(shadow),
                     input.position.xy(),
                     shadow.content_mask,
                     input.position.xy(),

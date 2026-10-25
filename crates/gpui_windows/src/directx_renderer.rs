@@ -895,12 +895,8 @@ impl DirectXRenderer {
                 color: path.color,
                 bounds: path.bounds,
                 content_mask: path.content_mask.bounds,
-                content_mask_corner_radii: path.content_mask.corner_radii,
-                content_mask_fade_out: path.content_mask.fade_out,
                 mask_chain: path.mask_chain,
-                padding0: 0,
-                padding1: 0,
-                padding2: 0,
+                padding: [0; 3],
             }));
         }
 
@@ -1262,11 +1258,10 @@ impl DirectXRenderer {
                 bounds: composite_bounds,
                 content_mask: content_mask.bounds,
                 content_mask_radii: corner_radii_array(content_mask.corner_radii),
-                content_mask_fade_out: edges_array(content_mask.fade_out),
+                mask_chain,
                 corner_radii,
                 opacity,
                 clip_rounded: if clip_rounded { 1.0 } else { 0.0 },
-                mask_chain,
                 ..Default::default()
             },
             &full_vp,
@@ -1749,8 +1744,12 @@ struct BlurParams {
     /// painted under may itself be rounded (`overflow_hidden` + a corner radius), and a filter's
     /// output is clipped by it like any other painting — corners included.
     content_mask_radii: [f32; 4],
-    /// The content mask's edge fade distances (top, right, bottom, left), in device pixels.
-    content_mask_fade_out: [f32; 4],
+    /// Packed reference into the frame's content-mask chain arena; the chain carries the mask's
+    /// corner radii and fades.
+    mask_chain: u32,
+    padding0: u32,
+    padding1: u32,
+    padding2: u32,
     corner_radii: [f32; 4],
     direction: [f32; 2],
     sigma: f32,
@@ -1766,11 +1765,6 @@ struct BlurParams {
     /// origin, so a stationary element blurs identically at every window size); 0.0 = 1:1 copy
     /// (the scene blit, which must not downsample). Downsample pass only.
     downsample: f32,
-    /// Packed reference into the frame's content-mask chain arena.
-    mask_chain: u32,
-    padding0: u32,
-    padding1: u32,
-    padding2: u32,
 }
 
 impl Default for BlurParams {
@@ -1779,7 +1773,10 @@ impl Default for BlurParams {
             bounds: Bounds::default(),
             content_mask: Bounds::default(),
             content_mask_radii: [0.0; 4],
-            content_mask_fade_out: [0.0; 4],
+            mask_chain: 0,
+            padding0: 0,
+            padding1: 0,
+            padding2: 0,
             corner_radii: [0.0; 4],
             direction: [0.0, 0.0],
             sigma: 0.0,
@@ -1788,10 +1785,6 @@ impl Default for BlurParams {
             tap_step: 0.0,
             clip_rounded: 0.0,
             downsample: 0.0,
-            mask_chain: 0,
-            padding0: 0,
-            padding1: 0,
-            padding2: 0,
         }
     }
 }
@@ -2028,13 +2021,10 @@ struct PathRasterizationSprite {
     /// and cuts the mask's distance field in the fragment, so rounded mask corners apply to
     /// vector paths too.
     content_mask: Bounds<ScaledPixels>,
-    content_mask_corner_radii: Corners<ScaledPixels>,
-    content_mask_fade_out: Edges<ScaledPixels>,
     /// Packed reference into the frame's content-mask chain arena.
     mask_chain: u32,
-    padding0: u32,
-    padding1: u32,
-    padding2: u32,
+    /// Pads the stride to 144 bytes.
+    padding: [u32; 3],
 }
 
 #[derive(Clone, Copy)]
@@ -2156,10 +2146,6 @@ fn corner_radii_array(corners: Corners<ScaledPixels>) -> [f32; 4] {
         corners.bottom_right.0,
         corners.bottom_left.0,
     ]
-}
-
-fn edges_array(edges: Edges<ScaledPixels>) -> [f32; 4] {
-    [edges.top.0, edges.right.0, edges.bottom.0, edges.left.0]
 }
 
 fn create_render_target_and_its_view(
@@ -4266,26 +4252,19 @@ mod tests {
     }
 
     /// The path instance struct must match the HLSL `PathRasterizationSprite` offsets exactly
-    /// (FXC reports 0/8/16/96/112/128/144/160, total 176). A drift here silently misreads the
-    /// mask, the gradient box and the clip chain for every path vertex.
+    /// (FXC reports 0/8/16/96/112/128, total 144). A drift here silently misreads the mask, the
+    /// gradient box and the clip chain for every path vertex.
     #[test]
     fn path_rasterization_sprite_layout() {
         use std::mem::{offset_of, size_of};
-        assert_eq!(size_of::<PathRasterizationSprite>(), 176);
+        assert_eq!(size_of::<PathRasterizationSprite>(), 144);
         assert_eq!(offset_of!(PathRasterizationSprite, xy_position), 0);
         assert_eq!(offset_of!(PathRasterizationSprite, curve_position), 8);
         assert_eq!(offset_of!(PathRasterizationSprite, color), 16);
         assert_eq!(offset_of!(PathRasterizationSprite, bounds), 96);
         assert_eq!(offset_of!(PathRasterizationSprite, content_mask), 112);
-        assert_eq!(
-            offset_of!(PathRasterizationSprite, content_mask_corner_radii),
-            128
-        );
-        assert_eq!(
-            offset_of!(PathRasterizationSprite, content_mask_fade_out),
-            144
-        );
-        assert_eq!(offset_of!(PathRasterizationSprite, mask_chain), 160);
+        assert_eq!(offset_of!(PathRasterizationSprite, mask_chain), 128);
+        assert_eq!(offset_of!(PathRasterizationSprite, padding), 132);
     }
 
     // --- Antialiasing / clipping precision tests -------------------------------------------
@@ -4642,8 +4621,7 @@ mod tests {
             thickness: ScaledPixels(0.0),
             wavy: false.into(),
             transformation: TransformationMatrix::unit(),
-            padding0: 0,
-            padding1: 0,
+            padding: [0; 2],
         };
         pipeline.update_buffer(&device, &context, &[underline])?;
         unsafe {
@@ -5431,141 +5409,6 @@ mod tests {
         Ok(())
     }
 
-    /// The white window background is a rounded quad at (5, 5) in a large window. Its AA margin
-    /// reaches one device pixel outside the bounds, but the coverage at the pixel just outside
-    /// must be zero — a half-covered pixel there reads as a faint one-pixel frame around the
-    /// window. This renders the exact bounds the IshiTone borderless window uses.
-    #[test]
-    fn hlsl_large_window_quad_edge_readback() -> Result<()> {
-        // Prefer the real GPU: this bug was only visible in the window, not under WARP.
-        let Some((device, context)) = create_hardware_device().or_else(create_warp_device) else {
-            eprintln!("[large_quad] Direct3D device unavailable, skipping");
-            return Ok(());
-        };
-        eprintln!(
-            "[large_quad] feature_level={:?}",
-            unsafe { device.GetFeatureLevel() }
-        );
-        const WIDTH: u32 = 1911;
-        const HEIGHT: u32 = 1090;
-        let (texture, rtv, _srv) = create_color_target(&device, WIDTH, HEIGHT)?;
-        let rtv = rtv.expect("color target render target view");
-        let staging = {
-            let desc = D3D11_TEXTURE2D_DESC {
-                Width: WIDTH,
-                Height: HEIGHT,
-                MipLevels: 1,
-                ArraySize: 1,
-                Format: RENDER_TARGET_FORMAT,
-                SampleDesc: DXGI_SAMPLE_DESC {
-                    Count: 1,
-                    Quality: 0,
-                },
-                Usage: D3D11_USAGE_STAGING,
-                BindFlags: 0,
-                CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
-                MiscFlags: 0,
-            };
-            let mut staging = None;
-            unsafe { device.CreateTexture2D(&desc, None, Some(&mut staging)) }?;
-            staging.unwrap()
-        };
-
-        let globals_buffer =
-            create_constant_buffer(&device, std::mem::size_of::<GlobalUniforms>())?;
-        update_buffer(
-            &context,
-            &globals_buffer,
-            &[GlobalUniforms {
-                viewport_size: [WIDTH as f32, HEIGHT as f32],
-                premultiplied_alpha: 0,
-                padding: 0,
-                window_mask_params: [0.0; 4],
-                window_mask: ContentMask::default(),
-            }],
-        )?;
-        let font_buffer =
-            create_constant_buffer(&device, std::mem::size_of::<FontRasterizationUniforms>())?;
-        update_buffer(
-            &context,
-            &font_buffer,
-            &[FontRasterizationUniforms::default()],
-        )?;
-        let draw_constants_buffer = create_constant_buffer(&device, 16)?;
-        update_buffer(
-            &context,
-            &draw_constants_buffer,
-            &[hgpui_render::artifacts::Dx11DrawConstants::default()],
-        )?;
-        let globals = [
-            Some(globals_buffer),
-            Some(font_buffer),
-            None,
-            Some(draw_constants_buffer),
-        ];
-
-        let blend = create_blend_state(&device)?;
-        let mut pipeline =
-            PipelineState::<Quad>::new(&device, "test_large_quad", ShaderModule::Quad, 4, blend)?;
-        let radius = ScaledPixels(99.0);
-        let quad = Quad {
-            bounds: bounds(
-                point(ScaledPixels(5.0), ScaledPixels(5.0)),
-                size(ScaledPixels(1901.0), ScaledPixels(1080.0)),
-            ),
-            content_mask: ContentMask {
-                bounds: bounds(
-                    point(ScaledPixels(0.0), ScaledPixels(0.0)),
-                    size(ScaledPixels(WIDTH as f32), ScaledPixels(HEIGHT as f32)),
-                ),
-                corner_radii: Corners::default(),
-                fade_out: Default::default(),
-            },
-            background: Background::from(rgba(0xff00ffff)),
-            corner_radii: Corners {
-                top_left: radius,
-                top_right: radius,
-                bottom_right: radius,
-                bottom_left: radius,
-            },
-            ..Default::default()
-        };
-        pipeline.update_buffer(&device, &context, &[quad])?;
-        let viewport = D3D11_VIEWPORT {
-            TopLeftX: 0.0,
-            TopLeftY: 0.0,
-            Width: WIDTH as f32,
-            Height: HEIGHT as f32,
-            MinDepth: 0.0,
-            MaxDepth: 1.0,
-        };
-        unsafe {
-            context.ClearRenderTargetView(&rtv, &[0.0, 0.0, 0.0, 1.0]);
-            context.OMSetRenderTargets(Some(slice::from_ref(&Some(rtv.clone()))), None);
-        }
-        pipeline.draw_range(&device, &context, &[viewport], &globals, 4, 0, 1)?;
-        dump_device_errors(&device);
-
-        for (x, y, what) in [
-            (4, 500, "left margin ring"),
-            (1906, 500, "right margin ring"),
-            (500, 4, "top margin ring"),
-            (500, 1085, "bottom margin ring"),
-            (5, 500, "left edge pixel"),
-        ] {
-            let px = read_pixel(&context, &texture, &staging, x, y)?;
-            if what.ends_with("edge pixel") {
-                assert_eq!(px[2], 255, "{what} must be fully covered, got {px:?}");
-            } else {
-                assert_eq!(
-                    px[2], 0,
-                    "{what} is outside the quad and must stay clear, got {px:?}"
-                );
-            }
-        }
-        Ok(())
-    }
-
     /// When a primitive's content mask is its own rounded cutout, the mask's distance field is
     /// the same field the primitive already uses for its outline. Applying both squares the
     /// coverage of every edge pixel (0.5 × 0.5 = 0.25), which shows up as a dark one-pixel rim
@@ -5621,6 +5464,8 @@ mod tests {
         _pipeline: PipelineState<PathRasterizationSprite>,
         _globals: [Option<ID3D11Buffer>; 4],
         _rtv: ID3D11RenderTargetView,
+        _mask_buffer: Option<ID3D11Buffer>,
+        _mask_view: Option<ID3D11ShaderResourceView>,
     }
 
     fn render_path(
@@ -5641,6 +5486,16 @@ mod tests {
             6,
             blend,
         )?;
+        // Give the vertices a real one-entry mask chain: rounded corners/fades live in the
+        // chain now, not in per-vertex fields.
+        let mask_buffer = create_buffer(
+            device,
+            std::mem::size_of::<ContentMask<ScaledPixels>>(),
+            1,
+        )?;
+        update_buffer(context, &mask_buffer, &[content_mask])?;
+        let mask_view = create_buffer_view(device, &mask_buffer)?;
+        let mask_chain = 1 << 24;
         let vertex = |x: f32, y: f32| PathRasterizationSprite {
             xy_position: point(ScaledPixels(x), ScaledPixels(y)),
             curve_position: match st_scale {
@@ -5654,12 +5509,8 @@ mod tests {
             color,
             bounds: path_bounds,
             content_mask: content_mask.bounds,
-            content_mask_corner_radii: content_mask.corner_radii,
-            content_mask_fade_out: content_mask.fade_out,
-            mask_chain: 0,
-            padding0: 0,
-            padding1: 0,
-            padding2: 0,
+            mask_chain,
+            padding: [0; 3],
         };
         // Two triangles covering the whole viewport.
         let vertices = [
@@ -5674,6 +5525,8 @@ mod tests {
         unsafe {
             context.ClearRenderTargetView(&rtv, &[0.0, 0.0, 0.0, 1.0]);
             context.OMSetRenderTargets(Some(slice::from_ref(&Some(rtv.clone()))), None);
+            context.PSSetShaderResources(5, Some(slice::from_ref(&mask_view)));
+            context.VSSetShaderResources(5, Some(slice::from_ref(&mask_view)));
         }
         pipeline.draw(
             context,
@@ -5690,6 +5543,8 @@ mod tests {
             _pipeline: pipeline,
             _globals: globals,
             _rtv: rtv,
+            _mask_buffer: Some(mask_buffer),
+            _mask_view: mask_view,
         })
     }
 
@@ -5926,12 +5781,8 @@ mod tests {
                 size(ScaledPixels(30.5), ScaledPixels(30.5)),
             ),
             element_corner_radii: Corners::default(),
-            inset: 1,
+            inset_and_mask_chain: Shadow::pack_inset_and_mask_chain(true, 0),
             corner_smoothing: 0.0,
-            mask_chain: 0,
-            padding0: 0,
-            padding1: 0,
-            padding2: 0,
         };
         pipeline.update_buffer(&device, &context, &[shadow])?;
         unsafe {

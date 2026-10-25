@@ -168,6 +168,10 @@ pub(crate) struct MetalRenderer {
     /// inline.
     group_textures: Vec<metal::Texture>,
     path_sample_count: u32,
+    /// Frame-wide content-mask chain arena, uploaded once per frame and bound as `buffer(4)`
+    /// in every shader stage (see `Scene::mask_chains`).
+    mask_buffer: metal::Buffer,
+    mask_capacity: usize,
     /// Offscreen render target reused across `render_scene` calls when
     /// rendering headlessly without reading pixels back.
     #[cfg(any(test, feature = "test-support"))]
@@ -392,6 +396,13 @@ impl MetalRenderer {
         let core_video_texture_cache =
             CVMetalTextureCache::new(None, device.clone(), None).unwrap();
 
+        // Content-mask chain arena: one buffer shared by every pipeline for the whole frame.
+        let mask_capacity = 64 * mem::size_of::<ContentMask<ScaledPixels>>();
+        let mask_buffer = device.new_buffer(
+            mask_capacity as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
         Self {
             device,
             layer,
@@ -425,8 +436,37 @@ impl MetalRenderer {
             blur_pong_texture: None,
             group_textures: Vec::new(),
             path_sample_count: PATH_SAMPLE_COUNT,
+            mask_buffer,
+            mask_capacity,
             #[cfg(any(test, feature = "test-support"))]
             headless_render_target: None,
+        }
+    }
+
+    /// Uploads the frame's content-mask chain arena (`Scene::mask_chains`) into the Metal buffer
+    /// bound at `buffer(4)` by every pipeline.
+    fn upload_content_masks(&mut self, masks: &[ContentMask<ScaledPixels>]) {
+        let stride = mem::size_of::<ContentMask<ScaledPixels>>();
+        let required = masks.len().max(1) * stride;
+        if self.mask_capacity < required {
+            let capacity = required.next_power_of_two().max(64 * stride);
+            let device = self.device.clone();
+            self.mask_buffer =
+                device.new_buffer(capacity as u64, MTLResourceOptions::StorageModeShared);
+            self.mask_capacity = capacity;
+        }
+        unsafe {
+            let destination = self.mask_buffer.contents() as *mut u8;
+            if masks.is_empty() {
+                // Chain reference 0 never indexes the arena, but zeroing keeps the buffer valid.
+                ptr::write_bytes(destination, 0, stride);
+            } else {
+                ptr::copy_nonoverlapping(
+                    masks.as_ptr().cast::<u8>(),
+                    destination,
+                    masks.len() * stride,
+                );
+            }
         }
     }
 
@@ -931,6 +971,7 @@ impl MetalRenderer {
         texture: &metal::TextureRef,
         viewport_size: Size<DevicePixels>,
     ) -> Result<metal::CommandBuffer> {
+        self.upload_content_masks(&scene.mask_chains);
         let command_queue = self.command_queue.clone();
         let command_buffer = command_queue.new_command_buffer();
         let alpha = if self.opaque { 1. } else { 0. };
@@ -1067,6 +1108,7 @@ impl MetalRenderer {
                                 viewport_size,
                                 filter.bounds,
                                 filter.content_mask,
+                                filter.mask_chain,
                                 filter.corner_radii,
                                 max_blur_radius(&filter.filters),
                                 filter.opacity,
@@ -1125,6 +1167,7 @@ impl MetalRenderer {
                                     viewport_size,
                                     boundary.bounds,
                                     boundary.content_mask,
+                                    boundary.mask_chain,
                                     boundary.corner_radii,
                                     max_blur_radius(&boundary.filters),
                                     boundary.opacity,
@@ -1215,7 +1258,7 @@ impl MetalRenderer {
             },
         );
         encoder.set_render_pipeline_state(pipeline);
-        bind_global_uniforms(encoder, target_viewport);
+        bind_global_uniforms(encoder, target_viewport, &self.mask_buffer);
         encoder.set_vertex_bytes(
             BlurInputIndex::Params as u64,
             mem::size_of::<BlurUniform>() as u64,
@@ -1246,6 +1289,7 @@ impl MetalRenderer {
         viewport_size: Size<DevicePixels>,
         bounds: Bounds<ScaledPixels>,
         content_mask: ContentMask<ScaledPixels>,
+        mask_chain: u32,
         corner_radii: Corners<ScaledPixels>,
         blur_radius: f32,
         opacity: f32,
@@ -1333,7 +1377,7 @@ impl MetalRenderer {
                 bounds: composite_bounds,
                 content_mask: content_mask.bounds,
                 content_mask_radii: corner_radii_array(content_mask.corner_radii),
-                content_mask_fade_out: edges_array(content_mask.fade_out),
+                mask_chain,
                 corner_radii: corner_radii_array(corner_radii),
                 opacity,
                 clip_rounded: if clip_rounded { 1.0 } else { 0.0 },
@@ -1377,7 +1421,7 @@ impl MetalRenderer {
 
         let command_encoder = command_buffer.new_render_command_encoder(render_pass_descriptor);
         command_encoder.set_render_pipeline_state(&self.paths_rasterization_pipeline_state);
-        bind_global_uniforms(command_encoder, viewport_size);
+        bind_global_uniforms(command_encoder, viewport_size, &self.mask_buffer);
 
         align_offset(instance_offset);
         let mut vertices = Vec::new();
@@ -1388,14 +1432,8 @@ impl MetalRenderer {
                 color: path.color,
                 bounds: path.bounds,
                 content_mask: path.content_mask.bounds,
-                content_mask_corner_radii: path.content_mask.corner_radii,
-                content_mask_fade_out: path.content_mask.fade_out,
-                // TODO(macos): chains are disabled until the Metal backend binds the arena;
-                // the shader falls back to the single mask when this is zero.
                 mask_chain: path.mask_chain,
-                padding0: 0,
-                padding1: 0,
-                padding2: 0,
+                padding: [0; 3],
             }));
         }
         let vertices_bytes_len = mem::size_of_val(vertices.as_slice());
@@ -1455,7 +1493,7 @@ impl MetalRenderer {
             &self.shadows_pipeline_state
         };
         command_encoder.set_render_pipeline_state(pipeline);
-        bind_global_uniforms(command_encoder, viewport_size);
+        bind_global_uniforms(command_encoder, viewport_size, &self.mask_buffer);
         command_encoder.set_vertex_buffer(
             ShadowInputIndex::Shadows as u64,
             Some(&instance_buffer.metal_buffer),
@@ -1515,7 +1553,7 @@ impl MetalRenderer {
             &self.quads_pipeline_state
         };
         command_encoder.set_render_pipeline_state(pipeline);
-        bind_global_uniforms(command_encoder, viewport_size);
+        bind_global_uniforms(command_encoder, viewport_size, &self.mask_buffer);
         command_encoder.set_vertex_buffer(
             QuadInputIndex::Quads as u64,
             Some(&instance_buffer.metal_buffer),
@@ -1568,7 +1606,7 @@ impl MetalRenderer {
         };
 
         command_encoder.set_render_pipeline_state(&self.path_sprites_pipeline_state);
-        bind_global_uniforms(command_encoder, viewport_size);
+        bind_global_uniforms(command_encoder, viewport_size, &self.mask_buffer);
 
         command_encoder.set_fragment_texture(
             SpriteInputIndex::AtlasTexture as u64,
@@ -1648,7 +1686,7 @@ impl MetalRenderer {
         align_offset(instance_offset);
 
         command_encoder.set_render_pipeline_state(&self.underlines_pipeline_state);
-        bind_global_uniforms(command_encoder, viewport_size);
+        bind_global_uniforms(command_encoder, viewport_size, &self.mask_buffer);
         command_encoder.set_vertex_buffer(
             UnderlineInputIndex::Underlines as u64,
             Some(&instance_buffer.metal_buffer),
@@ -1718,7 +1756,7 @@ impl MetalRenderer {
             DevicePixels(texture.height() as i32),
         );
         command_encoder.set_render_pipeline_state(&self.monochrome_sprites_pipeline_state);
-        bind_global_uniforms(command_encoder, viewport_size);
+        bind_global_uniforms(command_encoder, viewport_size, &self.mask_buffer);
         command_encoder.set_vertex_buffer(
             SpriteInputIndex::Sprites as u64,
             Some(&instance_buffer.metal_buffer),
@@ -1776,7 +1814,7 @@ impl MetalRenderer {
             &self.polychrome_sprites_pipeline_state
         };
         command_encoder.set_render_pipeline_state(pipeline);
-        bind_global_uniforms(command_encoder, viewport_size);
+        bind_global_uniforms(command_encoder, viewport_size, &self.mask_buffer);
         command_encoder.set_vertex_buffer(
             SpriteInputIndex::Sprites as u64,
             Some(&instance_buffer.metal_buffer),
@@ -1827,7 +1865,7 @@ impl MetalRenderer {
         command_encoder: &metal::RenderCommandEncoderRef,
     ) -> bool {
         command_encoder.set_render_pipeline_state(&self.surfaces_pipeline_state);
-        bind_global_uniforms(command_encoder, viewport_size);
+        bind_global_uniforms(command_encoder, viewport_size, &self.mask_buffer);
 
         for surface in surfaces {
             assert_eq!(
@@ -1905,13 +1943,10 @@ fn corner_radii_array(corners: Corners<ScaledPixels>) -> [f32; 4] {
     ]
 }
 
-fn edges_array(edges: hgpui::Edges<ScaledPixels>) -> [f32; 4] {
-    [edges.top.0, edges.right.0, edges.bottom.0, edges.left.0]
-}
-
 fn bind_global_uniforms(
     encoder: &metal::RenderCommandEncoderRef,
     viewport_size: Size<DevicePixels>,
+    mask_buffer: &metal::Buffer,
 ) {
     let globals = GlobalUniforms {
         viewport_size: [
@@ -1951,6 +1986,9 @@ fn bind_global_uniforms(
         mem::size_of::<FontRasterizationUniforms>() as u64,
         &font as *const FontRasterizationUniforms as *const _,
     );
+    // Frame-wide content-mask chain arena (`CONTENT_MASKS`, mapped to buffer(4) by build.rs).
+    encoder.set_vertex_buffer(4, Some(mask_buffer), 0);
+    encoder.set_fragment_buffer(4, Some(mask_buffer), 0);
 }
 
 /// Naga's runtime-array ABI passes the number of bytes in the bound array at buffer slot 3.

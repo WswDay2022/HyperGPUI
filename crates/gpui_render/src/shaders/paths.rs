@@ -9,15 +9,14 @@ pub mod path_rasterization {
         pub curve_position: Vec2f,
         pub color: Background,
         pub bounds: Bounds,
-        /// Local-only rounded/faded content mask.
+        /// Local-only content-mask bounds (clip distances + legacy fallback).
         pub content_mask: Bounds,
-        pub content_mask_corner_radii: Corners,
-        pub content_mask_fade_out: Edges,
         /// Packed `(len << 24) | offset` reference into the frame's content-mask chain arena.
+        /// The chain carries the mask's corner radii and fades, so they are not duplicated
+        /// per vertex.
         pub mask_chain: u32,
-        pub padding0: u32,
-        pub padding1: u32,
-        pub padding2: u32,
+        /// Pads the stride to 144 bytes (16-byte-aligned D3D11 raw-view offsets).
+        pub padding: [u32; 3],
     }
     storage!(group(1), binding(0), PATH_VERTICES: RuntimeArray<PathRasterizationVertex>);
 
@@ -76,8 +75,8 @@ pub mod path_rasterization {
             input.position.xy(),
             ContentMask {
                 bounds: vertex.content_mask,
-                corner_radii: vertex.content_mask_corner_radii,
-                fade_out: vertex.content_mask_fade_out,
+                corner_radii: zero_corners(),
+                fade_out: zero_edges(),
             },
             input.position.xy(),
             vertex.bounds,

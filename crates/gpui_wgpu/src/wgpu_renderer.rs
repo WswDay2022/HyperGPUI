@@ -130,8 +130,10 @@ struct BlurParams {
     /// painted under may itself be rounded (`overflow_hidden` + a corner radius), and a filter's
     /// output is clipped by it like any other painting — corners included.
     content_mask_radii: [f32; 4],
-    /// The content mask's edge fade distances (top, right, bottom, left), in device pixels.
-    content_mask_fade_out: [f32; 4],
+    /// Packed reference into the frame's content-mask chain arena; the chain carries the mask's
+    /// corner radii and fades.
+    mask_chain: u32,
+    padding: [u32; 3],
     /// Rounded-corner radii (tl, tr, br, bl), in device pixels (composite pass only).
     corner_radii: [f32; 4],
     /// Per-tap sampling step in UV space (gaussian passes only): (1/width, 0) or (0, 1/height).
@@ -154,11 +156,6 @@ struct BlurParams {
     /// origin, so a stationary element blurs identically at every window size); 0.0 = 1:1 copy
     /// (the scene blit, which must not downsample). Downsample pass only.
     downsample: f32,
-    /// Packed reference into the frame's content-mask chain arena.
-    mask_chain: u32,
-    padding0: u32,
-    padding1: u32,
-    padding2: u32,
 }
 
 #[repr(C)]
@@ -190,13 +187,10 @@ struct PathRasterizationVertex {
     /// and cuts the mask's distance field in the fragment, so rounded mask corners apply to
     /// vector paths too.
     content_mask: Bounds<ScaledPixels>,
-    content_mask_corner_radii: Corners<ScaledPixels>,
-    content_mask_fade_out: Edges<ScaledPixels>,
     /// Packed reference into the frame's content-mask chain arena.
     mask_chain: u32,
-    padding0: u32,
-    padding1: u32,
-    padding2: u32,
+    /// Pads the stride to 144 bytes.
+    padding: [u32; 3],
 }
 
 pub struct WgpuSurfaceConfig {
@@ -2412,16 +2406,10 @@ impl WgpuRenderer {
                 content_mask.corner_radii.bottom_right.0,
                 content_mask.corner_radii.bottom_left.0,
             ],
-            content_mask_fade_out: [
-                content_mask.fade_out.top.0,
-                content_mask.fade_out.right.0,
-                content_mask.fade_out.bottom.0,
-                content_mask.fade_out.left.0,
-            ],
+            mask_chain,
             corner_radii,
             opacity,
             clip_rounded: if clip_rounded { 1.0 } else { 0.0 },
-            mask_chain,
             ..Default::default()
         };
         let bind_group = self.make_blur_bind_group(params, &ping);
@@ -2657,12 +2645,8 @@ impl WgpuRenderer {
                 color: path.color,
                 bounds: path.bounds,
                 content_mask: path.content_mask.bounds,
-                content_mask_corner_radii: path.content_mask.corner_radii,
-                content_mask_fade_out: path.content_mask.fade_out,
                 mask_chain: path.mask_chain,
-                padding0: 0,
-                padding1: 0,
-                padding2: 0,
+                padding: [0; 3],
             }));
         }
 
@@ -3088,23 +3072,17 @@ mod path_layout_tests {
     use std::mem::{offset_of, size_of};
 
     /// The WGSL `PathRasterizationVertex` must see the same field offsets as the Rust
-    /// `repr(C)` struct: 8 / 8 / 80 / 16 / 16 / 16 / 16 = 160 bytes. A drift here silently
-    /// misreads the mask and the gradient box for every path vertex.
+    /// `repr(C)` struct: 8 / 8 / 80 / 16 / 16 / 4 / 12 = 144 bytes. A drift here silently
+    /// misreads the mask, the gradient box and the clip chain for every path vertex.
     #[test]
     fn path_rasterization_vertex_layout_matches_wgsl() {
-        assert_eq!(size_of::<PathRasterizationVertex>(), 160);
+        assert_eq!(size_of::<PathRasterizationVertex>(), 144);
         assert_eq!(offset_of!(PathRasterizationVertex, xy_position), 0);
         assert_eq!(offset_of!(PathRasterizationVertex, curve_position), 8);
         assert_eq!(offset_of!(PathRasterizationVertex, color), 16);
         assert_eq!(offset_of!(PathRasterizationVertex, bounds), 96);
         assert_eq!(offset_of!(PathRasterizationVertex, content_mask), 112);
-        assert_eq!(
-            offset_of!(PathRasterizationVertex, content_mask_corner_radii),
-            128
-        );
-        assert_eq!(
-            offset_of!(PathRasterizationVertex, content_mask_fade_out),
-            144
-        );
+        assert_eq!(offset_of!(PathRasterizationVertex, mask_chain), 128);
+        assert_eq!(offset_of!(PathRasterizationVertex, padding), 132);
     }
 }

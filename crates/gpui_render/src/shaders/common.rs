@@ -245,6 +245,15 @@ mod source {
         }
     }
 
+    pub fn zero_edges() -> Edges {
+        Edges {
+            top: 0.0,
+            right: 0.0,
+            bottom: 0.0,
+            left: 0.0,
+        }
+    }
+
     #[derive(Clone, Copy, PartialEq, Wgsl)]
     pub struct Edges {
         pub top: f32,
@@ -343,48 +352,9 @@ mod source {
     /// primitive is scaled down, and as over-blurred when scaled up). For an untransformed
     /// distance field the gradient magnitude is one and this is identical to `0.5 - d`.
     pub fn antialiased_coverage(signed_distance: f32) -> f32 {
-        antialiased_coverage_with_max_gradient(signed_distance, 1.0)
-    }
-
-    /// Screen-space slope of a local-space distance field, clamped to the largest slope the
-    /// primitive's transform can produce.
-    ///
-    /// `dpdx`/`dpdy` read neighbouring fragments, including helper invocations outside the
-    /// primitive at its outermost AA ring; those lanes have undefined attribute values, and on
-    /// real GPUs their derivative can be enormous. Dividing by an enormous gradient collapses
-    /// the ramp and paints the one-pixel margin ring at ~50% coverage — a faint frame around
-    /// every element. The transform bounds the true slope (the inverse of its smallest singular
-    /// value), so clamping to that bound keeps valid scaled/rotated AA while rejecting the
-    /// garbage. WARP happens to extrapolate the helper lanes, which is why the software tests
-    /// did not catch this.
-    pub fn antialiased_coverage_with_max_gradient(
-        signed_distance: f32,
-        max_gradient: f32,
-    ) -> f32 {
         let gradient = vec2f(dpdx(signed_distance), dpdy(signed_distance));
-        let gradient_length = clamp(length(gradient), 1e-5, max(max_gradient, 1e-5));
-        let device_distance = signed_distance / gradient_length;
+        let device_distance = signed_distance / max(length(gradient), 1e-5);
         saturate(PIXEL_ANTIALIAS_RADIUS - device_distance)
-    }
-
-    /// Largest screen-space slope of a local-space distance field under `transformation`.
-    /// Equals `1 / sigma_min`, where `sigma_min` is the smallest singular value of the 2x2
-    /// linear part; the identity transform yields 1.
-    pub fn aa_max_gradient(transformation: TransformationMatrix) -> f32 {
-        let axis_x = vec2f(
-            transformation.rotation_scale[0usize][0usize],
-            transformation.rotation_scale[1usize][0usize],
-        );
-        let axis_y = vec2f(
-            transformation.rotation_scale[0usize][1usize],
-            transformation.rotation_scale[1usize][1usize],
-        );
-        let a = dot(axis_x, axis_x);
-        let b = dot(axis_x, axis_y);
-        let c = dot(axis_y, axis_y);
-        let discriminant = sqrt(max(0.25 * (a - c) * (a - c) + b * b, 0.0));
-        let smaller = max(0.5 * (a + c) - discriminant, 1e-6);
-        1.0 / sqrt(smaller)
     }
 
     pub fn premultiply(color: Vec4f, coverage: f32) -> Vec4f {

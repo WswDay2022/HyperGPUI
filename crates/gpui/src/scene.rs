@@ -124,7 +124,7 @@ impl Scene {
 
     fn pack_mask_chain(offset: usize, len: usize) -> u32 {
         assert!(
-            offset <= 0x00FF_FFFF && len <= 0xFF,
+            offset <= 0x00FF_FFFF && len <= 0x7F,
             "content-mask chain arena overflow (offset {offset}, len {len})"
         );
         ((len as u32) << 24) | offset as u32
@@ -262,25 +262,36 @@ impl Scene {
     }
 
     fn remap_mask_chain(&mut self, primitive: &mut Primitive, prev_scene: &Scene) {
-        let chain = match primitive {
-            Primitive::Shadow(shadow) => &mut shadow.mask_chain,
-            Primitive::Quad(quad) => &mut quad.mask_chain,
-            Primitive::Path(path) => &mut path.mask_chain,
-            Primitive::Underline(underline) => &mut underline.mask_chain,
-            Primitive::MonochromeSprite(sprite) => &mut sprite.mask_chain,
-            Primitive::SubpixelSprite(sprite) => &mut sprite.mask_chain,
-            Primitive::PolychromeSprite(sprite) => &mut sprite.mask_chain,
+        let old = match primitive {
+            Primitive::Shadow(shadow) => shadow.mask_chain(),
+            Primitive::Quad(quad) => quad.mask_chain,
+            Primitive::Path(path) => path.mask_chain,
+            Primitive::Underline(underline) => underline.mask_chain,
+            Primitive::MonochromeSprite(sprite) => sprite.mask_chain,
+            Primitive::SubpixelSprite(sprite) => sprite.mask_chain,
+            Primitive::PolychromeSprite(sprite) => sprite.mask_chain,
             Primitive::Surface(_) => return,
-            Primitive::BackdropFilter(filter) => &mut filter.mask_chain,
-            Primitive::FilterBoundary(boundary) => &mut boundary.mask_chain,
+            Primitive::BackdropFilter(filter) => filter.mask_chain,
+            Primitive::FilterBoundary(boundary) => boundary.mask_chain,
         };
-        let old = *chain;
         if old == 0 {
             return;
         }
         let len = (old >> 24) as usize;
         let offset = (old & 0x00FF_FFFF) as usize;
-        *chain = self.intern_mask_chain(&prev_scene.mask_chains[offset..offset + len]);
+        let new = self.intern_mask_chain(&prev_scene.mask_chains[offset..offset + len]);
+        match primitive {
+            Primitive::Shadow(shadow) => shadow.set_mask_chain(new),
+            Primitive::Quad(quad) => quad.mask_chain = new,
+            Primitive::Path(path) => path.mask_chain = new,
+            Primitive::Underline(underline) => underline.mask_chain = new,
+            Primitive::MonochromeSprite(sprite) => sprite.mask_chain = new,
+            Primitive::SubpixelSprite(sprite) => sprite.mask_chain = new,
+            Primitive::PolychromeSprite(sprite) => sprite.mask_chain = new,
+            Primitive::Surface(_) => {}
+            Primitive::BackdropFilter(filter) => filter.mask_chain = new,
+            Primitive::FilterBoundary(boundary) => boundary.mask_chain = new,
+        }
     }
 
     pub fn finish(&mut self) {
@@ -903,8 +914,7 @@ pub struct Underline {
     pub transformation: TransformationMatrix,
     /// Pads the stride to 128 bytes. Direct3D 11 raw-buffer views require 16-byte-aligned
     /// byte offsets, and sprite/underline batches address instances at `index * stride`.
-    pub padding0: u32,
-    pub padding1: u32,
+    pub padding: [u32; 2],
 }
 
 impl From<Underline> for Primitive {
@@ -926,16 +936,35 @@ pub struct Shadow {
     pub color: Background,
     pub element_bounds: Bounds<ScaledPixels>,
     pub element_corner_radii: Corners<ScaledPixels>,
-    /// 0 = drop shadow (rendered outside the element), 1 = inset shadow (rendered inside).
-    pub inset: u32,
+    /// Bit 0: `1` for an inset shadow, `0` for a drop shadow. The remaining 31 bits carry the
+    /// packed clip-chain reference (see [`Scene::mask_chains`]); packing both into the existing
+    /// field keeps the shadow stride at 208 bytes instead of growing the instance by 16.
+    pub inset_and_mask_chain: u32,
     pub corner_smoothing: f32,
-    /// Reference to the clip chain (see [`Scene::mask_chains`]); `0` means no chain.
-    pub mask_chain: u32,
-    /// Pads the stride to 224 bytes so every instance address stays 16-byte aligned, as D3D11
-    /// raw-buffer views require. See [`Underline::padding0`].
-    pub padding0: u32,
-    pub padding1: u32,
-    pub padding2: u32,
+}
+
+impl Shadow {
+    /// Packs the inset flag and clip-chain reference into one word. The chain reference has a
+    /// 7-bit length, so its top bit is always zero and the shift is lossless.
+    pub fn pack_inset_and_mask_chain(inset: bool, mask_chain: u32) -> u32 {
+        (mask_chain << 1) | inset as u32
+    }
+
+    /// The packed clip-chain reference stored in the high bits of the inset word.
+    pub fn mask_chain(&self) -> u32 {
+        self.inset_and_mask_chain >> 1
+    }
+
+    /// Replaces the packed clip-chain reference, preserving the inset flag.
+    pub fn set_mask_chain(&mut self, mask_chain: u32) {
+        self.inset_and_mask_chain =
+            Self::pack_inset_and_mask_chain(self.inset_and_mask_chain & 1 != 0, mask_chain);
+    }
+
+    /// Whether this is an inset shadow.
+    pub fn inset(&self) -> bool {
+        self.inset_and_mask_chain & 1 != 0
+    }
 }
 
 impl From<Shadow> for Primitive {
@@ -1242,7 +1271,7 @@ pub struct PolychromeSprite {
     /// Reference to the clip chain (see [`Scene::mask_chains`]); `0` means no chain.
     pub mask_chain: u32,
     /// Pads the stride to 160 bytes so every instance address is 16-byte aligned, as D3D11
-    /// raw-buffer views require. See [`Underline::padding0`].
+    /// raw-buffer views require. See [`Underline::padding`].
     pub padding1: u32,
 }
 

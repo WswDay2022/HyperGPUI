@@ -109,7 +109,14 @@ pub mod blur {
         pub bounds: Bounds,
         pub content_mask: Bounds,
         pub content_mask_radii: Vec4f,
-        pub content_mask_fade_out: Vec4f,
+        /// Packed reference into the frame's content-mask chain arena: the chain carries the
+        /// mask's corner radii and fades, so they are not duplicated in the uniform.
+        pub mask_chain: u32,
+        // Uniform buffers require 16-byte-aligned array elements, so the alignment padding is
+        // spelled as scalar words rather than `[u32; 3]`.
+        pub padding0: u32,
+        pub padding1: u32,
+        pub padding2: u32,
         pub corner_radii: Vec4f,
         pub direction: Vec2f,
         pub sigma: f32,
@@ -118,11 +125,6 @@ pub mod blur {
         pub tap_step: f32,
         pub clip_rounded: f32,
         pub downsample: f32,
-        /// Packed `(len << 24) | offset` reference into the frame's content-mask chain arena.
-        pub mask_chain: u32,
-        pub padding0: u32,
-        pub padding1: u32,
-        pub padding2: u32,
     }
     uniform!(group(1), binding(0), BLUR_LOCALS: BlurUniforms);
     texture!(group(1), binding(1), BLUR_TEXTURE: Texture2D<f32>);
@@ -255,12 +257,7 @@ pub mod blur {
                     bottom_right: get!(BLUR_LOCALS).content_mask_radii.z,
                     bottom_left: get!(BLUR_LOCALS).content_mask_radii.w,
                 },
-                fade_out: Edges {
-                    top: get!(BLUR_LOCALS).content_mask_fade_out.x,
-                    right: get!(BLUR_LOCALS).content_mask_fade_out.y,
-                    bottom: get!(BLUR_LOCALS).content_mask_fade_out.z,
-                    left: get!(BLUR_LOCALS).content_mask_fade_out.w,
-                },
+                fade_out: zero_edges(),
             },
             input.position.xy(),
             get!(BLUR_LOCALS).bounds,

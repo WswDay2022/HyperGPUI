@@ -3,7 +3,7 @@
 //! The scene primitives themselves live in `hgpui::scene` and are uploaded directly; these
 //! helper types cover the renderer-local payloads that used to be duplicated in every backend.
 
-use hgpui::{Background, Bounds, Corners, Point, ScaledPixels};
+use hgpui::{Background, Bounds, Point, ScaledPixels};
 
 /// Per-frame globals shared by every pipeline.
 #[repr(C)]
@@ -47,15 +47,13 @@ pub struct PathRasterizationVertex {
     pub color: Background,
     /// The path's own bounds: the gradient box.
     pub bounds: Bounds<ScaledPixels>,
-    /// The content mask the path is painted under.
+    /// The content mask's bounds, used for clip distances and the legacy fallback.
     pub content_mask: Bounds<ScaledPixels>,
-    pub content_mask_corner_radii: Corners<ScaledPixels>,
-    pub content_mask_fade_out: hgpui::Edges<ScaledPixels>,
-    /// Reference to the scene's content-mask chain arena (see `Scene::mask_chains`).
+    /// Reference to the scene's content-mask chain arena (see `Scene::mask_chains`). The chain
+    /// carries the mask's corner radii and fades, so they are not duplicated per vertex.
     pub mask_chain: u32,
-    pub padding0: u32,
-    pub padding1: u32,
-    pub padding2: u32,
+    /// Pads the stride to 144 bytes (16-byte-aligned D3D11 raw-view offsets).
+    pub padding: [u32; 3],
 }
 
 /// Parameters shared by the blur downsample / gaussian / composite passes.
@@ -65,7 +63,12 @@ pub struct BlurUniforms {
     pub bounds: Bounds<ScaledPixels>,
     pub content_mask: Bounds<ScaledPixels>,
     pub content_mask_radii: [f32; 4],
-    pub content_mask_fade_out: [f32; 4],
+    /// Packed reference into the frame's content-mask chain arena; the chain carries the mask's
+    /// corner radii and fades.
+    pub mask_chain: u32,
+    pub padding0: u32,
+    pub padding1: u32,
+    pub padding2: u32,
     pub corner_radii: [f32; 4],
     pub direction: [f32; 2],
     pub sigma: f32,
@@ -74,11 +77,6 @@ pub struct BlurUniforms {
     pub tap_step: f32,
     pub clip_rounded: f32,
     pub downsample: f32,
-    /// Reference to the scene's content-mask chain arena (see `Scene::mask_chains`).
-    pub mask_chain: u32,
-    pub padding0: u32,
-    pub padding1: u32,
-    pub padding2: u32,
 }
 
 /// Uniform for the surface (YUV/RGBA texture) pipeline.
@@ -102,7 +100,7 @@ const _: () = {
     assert!(std::mem::size_of::<GlobalUniforms>() == 80);
     assert!(std::mem::size_of::<FontRasterizationUniforms>() == 32);
     assert!(std::mem::size_of::<PathSprite>() == 16);
-    assert!(std::mem::size_of::<PathRasterizationVertex>() == 176);
-    assert!(std::mem::size_of::<BlurUniforms>() == 128);
+    assert!(std::mem::size_of::<PathRasterizationVertex>() == 144);
+    assert!(std::mem::size_of::<BlurUniforms>() == 112);
     assert!(std::mem::size_of::<SurfaceUniforms>() == 96);
 };

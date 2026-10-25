@@ -3602,12 +3602,6 @@ impl Window {
     /// [`Window::snapped_content_mask`] so the GPU chain lines up with the single mask used for
     /// culling and clip distances.
     fn intern_current_mask_chain(&mut self) -> u32 {
-        if cfg!(target_os = "macos") {
-            // TODO(macos): the Metal renderer does not bind the `CONTENT_MASKS` arena yet. An
-            // empty chain makes the shaders fall back to the legacy single intersected mask
-            // (same behaviour as before the chain was introduced).
-            return 0;
-        }
         let scale_factor = self.scale_factor();
         let masks: SmallVec<[ContentMask<ScaledPixels>; 8]> = self
             .raw_content_mask_stack
@@ -3633,10 +3627,6 @@ impl Window {
         &mut self,
         extra: ContentMask<ScaledPixels>,
     ) -> u32 {
-        if cfg!(target_os = "macos") {
-            // TODO(macos): see `intern_current_mask_chain`.
-            return 0;
-        }
         let scale_factor = self.scale_factor();
         let mut masks: SmallVec<[ContentMask<ScaledPixels>; 9]> = self
             .raw_content_mask_stack
@@ -4190,12 +4180,8 @@ impl Window {
                 color: shadow.color.opacity(opacity),
                 element_bounds,
                 element_corner_radii,
-                inset: 0,
+                inset_and_mask_chain: Shadow::pack_inset_and_mask_chain(false, mask_chain),
                 corner_smoothing,
-                mask_chain,
-                padding0: 0,
-                padding1: 0,
-                padding2: 0,
             });
         }
     }
@@ -4241,12 +4227,8 @@ impl Window {
                 color: shadow.color.opacity(opacity),
                 element_bounds,
                 element_corner_radii,
-                inset: 1,
+                inset_and_mask_chain: Shadow::pack_inset_and_mask_chain(true, mask_chain),
                 corner_smoothing,
-                mask_chain,
-                padding0: 0,
-                padding1: 0,
-                padding2: 0,
             });
         }
     }
@@ -4563,8 +4545,7 @@ impl Window {
             thickness,
             wavy: style.wavy.into(),
             transformation: self.current_transform(),
-            padding0: 0,
-            padding1: 0,
+            padding: [0; 2],
         });
     }
 
@@ -4597,8 +4578,7 @@ impl Window {
             color: style.color.unwrap_or_default().opacity(opacity).into(),
             wavy: false.into(),
             transformation: self.current_transform(),
-            padding0: 0,
-            padding1: 0,
+            padding: [0; 2],
         });
     }
 

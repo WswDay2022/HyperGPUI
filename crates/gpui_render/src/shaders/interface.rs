@@ -214,16 +214,16 @@ pub const SCENE_BUFFER_LAYOUTS: &[SceneBufferLayout] = &[
     layout!(hgpui::ContentMask<hgpui::ScaledPixels>, "ContentMask", bounds, corner_radii, fade_out),
     layout!(hgpui::TransformationMatrix, "TransformationMatrix", rotation_scale, translation),
     layout!(hgpui::Quad, "Quad", order, border_style, border_dashed_length, border_dashed_gap, bounds, content_mask, background, border_color, corner_radii, border_widths, corner_smoothing, mask_chain, transformation),
-    layout!(hgpui::Shadow, "Shadow", order, blur_radius, bounds, corner_radii, content_mask, color, element_bounds, element_corner_radii, inset, corner_smoothing, mask_chain, padding0, padding1, padding2),
-    layout!(hgpui::Underline, "Underline", order, mask_chain, bounds, content_mask, color, thickness, wavy, transformation, padding0, padding1),
+    layout!(hgpui::Shadow, "Shadow", order, blur_radius, bounds, corner_radii, content_mask, color, element_bounds, element_corner_radii, inset_and_mask_chain, corner_smoothing),
+    layout!(hgpui::Underline, "Underline", order, mask_chain, bounds, content_mask, color, thickness, wavy, transformation, padding),
     layout!(hgpui::MonochromeSprite, "MonochromeSprite", order, mask_chain, bounds, content_mask, color, tile, transformation),
     layout!(hgpui::SubpixelSprite, "SubpixelSprite", order, mask_chain, bounds, content_mask, color, tile, transformation),
     layout!(hgpui::PolychromeSprite, "PolychromeSprite", order, grayscale, opacity, corner_smoothing, bounds, content_mask, corner_radii, tile, transformation, mask_chain, padding1),
     layout!(PathSprite, "PathSprite", bounds),
-    layout!(PathRasterizationVertex, "PathRasterizationVertex", xy_position, curve_position, color, bounds, content_mask, content_mask_corner_radii, content_mask_fade_out, mask_chain, padding0, padding1, padding2),
+    layout!(PathRasterizationVertex, "PathRasterizationVertex", xy_position, curve_position, color, bounds, content_mask, mask_chain, padding),
     layout!(GlobalUniforms, "GlobalUniforms", viewport_size, premultiplied_alpha, padding, window_mask_params, window_mask),
     layout!(FontRasterizationUniforms, "FontRasterizationUniforms", gamma_ratios, grayscale_enhanced_contrast, subpixel_enhanced_contrast, uses_blue_green_red_subpixel_order, padding),
-    layout!(BlurUniforms, "BlurUniforms", bounds, content_mask, content_mask_radii, content_mask_fade_out, corner_radii, direction, sigma, opacity, tap_count, tap_step, clip_rounded, downsample, mask_chain, padding0, padding1, padding2),
+    layout!(BlurUniforms, "BlurUniforms", bounds, content_mask, content_mask_radii, mask_chain, padding0, padding1, padding2, corner_radii, direction, sigma, opacity, tap_count, tap_step, clip_rounded, downsample),
     layout!(SurfaceUniforms, "SurfaceUniforms", bounds, content_mask, color_format, opacity, padding0, padding1, padding2, padding3, padding4, padding5),
 ];
 
@@ -238,7 +238,7 @@ const _: () = {
     assert!(std::mem::size_of::<hgpui::Quad>() == 304);
     assert!(std::mem::offset_of!(hgpui::Quad, transformation) == 280);
     assert!(std::mem::offset_of!(hgpui::TransformationMatrix, translation) == 16);
-    assert!(std::mem::size_of::<hgpui::Shadow>() == 224);
+    assert!(std::mem::size_of::<hgpui::Shadow>() == 208);
     assert!(std::mem::size_of::<hgpui::Underline>() == 128);
     assert!(std::mem::size_of::<hgpui::MonochromeSprite>() == 144);
     assert!(std::mem::size_of::<hgpui::SubpixelSprite>() == 144);
