@@ -344,17 +344,41 @@ mod source {
 
     /// One-device-pixel coverage ramp for a signed distance field.
     ///
-    /// The distance fields are evaluated in the primitive's local space, which is only the
-    /// screen space while no CSS transform is active and the scale is 1. Dividing by the
-    /// screen-space gradient (`dpdx`/`dpdy`) converts the distance to device pixels at the
-    /// current fragment, so scaled, rotated and skewed primitives keep a one-pixel transition
-    /// instead of a transition measured in local units (which reads as a jagged edge when the
-    /// primitive is scaled down, and as over-blurred when scaled up). For an untransformed
-    /// distance field the gradient magnitude is one and this is identical to `0.5 - d`.
+    /// Upstream gpui's shaders use the same fixed `0.5` threshold: bounds are snapped to device
+    /// pixels, so the distance field is already measured in device pixels. This is deliberately
+    /// not derivative-based — `dpdx`/`dpdy` at the outer AA ring read helper lanes whose
+    /// attributes are undefined on real GPUs, which produced unstable one-pixel rims.
     pub fn antialiased_coverage(signed_distance: f32) -> f32 {
-        let gradient = vec2f(dpdx(signed_distance), dpdy(signed_distance));
-        let device_distance = signed_distance / max(length(gradient), 1e-5);
-        saturate(PIXEL_ANTIALIAS_RADIUS - device_distance)
+        saturate(PIXEL_ANTIALIAS_RADIUS - signed_distance)
+    }
+
+    /// Largest scale factor of the 2x2 linear part (largest singular value).
+    ///
+    /// Distance fields of transformed primitives are evaluated in local space; multiplying the
+    /// distance by this factor turns it into device pixels. Translations yield 1, so untransformed
+    /// and translated UI matches upstream's `0.5 - d` exactly.
+    pub fn aa_scale(transformation: TransformationMatrix) -> f32 {
+        let axis_x = vec2f(
+            transformation.rotation_scale[0usize][0usize],
+            transformation.rotation_scale[1usize][0usize],
+        );
+        let axis_y = vec2f(
+            transformation.rotation_scale[0usize][1usize],
+            transformation.rotation_scale[1usize][1usize],
+        );
+        let a = dot(axis_x, axis_x);
+        let b = dot(axis_x, axis_y);
+        let c = dot(axis_y, axis_y);
+        let discriminant = sqrt(max(0.25 * (a - c) * (a - c) + b * b, 0.0));
+        sqrt(max(0.5 * (a + c) + discriminant, 0.0))
+    }
+
+    /// Coverage of a local-space distance field under `transformation`.
+    pub fn antialiased_coverage_transformed(
+        signed_distance: f32,
+        transformation: TransformationMatrix,
+    ) -> f32 {
+        antialiased_coverage(signed_distance * aa_scale(transformation))
     }
 
     pub fn premultiply(color: Vec4f, coverage: f32) -> Vec4f {

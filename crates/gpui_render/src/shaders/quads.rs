@@ -670,7 +670,8 @@ pub mod quad {
                 border_color.w *= dashed_border_alpha(quad, geometry);
             }
             let blended_border = over(fill_color, border_color);
-            let factor = antialiased_coverage(distances.inner);
+            let factor =
+                antialiased_coverage_transformed(distances.inner, quad.transformation);
             color = mix(
                 fill_color,
                 blended_border,
@@ -679,7 +680,7 @@ pub mod quad {
         }
         blend_color(
             color,
-            antialiased_coverage(distances.outer) * fade,
+            antialiased_coverage_transformed(distances.outer, quad.transformation) * fade,
         )
     }
 
@@ -813,7 +814,7 @@ pub mod quad {
 
             return blend_color(
                 fill_color,
-                antialiased_coverage(distance) * fade,
+                antialiased_coverage_transformed(distance, quad.transformation) * fade,
             );
         }
 
@@ -912,7 +913,7 @@ pub mod quad {
             }
 
             let blended_border = over(fill_color, border_color);
-            let factor = antialiased_coverage(inner);
+            let factor = antialiased_coverage_transformed(inner, quad.transformation);
 
             color = mix(
                 fill_color,
@@ -921,6 +922,9 @@ pub mod quad {
             );
         }
 
-        blend_color(color, antialiased_coverage(outer) * fade)
+        blend_color(
+            color,
+            antialiased_coverage_transformed(outer, quad.transformation) * fade,
+        )
     }
 }
