@@ -78,7 +78,10 @@ pub mod path_rasterization {
         );
         let paint = Paint::new(vertex.color, vertex.bounds);
         let color = paint_color(paint, input.position.xy(), prepare_paint(paint));
-        premultiply(color, coverage * mask_coverage)
+        premultiply(
+            color,
+            coverage * mask_coverage * window_mask_alpha(input.position.xy()),
+        )
     }
 }
 

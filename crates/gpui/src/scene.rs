@@ -64,6 +64,11 @@ pub struct Scene {
     pub surfaces: Vec<PaintSurface>,
     pub backdrop_filters: Vec<BackdropFilter>,
     pub filter_boundaries: Vec<FilterBoundary>,
+    /// The window's outermost rounded clip, if the application gives the window a rounded
+    /// shape. Unlike per-element content masks this is evaluated directly by every fragment
+    /// shader, so descendants inset from the window corner (titlebar buttons, for example) are
+    /// still clipped by the real arc instead of the lossy intersected mask.
+    pub window_mask: Option<ContentMask<ScaledPixels>>,
 }
 
 #[expect(missing_docs)]
@@ -82,6 +87,7 @@ impl Scene {
         self.surfaces.clear();
         self.backdrop_filters.clear();
         self.filter_boundaries.clear();
+        self.window_mask = None;
     }
 
     pub fn len(&self) -> usize {

@@ -120,6 +120,12 @@ mod source {
         pub viewport_size: Vec2f,
         pub premultiplied_alpha: ShaderBool,
         pub padding: u32,
+        /// `x` = 1 when `window_mask` is active, 0 otherwise; the rest is padding.
+        pub window_mask_params: Vec4f,
+        /// The window's outermost rounded clip in device pixels, evaluated by every fragment
+        /// shader in addition to the primitive's own content mask. This keeps the true window
+        /// arc for descendants whose intersected mask lost it (inset titlebar buttons).
+        pub window_mask: ContentMask,
     }
 
     #[repr(C)]
@@ -136,14 +142,14 @@ mod source {
     uniform!(group(0), binding(1), FONT_RASTERIZATION: FontRasterizationUniforms);
 
     #[repr(C)]
-    #[derive(Clone, Copy, Wgsl)]
+    #[derive(Clone, Copy, PartialEq, Wgsl)]
     pub struct Bounds {
         pub origin: Vec2f,
         pub size: Vec2f,
     }
 
     #[repr(C)]
-    #[derive(Clone, Copy, Wgsl)]
+    #[derive(Clone, Copy, PartialEq, Wgsl)]
     pub struct ContentMask {
         pub bounds: Bounds,
         pub corner_radii: Corners,
@@ -208,7 +214,7 @@ mod source {
     }
 
     #[repr(C)]
-    #[derive(Clone, Copy, Wgsl)]
+    #[derive(Clone, Copy, PartialEq, Wgsl)]
     pub struct Corners {
         pub top_left: f32,
         pub top_right: f32,
@@ -225,7 +231,7 @@ mod source {
         }
     }
 
-    #[derive(Clone, Copy, Wgsl)]
+    #[derive(Clone, Copy, PartialEq, Wgsl)]
     pub struct Edges {
         pub top: f32,
         pub right: f32,
@@ -693,6 +699,15 @@ mod source {
     pub fn gaussian_signed_distance_coverage(distance: f32, standard_deviation: f32) -> f32 {
         let normalized = distance / (sqrt(2.0) * standard_deviation);
         saturate(0.5 - 0.5 * approximate_error_function(vec2f(normalized, normalized)).x)
+    }
+
+    /// Coverage of the window's own rounded shape at a scene-space position. One when the
+    /// application does not give its window a rounded mask.
+    pub fn window_mask_alpha(position: Vec2f) -> f32 {
+        if get!(GLOBALS).window_mask_params.x < 0.5 {
+            return 1.0;
+        }
+        ContentMask::alpha(get!(GLOBALS).window_mask, position)
     }
 
     pub fn blend_color(color: Vec4f, alpha_factor: f32) -> Vec4f {

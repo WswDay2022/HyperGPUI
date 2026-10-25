@@ -32,6 +32,12 @@ struct GlobalParams {
     viewport_size: [f32; 2],
     premultiplied_alpha: u32,
     pad: u32,
+    /// `[enabled, 0, 0, 0]`
+    window_mask_params: [f32; 4],
+    /// Bounds as `[origin.x, origin.y, size.x, size.y]`.
+    window_mask_bounds: [f32; 4],
+    window_mask_radii: [f32; 4],
+    window_mask_edges: [f32; 4],
 }
 
 #[repr(C)]
@@ -1584,6 +1590,37 @@ impl WgpuRenderer {
             _pad: 0,
         };
 
+        let window_mask_params;
+        let window_mask_bounds;
+        let window_mask_radii;
+        let window_mask_edges;
+        if let Some(mask) = scene.window_mask {
+            window_mask_params = [1.0, 0.0, 0.0, 0.0];
+            window_mask_bounds = [
+                mask.bounds.origin.x.0,
+                mask.bounds.origin.y.0,
+                mask.bounds.size.width.0,
+                mask.bounds.size.height.0,
+            ];
+            window_mask_radii = [
+                mask.corner_radii.top_left.0,
+                mask.corner_radii.top_right.0,
+                mask.corner_radii.bottom_right.0,
+                mask.corner_radii.bottom_left.0,
+            ];
+            window_mask_edges = [
+                mask.fade_out.top.0,
+                mask.fade_out.right.0,
+                mask.fade_out.bottom.0,
+                mask.fade_out.left.0,
+            ];
+        } else {
+            window_mask_params = [0.0; 4];
+            window_mask_bounds = [0.0; 4];
+            window_mask_radii = [0.0; 4];
+            window_mask_edges = [0.0; 4];
+        }
+
         let globals = GlobalParams {
             viewport_size: [
                 self.surface_config.width as f32,
@@ -1597,6 +1634,10 @@ impl WgpuRenderer {
                 0
             },
             pad: 0,
+            window_mask_params,
+            window_mask_bounds,
+            window_mask_radii,
+            window_mask_edges,
         };
 
         let path_globals = GlobalParams {

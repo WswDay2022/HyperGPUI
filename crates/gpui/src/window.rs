@@ -3540,6 +3540,21 @@ impl Window {
     ) -> R {
         self.invalidator.debug_assert_paint_or_prepaint();
         if let Some(mask) = mask {
+            let rounded = mask.corner_radii.top_left.0 > 0.0
+                || mask.corner_radii.top_right.0 > 0.0
+                || mask.corner_radii.bottom_right.0 > 0.0
+                || mask.corner_radii.bottom_left.0 > 0.0;
+            // The outermost rounded mask whose bounds cover (almost) the whole viewport is the
+            // window's own shape. Record it for the shaders, which evaluate its arc directly:
+            // the intersected masks below lose the arc wherever a child's corner is inset.
+            if rounded
+                && self.content_mask_stack.is_empty()
+                && mask.bounds.size.width.0 >= self.viewport_size.width.0 * 0.9
+                && mask.bounds.size.height.0 >= self.viewport_size.height.0 * 0.9
+            {
+                self.next_frame.scene.window_mask =
+                    Some(mask.scale(self.scale_factor()));
+            }
             let mask = mask.intersect(&self.content_mask());
             self.content_mask_stack.push(mask);
             let result = f(self);
@@ -4515,7 +4530,6 @@ impl Window {
             };
             let content_mask = self.snapped_content_mask();
             let transformation = self.current_transform();
-
             if subpixel_rendering {
                 self.next_frame.scene.insert_primitive(SubpixelSprite {
                     order: 0,

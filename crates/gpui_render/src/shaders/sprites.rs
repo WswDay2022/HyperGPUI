@@ -91,13 +91,15 @@ pub mod underline {
         if !is_enabled(underline.wavy) {
             return blend_color(
                 input.color,
-                ContentMask::alpha(underline.content_mask, input.scene_position),
+                ContentMask::alpha(underline.content_mask, input.scene_position)
+                    * window_mask_alpha(input.scene_position),
             );
         }
         blend_color(
             input.color,
             wavy_underline_coverage(underline, input.local_position)
-                * ContentMask::alpha(underline.content_mask, input.scene_position),
+                * ContentMask::alpha(underline.content_mask, input.scene_position)
+                * window_mask_alpha(input.scene_position),
         )
     }
 }
@@ -182,7 +184,9 @@ pub mod monochrome_sprite {
         );
         blend_color(
             input.color,
-            corrected * ContentMask::alpha(sprite.content_mask, input.scene_position),
+            corrected
+                * ContentMask::alpha(sprite.content_mask, input.scene_position)
+                * window_mask_alpha(input.scene_position),
         )
     }
 }
@@ -333,7 +337,8 @@ pub mod polychrome_sprite {
                     sprite.content_mask,
                     input.scene_position,
                     mask_is_own,
-                ),
+                )
+                * window_mask_alpha(input.scene_position),
         )
     }
 
@@ -419,7 +424,8 @@ pub mod polychrome_sprite {
                     ),
                     aa_max_gradient(sprite.transformation),
                 )
-                * ContentMask::alpha(sprite.content_mask, input.scene_position),
+                * ContentMask::alpha(sprite.content_mask, input.scene_position)
+                * window_mask_alpha(input.scene_position),
         )
     }
 }
@@ -515,7 +521,8 @@ pub mod subpixel_sprite {
             get!(FONT_RASTERIZATION).subpixel_enhanced_contrast,
             get!(FONT_RASTERIZATION).gamma_ratios,
         );
-        let mask_alpha = ContentMask::alpha(sprite.content_mask, input.scene_position);
+        let mask_alpha = ContentMask::alpha(sprite.content_mask, input.scene_position)
+            * window_mask_alpha(input.scene_position);
         SubpixelSpriteFragmentOutput {
             foreground: vec4f(input.color.x, input.color.y, input.color.z, 1.0),
             alpha: vec4f(

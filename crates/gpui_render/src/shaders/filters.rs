@@ -94,7 +94,7 @@ pub mod surface {
             locals.content_mask.corner_radii,
             false,
         );
-        color * locals.opacity * mask_coverage
+        color * locals.opacity * mask_coverage * window_mask_alpha(input.position.xy())
     }
 }
 
@@ -260,7 +260,9 @@ pub mod blur {
             input.position.xy(),
         );
 
-        let c = min(coverage, mask_coverage) * get!(BLUR_LOCALS).opacity;
+        let c = min(coverage, mask_coverage)
+            * get!(BLUR_LOCALS).opacity
+            * window_mask_alpha(input.position.xy());
         vec4f(blurred.x * c, blurred.y * c, blurred.z * c, blurred.w * c)
     }
 }

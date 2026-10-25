@@ -1914,6 +1914,9 @@ fn bind_global_uniforms(
         ],
         premultiplied_alpha: 0,
         padding: 0,
+        // TODO(macos): thread the scene's window_mask through like the DX/WGPU backends.
+        window_mask_params: [0.0; 4],
+        window_mask: Default::default(),
     };
     let font = FontRasterizationUniforms {
         gamma_ratios: [1.0, 1.0, 1.0, 1.0],

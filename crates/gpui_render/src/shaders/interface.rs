@@ -215,7 +215,7 @@ pub const SCENE_BUFFER_LAYOUTS: &[SceneBufferLayout] = &[
     layout!(hgpui::PolychromeSprite, "PolychromeSprite", order, grayscale, opacity, corner_smoothing, bounds, content_mask, corner_radii, tile, transformation),
     layout!(PathSprite, "PathSprite", bounds),
     layout!(PathRasterizationVertex, "PathRasterizationVertex", xy_position, curve_position, color, bounds, content_mask, content_mask_corner_radii, content_mask_fade_out),
-    layout!(GlobalUniforms, "GlobalUniforms", viewport_size, premultiplied_alpha, padding),
+    layout!(GlobalUniforms, "GlobalUniforms", viewport_size, premultiplied_alpha, padding, window_mask_params, window_mask),
     layout!(FontRasterizationUniforms, "FontRasterizationUniforms", gamma_ratios, grayscale_enhanced_contrast, subpixel_enhanced_contrast, uses_blue_green_red_subpixel_order, padding),
     layout!(BlurUniforms, "BlurUniforms", bounds, content_mask, content_mask_radii, content_mask_fade_out, corner_radii, direction, sigma, opacity, tap_count, tap_step, clip_rounded, downsample),
     layout!(SurfaceUniforms, "SurfaceUniforms", bounds, content_mask, color_format, opacity, padding0, padding1, padding2, padding3, padding4, padding5),

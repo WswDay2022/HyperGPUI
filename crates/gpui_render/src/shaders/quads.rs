@@ -599,6 +599,7 @@ pub mod quad {
             return transparent();
         }
         let quad = get!(QUADS)[input.quad_id as usize];
+        let window_fade = window_mask_alpha(input.scene_position);
 
         let mask_is_own = same_origin(quad.content_mask.bounds, quad.bounds)
             && same_size(quad.content_mask.bounds, quad.bounds)
@@ -608,7 +609,8 @@ pub mod quad {
             && quad.content_mask.corner_radii.bottom_right == quad.corner_radii.bottom_right;
 
         let mask_position = select(input.scene_position, input.local_position, mask_is_own);
-        let fade = ContentMask::alpha_with_own(quad.content_mask, mask_position, mask_is_own);
+        let fade = ContentMask::alpha_with_own(quad.content_mask, mask_position, mask_is_own)
+            * window_fade;
 
         let fill_color = paint_color(
             Paint::new(quad.background, quad.bounds),
@@ -621,7 +623,7 @@ pub mod quad {
             // skipped even when the mask is the quad's own cutout.
             return blend_color(
                 fill_color,
-                ContentMask::alpha(quad.content_mask, mask_position),
+                ContentMask::alpha(quad.content_mask, mask_position) * window_fade,
             );
         }
 
@@ -631,7 +633,7 @@ pub mod quad {
             // from the mask field, so keep the full mask coverage here (see the note above).
             return blend_color(
                 fill_color,
-                ContentMask::alpha(quad.content_mask, mask_position),
+                ContentMask::alpha(quad.content_mask, mask_position) * window_fade,
             );
         }
 
@@ -750,6 +752,7 @@ pub mod quad {
             return transparent();
         }
         let quad = get!(QUADS)[input.quad_id as usize];
+        let window_fade = window_mask_alpha(input.scene_position);
 
         let mask_is_own = same_origin(quad.content_mask.bounds, quad.bounds)
             && same_size(quad.content_mask.bounds, quad.bounds)
@@ -762,7 +765,7 @@ pub mod quad {
             quad.content_mask,
             select(input.scene_position, input.local_position, mask_is_own),
             mask_is_own,
-        );
+        ) * window_fade;
 
         let fill_color = paint_color(
             Paint::new(quad.background, quad.bounds),
