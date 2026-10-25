@@ -936,7 +936,18 @@ mod source {
     /// sprite or shadow) exclude masks identical to that outline. Such a mask carries no extra
     /// clipping information, and multiplying its half-covered edge pixel with the primitive's
     /// own half-covered pixel would darken the rim (0.5 × 0.5).
-    pub fn content_mask_chain_alpha(
+    /// Combined clip field of every active mask: the largest signed distance plus the product
+    /// of the edge fades. Callers that also have their own outline combine this distance with
+    /// their own device-space distance via `max` and antialias once, so an ancestor mask whose
+    /// edge coincides with the primitive's edge does not darken it (two 0.5 coverages multiplied
+    /// would give 0.25).
+    #[derive(Clone, Copy, Wgsl)]
+    pub struct MaskChainSample {
+        pub distance: f32,
+        pub fade: f32,
+    }
+
+    pub fn content_mask_chain_sample(
         chain: u32,
         position: Vec2f,
         single_mask: ContentMask,
@@ -946,22 +957,42 @@ mod source {
         own_bounds: Bounds,
         own_radii: Corners,
         owns_cutout: bool,
-    ) -> f32 {
+    ) -> MaskChainSample {
         let count = chain >> 24u32;
         let offset = chain & 16777215u32;
         let window_active = get!(GLOBALS).window_mask_params.x >= 0.5;
-        if count == 0u32 {
-            // No chain: either no clip scope is active at all, or this is content built outside
-            // the normal painter (tests / backends that do not upload the arena). Fall back to
-            // the single pre-intersected mask, which is the legacy behaviour.
-            return ContentMask::alpha_with_own(single_mask, single_mask_position, owns_cutout)
-                * window_mask_alpha(position);
-        }
 
         let mut fade = 1.0;
         // `-1e30` is far inside every mask; if every mask is skipped as the primitive's own
         // cutout (or no mask is bound) the coverage stays exactly 1.
         let mut distance = -1.0e30;
+        if count == 0u32 {
+            // No chain: either no clip scope is active at all, or this is content built outside
+            // the normal painter (tests / backends that do not upload the arena). Fall back to
+            // the single pre-intersected mask, which is the legacy behaviour.
+            fade = content_mask_fade(single_mask.bounds, single_mask.fade_out, single_mask_position);
+            if !(owns_cutout && mask_is_own_cutout(single_mask, own_bounds, own_radii)) {
+                distance = rounded_rectangle_signed_distance(
+                    single_mask_position,
+                    single_mask.bounds,
+                    single_mask.corner_radii,
+                );
+            }
+        } else {
+            let mut index = 0u32;
+            while index < count {
+                let mask = get!(CONTENT_MASKS)[(offset + index) as usize];
+                fade = fade * content_mask_fade(mask.bounds, mask.fade_out, position);
+                if !(owns_cutout && mask_is_own_cutout(mask, own_bounds, own_radii)) {
+                    distance = max(
+                        distance,
+                        rounded_rectangle_signed_distance(position, mask.bounds, mask.corner_radii),
+                    );
+                }
+                index = index + 1u32;
+            }
+        }
+
         if window_active {
             let mask = get!(GLOBALS).window_mask;
             fade = fade * content_mask_fade(mask.bounds, mask.fade_out, position);
@@ -973,20 +1004,28 @@ mod source {
             }
         }
 
-        let mut index = 0u32;
-        while index < count {
-            let mask = get!(CONTENT_MASKS)[(offset + index) as usize];
-            fade = fade * content_mask_fade(mask.bounds, mask.fade_out, position);
-            if !(owns_cutout && mask_is_own_cutout(mask, own_bounds, own_radii)) {
-                distance = max(
-                    distance,
-                    rounded_rectangle_signed_distance(position, mask.bounds, mask.corner_radii),
-                );
-            }
-            index = index + 1u32;
-        }
+        MaskChainSample { distance, fade }
+    }
 
-        antialiased_coverage(distance) * fade
+    pub fn content_mask_chain_alpha(
+        chain: u32,
+        position: Vec2f,
+        single_mask: ContentMask,
+        single_mask_position: Vec2f,
+        own_bounds: Bounds,
+        own_radii: Corners,
+        owns_cutout: bool,
+    ) -> f32 {
+        let sample = content_mask_chain_sample(
+            chain,
+            position,
+            single_mask,
+            single_mask_position,
+            own_bounds,
+            own_radii,
+            owns_cutout,
+        );
+        antialiased_coverage(sample.distance) * sample.fade
     }
 
     pub fn content_mask_coverage(

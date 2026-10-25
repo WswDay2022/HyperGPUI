@@ -3395,7 +3395,9 @@ mod tests {
         )?;
         dump_device_errors(&device);
 
-        let blended = (0..TEST_SIZE)
+        // Skip the quad's own outer edges (x = 16 and 47): they are correctly antialiased.
+        // Cell boundaries inside the quad (x = 24, 32, 40) must stay hard.
+        let blended = (17..=46)
             .filter(|&x| {
                 let r = read_pixel(&context, &texture, &staging, x, 33).unwrap()[2];
                 (72..=248).contains(&r)
@@ -5120,6 +5122,43 @@ mod tests {
             assert_eq!(
                 px[2], expected,
                 "{what} at ({x}, {y}), got {px:?} (B,G,R,A)"
+            );
+        }
+        Ok(())
+    }
+
+    /// A thin straight quad must keep its exact bounds. The vertex expands every quad by the AA
+    /// margin; the straight-edge fast path used to take its coverage from the content mask, which
+    /// for ordinary quads is the viewport (alpha 1), so the margin painted one extra row/column
+    /// around every rectangle. A 2px Divider rendered 4px thick.
+    #[test]
+    fn hlsl_quad_straight_edge_does_not_bleed_aa_margin() -> Result<()> {
+        let Some((device, context)) = create_warp_device() else {
+            eprintln!("[thin_quad] WARP device unavailable, skipping");
+            return Ok(());
+        };
+        let quad = Quad {
+            bounds: bounds(
+                point(ScaledPixels(8.0), ScaledPixels(30.0)),
+                size(ScaledPixels(48.0), ScaledPixels(2.0)),
+            ),
+            content_mask: viewport_mask(),
+            background: Background::from(rgba(0xff0000ff)),
+            ..Default::default()
+        };
+        let target = render_quad(&device, &context, quad, [0.0, 0.0, 0.0, 1.0])?;
+        for (y, expected, what) in [
+            (28, 0, "above the AA margin"),
+            (29, 0, "AA margin row above"),
+            (30, 255, "first covered row"),
+            (31, 255, "second covered row"),
+            (32, 0, "AA margin row below"),
+            (33, 0, "below the AA margin"),
+        ] {
+            let px = read_pixel(&context, &target.texture, &target.staging, 32, y)?;
+            assert_eq!(
+                px[2], expected,
+                "{what} at y={y} must be {expected}, got {px:?} (B,G,R,A)"
             );
         }
         Ok(())

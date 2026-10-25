@@ -88,7 +88,7 @@ pub mod underline {
             return transparent();
         }
         let underline = get!(UNDERLINES)[input.underline_id as usize];
-        let clip = content_mask_chain_alpha(
+        let mask = content_mask_chain_sample(
             underline.mask_chain,
             input.scene_position,
             underline.content_mask,
@@ -98,11 +98,24 @@ pub mod underline {
             false,
         );
         if !is_enabled(underline.wavy) {
-            return blend_color(input.color, clip);
+            // The line geometry is grown by the AA margin; its own bounds must shape the
+            // fragment. Combining the box distance and the mask distance with `max` also keeps
+            // a mask edge that coincides with the line's end from being applied twice.
+            let box_distance = rounded_rectangle_signed_distance(
+                input.local_position,
+                underline.bounds,
+                zero_corners(),
+            ) * aa_scale(underline.transformation);
+            return blend_color(
+                input.color,
+                antialiased_coverage(max(box_distance, mask.distance)) * mask.fade,
+            );
         }
         blend_color(
             input.color,
-            wavy_underline_coverage(underline, input.local_position) * clip,
+            wavy_underline_coverage(underline, input.local_position)
+                * antialiased_coverage(mask.distance)
+                * mask.fade,
         )
     }
 }
@@ -337,26 +350,25 @@ pub mod polychrome_sprite {
             && sprite.content_mask.corner_radii.top_right == sprite.corner_radii.top_right
             && sprite.content_mask.corner_radii.bottom_left == sprite.corner_radii.bottom_left
             && sprite.content_mask.corner_radii.bottom_right == sprite.corner_radii.bottom_right;
+        let mask = content_mask_chain_sample(
+            sprite.mask_chain,
+            input.scene_position,
+            sprite.content_mask,
+            input.scene_position,
+            sprite.bounds,
+            sprite.corner_radii,
+            mask_is_own,
+        );
+        let own_distance = rounded_rectangle_signed_distance(
+            input.local_position,
+            sprite.bounds,
+            sprite.corner_radii,
+        ) * aa_scale(sprite.transformation);
         blend_color(
             color,
             sprite.opacity
-                * antialiased_coverage_transformed(
-                    rounded_rectangle_signed_distance(
-                        input.local_position,
-                        sprite.bounds,
-                        sprite.corner_radii,
-                    ),
-                    sprite.transformation,
-                )
-                * content_mask_chain_alpha(
-                    sprite.mask_chain,
-                    input.scene_position,
-                    sprite.content_mask,
-                    input.scene_position,
-                    sprite.bounds,
-                    sprite.corner_radii,
-                    mask_is_own,
-                ),
+                * antialiased_coverage(max(own_distance, mask.distance))
+                * mask.fade,
         )
     }
 
@@ -424,33 +436,32 @@ pub mod polychrome_sprite {
         }
         let sprite = get!(POLYCHROME_SPRITES)[input.sprite_id as usize];
         let color = polychrome_color(sprite, input.tile_position);
+        let mask = content_mask_chain_sample(
+            sprite.mask_chain,
+            input.scene_position,
+            sprite.content_mask,
+            input.scene_position,
+            sprite.bounds,
+            sprite.corner_radii,
+            false,
+        );
+        let own_distance = prepared_corner_signed_distance(
+            input.local_position,
+            sprite.bounds,
+            sprite.corner_radii,
+            sprite.corner_smoothing,
+            PreparedCorners {
+                horizontal_reaches: input.horizontal_corner_reaches,
+                vertical_reaches: input.vertical_corner_reaches,
+                smoothing_factors: input.smoothing_factors,
+                superellipse_power: input.superellipse_power,
+            },
+        ) * aa_scale(sprite.transformation);
         blend_color(
             color,
             sprite.opacity
-                * antialiased_coverage_transformed(
-                    prepared_corner_signed_distance(
-                        input.local_position,
-                        sprite.bounds,
-                        sprite.corner_radii,
-                        sprite.corner_smoothing,
-                        PreparedCorners {
-                            horizontal_reaches: input.horizontal_corner_reaches,
-                            vertical_reaches: input.vertical_corner_reaches,
-                            smoothing_factors: input.smoothing_factors,
-                            superellipse_power: input.superellipse_power,
-                        },
-                    ),
-                    sprite.transformation,
-                )
-                * content_mask_chain_alpha(
-                    sprite.mask_chain,
-                    input.scene_position,
-                    sprite.content_mask,
-                    input.scene_position,
-                    sprite.bounds,
-                    sprite.corner_radii,
-                    false,
-                ),
+                * antialiased_coverage(max(own_distance, mask.distance))
+                * mask.fade,
         )
     }
 }

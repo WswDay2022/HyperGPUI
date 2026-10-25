@@ -608,48 +608,10 @@ pub mod quad {
             && quad.content_mask.corner_radii.bottom_left == quad.corner_radii.bottom_left
             && quad.content_mask.corner_radii.bottom_right == quad.corner_radii.bottom_right;
 
-        let fill_color = paint_color(
-            Paint::new(quad.background, quad.bounds),
-            input.local_position,
-            PreparedPaint::new(input.fill_solid, input.fill_color0, input.fill_color1),
-        );
-        if Edges::is_zero(quad.border_widths) && Corners::is_zero(quad.corner_radii) {
-            // No corners and no border means this path never builds a shape distance field:
-            // the mask chain's field is what antialiases the quad's straight edges, so it must
-            // not be skipped even when the mask is the quad's own cutout.
-            return blend_color(
-                fill_color,
-                content_mask_chain_alpha(
-                    quad.mask_chain,
-                    input.scene_position,
-                    quad.content_mask,
-                    select(input.scene_position, input.local_position, mask_is_own),
-                    quad.bounds,
-                    quad.corner_radii,
-                    false,
-                ),
-            );
-        }
-
-        let geometry = quad_geometry(quad, input.local_position);
-        if is_unaffected_background(geometry) {
-            // Interior fragments of a straight-edged quad take their straight-edge coverage
-            // from the mask field, so keep the full mask coverage here (see the note above).
-            return blend_color(
-                fill_color,
-                content_mask_chain_alpha(
-                    quad.mask_chain,
-                    input.scene_position,
-                    quad.content_mask,
-                    select(input.scene_position, input.local_position, mask_is_own),
-                    quad.bounds,
-                    quad.corner_radii,
-                    false,
-                ),
-            );
-        }
-
-        let fade = content_mask_chain_alpha(
+        // The masks' clip field and the quad's own outline are both signed distances. Combining
+        // them with `max` and antialiasing once is exact for coincident edges; multiplying two
+        // coverages would darken them (0.5 x 0.5).
+        let mask = content_mask_chain_sample(
             quad.mask_chain,
             input.scene_position,
             quad.content_mask,
@@ -658,6 +620,39 @@ pub mod quad {
             quad.corner_radii,
             mask_is_own,
         );
+        let aa = aa_scale(quad.transformation);
+
+        let fill_color = paint_color(
+            Paint::new(quad.background, quad.bounds),
+            input.local_position,
+            PreparedPaint::new(input.fill_solid, input.fill_color0, input.fill_color1),
+        );
+        if Edges::is_zero(quad.border_widths) && Corners::is_zero(quad.corner_radii) {
+            // The primitive is grown by the AA margin, so its own straight-edge distance field
+            // must shape the fragment. Relying on the mask alone only works when that mask is
+            // the quad's own cutout; for ordinary quads it is the (much larger) ancestor clip,
+            // so every margin pixel was painted at full alpha — a 2px divider rendered 4px thick
+            // and every rectangle grew by one pixel per side.
+            let own_distance = rounded_rectangle_signed_distance(
+                input.local_position,
+                quad.bounds,
+                quad.corner_radii,
+            ) * aa;
+            return blend_color(
+                fill_color,
+                antialiased_coverage(max(own_distance, mask.distance)) * mask.fade,
+            );
+        }
+
+        let geometry = quad_geometry(quad, input.local_position);
+        if is_unaffected_background(geometry) {
+            // Interior fragments: the quad's own coverage is 1 here, only the masks can clip.
+            return blend_color(
+                fill_color,
+                antialiased_coverage(mask.distance) * mask.fade,
+            );
+        }
+
         let distances = border_distances(geometry);
         let mut color = fill_color;
         if max(distances.inner, distances.outer) < PIXEL_ANTIALIAS_RADIUS {
@@ -680,7 +675,7 @@ pub mod quad {
         }
         blend_color(
             color,
-            antialiased_coverage_transformed(distances.outer, quad.transformation) * fade,
+            antialiased_coverage(max(distances.outer * aa, mask.distance)) * mask.fade,
         )
     }
 
@@ -780,7 +775,7 @@ pub mod quad {
             && quad.content_mask.corner_radii.bottom_left == quad.corner_radii.bottom_left
             && quad.content_mask.corner_radii.bottom_right == quad.corner_radii.bottom_right;
 
-        let fade = content_mask_chain_alpha(
+        let mask = content_mask_chain_sample(
             quad.mask_chain,
             input.scene_position,
             quad.content_mask,
@@ -789,6 +784,7 @@ pub mod quad {
             quad.corner_radii,
             mask_is_own,
         );
+        let aa = aa_scale(quad.transformation);
 
         let fill_color = paint_color(
             Paint::new(quad.background, quad.bounds),
@@ -814,7 +810,7 @@ pub mod quad {
 
             return blend_color(
                 fill_color,
-                antialiased_coverage_transformed(distance, quad.transformation) * fade,
+                antialiased_coverage(max(distance * aa, mask.distance)) * mask.fade,
             );
         }
 
@@ -870,7 +866,10 @@ pub mod quad {
             && straight_border_inner_corner_to_point.y < -PIXEL_ANTIALIAS_RADIUS
             && !near_curve
         {
-            return blend_color(fill_color, fade);
+            return blend_color(
+                fill_color,
+                antialiased_coverage(mask.distance) * mask.fade,
+            );
         }
 
         let outer = rectangle_sample.signed_distance.distance;
@@ -924,7 +923,7 @@ pub mod quad {
 
         blend_color(
             color,
-            antialiased_coverage_transformed(outer, quad.transformation) * fade,
+            antialiased_coverage(max(outer * aa, mask.distance)) * mask.fade,
         )
     }
 }
