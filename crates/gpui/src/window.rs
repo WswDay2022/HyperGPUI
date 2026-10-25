@@ -3567,6 +3567,9 @@ impl Window {
     /// [`Window::snapped_content_mask`] so the GPU chain lines up with the single mask used for
     /// culling and clip distances.
     fn intern_current_mask_chain(&mut self) -> u32 {
+        if !Self::mask_chain_needed(&self.raw_content_mask_stack) {
+            return 0;
+        }
         let scale_factor = self.scale_factor();
         let masks: SmallVec<[ContentMask<ScaledPixels>; 8]> = self
             .raw_content_mask_stack
@@ -3592,6 +3595,9 @@ impl Window {
         &mut self,
         extra: ContentMask<ScaledPixels>,
     ) -> u32 {
+        if !Self::mask_chain_needed_scaled(&self.raw_content_mask_stack, Some(extra)) {
+            return 0;
+        }
         let scale_factor = self.scale_factor();
         let mut masks: SmallVec<[ContentMask<ScaledPixels>; 9]> = self
             .raw_content_mask_stack
@@ -3604,6 +3610,44 @@ impl Window {
             .collect();
         masks.push(extra);
         self.next_frame.scene.intern_mask_chain(&masks)
+    }
+
+    /// Whether the exact intersection of these masks needs evaluation in the shader.
+    ///
+    /// A single mask is always exact. Any number of axis-aligned rectangles also intersect to a
+    /// rectangle, so the CPU-side single mask already represents them exactly. Only a rounded or
+    /// faded mask combined with another mask loses information in `ContentMask::intersect`.
+    fn mask_chain_needed(masks: &[ContentMask<Pixels>]) -> bool {
+        masks.len() >= 2 && masks.iter().any(Self::mask_is_rounded_or_faded)
+    }
+
+    fn mask_is_rounded_or_faded(mask: &ContentMask<Pixels>) -> bool {
+        mask.corner_radii.top_left.0 > 0.0
+            || mask.corner_radii.top_right.0 > 0.0
+            || mask.corner_radii.bottom_right.0 > 0.0
+            || mask.corner_radii.bottom_left.0 > 0.0
+            || mask.fade_out.top.0 > 0.0
+            || mask.fade_out.right.0 > 0.0
+            || mask.fade_out.bottom.0 > 0.0
+            || mask.fade_out.left.0 > 0.0
+    }
+
+    fn mask_chain_needed_scaled(
+        masks: &[ContentMask<Pixels>],
+        extra: Option<ContentMask<ScaledPixels>>,
+    ) -> bool {
+        let extra_needs_chain = extra.is_some_and(|mask| {
+            mask.corner_radii.top_left.0 > 0.0
+                || mask.corner_radii.top_right.0 > 0.0
+                || mask.corner_radii.bottom_right.0 > 0.0
+                || mask.corner_radii.bottom_left.0 > 0.0
+                || mask.fade_out.top.0 > 0.0
+                || mask.fade_out.right.0 > 0.0
+                || mask.fade_out.bottom.0 > 0.0
+                || mask.fade_out.left.0 > 0.0
+        });
+        masks.len() + usize::from(extra.is_some()) >= 2
+            && (extra_needs_chain || masks.iter().any(Self::mask_is_rounded_or_faded))
     }
 
     /// Replays a deferred draw under the raw clip masks captured when it was deferred. The main
