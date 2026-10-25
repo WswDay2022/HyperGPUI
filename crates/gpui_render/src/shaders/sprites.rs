@@ -14,6 +14,9 @@ pub mod underline {
         pub wavy: ShaderBool,
         /// Local-only CSS transform.
         pub transformation: TransformationMatrix,
+        /// Pads the stride to 128 bytes (16-byte-aligned D3D11 raw-view offsets).
+        pub padding0: u32,
+        pub padding1: u32,
     }
     storage!(group(1), binding(0), UNDERLINES: RuntimeArray<Underline>);
 
@@ -209,6 +212,9 @@ pub mod polychrome_sprite {
         pub tile: AtlasTile,
         /// Local-only CSS transform.
         pub transformation: TransformationMatrix,
+        /// Pads the stride to 160 bytes (16-byte-aligned D3D11 raw-view offsets).
+        pub padding0: u32,
+        pub padding1: u32,
     }
     storage!(group(1), binding(0), POLYCHROME_SPRITES: RuntimeArray<PolychromeSprite>);
     texture!(group(1), binding(1), POLYCHROME_TEXTURE: Texture2D<f32>);

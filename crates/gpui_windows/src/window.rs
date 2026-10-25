@@ -1144,11 +1144,17 @@ impl PlatformWindow for WindowsWindow {
     fn draw(&self, scene: &Scene) {
         #[cfg(not(feature = "wgpu"))]
         {
-            self.state
+            let result = self
+                .state
                 .renderer
                 .borrow_mut()
-                .draw(scene, self.state.background_appearance.get())
-                .log_err();
+                .draw(scene, self.state.background_appearance.get());
+            if std::env::var_os("HGPUI_TRACE_QUADS").is_some()
+                && let Err(err) = &result
+            {
+                eprintln!("[dx] renderer.draw error: {err:#}");
+            }
+            result.log_err();
         }
 
         #[cfg(feature = "wgpu")]

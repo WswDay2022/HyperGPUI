@@ -830,6 +830,10 @@ pub struct Underline {
     /// axis-aligned position into the ancestor's space before rounding it to
     /// device pixels.
     pub transformation: TransformationMatrix,
+    /// Pads the stride to 128 bytes. Direct3D 11 raw-buffer views require 16-byte-aligned
+    /// byte offsets, and sprite/underline batches address instances at `index * stride`.
+    pub padding0: u32,
+    pub padding1: u32,
 }
 
 impl From<Underline> for Primitive {
@@ -1151,6 +1155,10 @@ pub struct PolychromeSprite {
     /// Only the vertex positions are transformed; the fragment shader samples
     /// the tile via `local_position` in the untransformed (pre-paint) space.
     pub transformation: TransformationMatrix,
+    /// Pads the stride to 160 bytes so every instance address is 16-byte aligned, as D3D11
+    /// raw-buffer views require. See [`Underline::padding0`].
+    pub padding0: u32,
+    pub padding1: u32,
 }
 
 impl From<PolychromeSprite> for Primitive {

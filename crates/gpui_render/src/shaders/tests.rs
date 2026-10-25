@@ -113,7 +113,7 @@ fn scene_instance_storage_sizes_are_bounded() {
         (
             "PolychromeSprite",
             std::mem::size_of::<hgpui::PolychromeSprite>(),
-            152,
+            160,
         ),
     ] {
         assert!(

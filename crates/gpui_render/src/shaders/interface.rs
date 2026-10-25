@@ -209,10 +209,10 @@ pub const SCENE_BUFFER_LAYOUTS: &[SceneBufferLayout] = &[
     layout!(hgpui::TransformationMatrix, "TransformationMatrix", rotation_scale, translation),
     layout!(hgpui::Quad, "Quad", order, border_style, border_dashed_length, border_dashed_gap, bounds, content_mask, background, border_color, corner_radii, border_widths, corner_smoothing, padding, transformation),
     layout!(hgpui::Shadow, "Shadow", order, blur_radius, bounds, corner_radii, content_mask, color, element_bounds, element_corner_radii, inset, corner_smoothing),
-    layout!(hgpui::Underline, "Underline", order, padding, bounds, content_mask, color, thickness, wavy, transformation),
+    layout!(hgpui::Underline, "Underline", order, padding, bounds, content_mask, color, thickness, wavy, transformation, padding0, padding1),
     layout!(hgpui::MonochromeSprite, "MonochromeSprite", order, padding, bounds, content_mask, color, tile, transformation),
     layout!(hgpui::SubpixelSprite, "SubpixelSprite", order, padding, bounds, content_mask, color, tile, transformation),
-    layout!(hgpui::PolychromeSprite, "PolychromeSprite", order, grayscale, opacity, corner_smoothing, bounds, content_mask, corner_radii, tile, transformation),
+    layout!(hgpui::PolychromeSprite, "PolychromeSprite", order, grayscale, opacity, corner_smoothing, bounds, content_mask, corner_radii, tile, transformation, padding0, padding1),
     layout!(PathSprite, "PathSprite", bounds),
     layout!(PathRasterizationVertex, "PathRasterizationVertex", xy_position, curve_position, color, bounds, content_mask, content_mask_corner_radii, content_mask_fade_out),
     layout!(GlobalUniforms, "GlobalUniforms", viewport_size, premultiplied_alpha, padding, window_mask_params, window_mask),
@@ -233,8 +233,8 @@ const _: () = {
     assert!(std::mem::offset_of!(hgpui::Quad, transformation) == 280);
     assert!(std::mem::offset_of!(hgpui::TransformationMatrix, translation) == 16);
     assert!(std::mem::size_of::<hgpui::Shadow>() == 208);
-    assert!(std::mem::size_of::<hgpui::Underline>() == 120);
+    assert!(std::mem::size_of::<hgpui::Underline>() == 128);
     assert!(std::mem::size_of::<hgpui::MonochromeSprite>() == 144);
     assert!(std::mem::size_of::<hgpui::SubpixelSprite>() == 144);
-    assert!(std::mem::size_of::<hgpui::PolychromeSprite>() == 152);
+    assert!(std::mem::size_of::<hgpui::PolychromeSprite>() == 160);
 };

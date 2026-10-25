@@ -325,6 +325,10 @@ impl DirectXRenderer {
                 vp.TopLeftX, vp.TopLeftY, vp.Width, vp.Height, self.width, self.height,
                 back_buffer_size, scene.window_mask
             );
+            if let Ok(swap_chain3) = resources.swap_chain.cast::<IDXGISwapChain3>() {
+                let index = unsafe { swap_chain3.GetCurrentBackBufferIndex() };
+                eprintln!("[swap] current_back_buffer={index}");
+            }
         }
         let device_context = &self
             .devices
@@ -386,7 +390,14 @@ impl DirectXRenderer {
                 .swap_chain
                 .Present(0, DXGI_PRESENT(0))
         };
-        result.ok().context("Presenting swap chain failed")
+        if std::env::var_os("HGPUI_TRACE_QUADS").is_some() {
+            eprintln!("[present] result={result:?}");
+        }
+        result.ok().context("Presenting swap chain failed")?;
+        if let Some(composition) = self.direct_composition.as_ref() {
+            composition.commit()?;
+        }
+        Ok(())
     }
 
     pub(crate) fn handle_device_lost(&mut self, directx_devices: &DirectXDevices) -> Result<()> {
@@ -469,6 +480,9 @@ impl DirectXRenderer {
         background_appearance: WindowBackgroundAppearance,
     ) -> Result<()> {
         if self.skip_draws {
+            if std::env::var_os("HGPUI_TRACE_QUADS").is_some() {
+                eprintln!("[dx] skipping draw (skip_draws)");
+            }
             // skip drawing this frame, we just recovered from a device lost event
             // and so likely do not have the textures anymore that are required for drawing
             return Ok(());
@@ -539,10 +553,11 @@ impl DirectXRenderer {
             .and_then(|devices| devices.annotation.clone())
             .filter(|annotation| unsafe { annotation.GetStatus().as_bool() });
         for batch in scene.batches() {
+            let batch_label = batch.label();
             let _annotation = annotation
                 .as_ref()
-                .map(|annotation| Annotation::new(annotation, HSTRING::from(batch.label())));
-            match batch {
+                .map(|annotation| Annotation::new(annotation, HSTRING::from(batch_label.clone())));
+            let batch_result = match batch {
                 PrimitiveBatch::Shadows { range, smoothed } => {
                     self.draw_shadows(range.start, range.len(), smoothed)
                 }
@@ -638,10 +653,15 @@ impl DirectXRenderer {
                         Ok(())
                     }
                 }
+            };
+            if std::env::var_os("HGPUI_TRACE_QUADS").is_some()
+                && let Err(err) = &batch_result
+            {
+                eprintln!("[dx] batch {batch_label} failed: {err:#}");
             }
-            .with_context(|| {
+            batch_result.with_context(|| {
                 format!(
-                    "scene too large:\
+                    "scene too large (batch {batch_label}):\
                     {} paths, {} shadows, {} quads, {} underlines, {} mono, {} subpixel, {} poly, {} surfaces",
                     scene.paths.len(),
                     scene.shadows.len(),
@@ -655,16 +675,16 @@ impl DirectXRenderer {
             })?;
         }
 
-        // Present the offscreen scene by copying it into the swapchain. The swapchain was created
-        // with the same format, size and sample count as the scene texture, so a resource copy is
-        // exact — and far cheaper than the full-screen draw it replaces.
+        // Present the offscreen scene by drawing it into the swapchain. This must be a draw, not
+        // `CopyResource`: a flip-model swapchain's back buffer cannot be used as a copy
+        // destination, and copying into the texture reference acquired at startup leaves the
+        // presented frame frozen while the UI keeps rendering internally.
         if use_offscreen {
             let resources = self.resources.as_ref().context("resources missing")?;
-            let target = resources
-                .render_target
-                .as_ref()
-                .context("render target texture missing")?;
-            self.dx_blit(&resources.blur.scene_color, target)?;
+            self.dx_blit(
+                &resources.blur.scene_color_srv,
+                &resources.render_target_view,
+            )?;
         }
         self.active_render_target = None;
         self.present()
@@ -1228,18 +1248,32 @@ impl DirectXRenderer {
         Ok(())
     }
 
-    /// Copy the offscreen scene texture into the swapchain render target. Both textures have the
-    /// same format, size and sample count, so this is exact.
-    fn dx_blit(&self, source: &ID3D11Texture2D, target: &ID3D11Texture2D) -> Result<()> {
-        let ctx = &self
-            .devices
+    /// Present the offscreen scene texture by drawing a full-screen quad into the swapchain.
+    fn dx_blit(
+        &self,
+        source_srv: &Option<ID3D11ShaderResourceView>,
+        target_rtv: &Option<ID3D11RenderTargetView>,
+    ) -> Result<()> {
+        let full_vp = self
+            .resources
             .as_ref()
-            .context("devices missing")?
-            .device_context;
-        unsafe {
-            ctx.CopyResource(target, source);
-        }
-        Ok(())
+            .context("resources missing")?
+            .viewport;
+        self.dx_blur_pass(
+            &self.pipelines.blur_downsample_vertex,
+            &self.pipelines.blur_downsample_fragment,
+            &self.pipelines.blur_blend_replace,
+            target_rtv,
+            source_srv,
+            BlurParams {
+                downsample: 0.0,
+                ..Default::default()
+            },
+            &full_vp,
+            D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
+            3,
+            true,
+        )
     }
 
     pub(crate) fn gpu_specs(&self) -> Result<GpuSpecs> {
@@ -1510,6 +1544,15 @@ impl DirectComposition {
             comp_target,
             comp_visual,
         })
+    }
+
+    /// Commit pending DirectComposition property changes (e.g. a newly presented swapchain
+    /// frame). Without this the compositor keeps showing the last committed frame.
+    pub fn commit(&self) -> Result<()> {
+        unsafe {
+            self.comp_device.Commit()?;
+        }
+        Ok(())
     }
 
     pub fn set_swap_chain(&self, swap_chain: &IDXGISwapChain1) -> Result<()> {
@@ -1795,12 +1838,24 @@ impl<T> PipelineState<T> {
         instance_count: u32,
     ) -> Result<()> {
         let stride = std::mem::size_of::<T>() as u32;
+        if std::env::var_os("HGPUI_TRACE_QUADS").is_some() {
+            eprintln!(
+                "[draw_range] {} first={} count={} stride={} buffer_elems={}",
+                self.label, first_instance, instance_count, stride, self.buffer_size
+            );
+        }
         let view = create_buffer_view_range(
             device,
             &self.buffer,
             first_instance * stride,
             instance_count * stride,
-        )?;
+        )
+        .with_context(|| {
+            format!(
+                "sprite buffer view ({}) first={} count={} stride={} buffer_elems={}",
+                self.label, first_instance, instance_count, stride, self.buffer_size
+            )
+        })?;
         set_pipeline_state(
             device_context,
             slice::from_ref(&view),
@@ -1829,12 +1884,29 @@ impl<T> PipelineState<T> {
         instance_count: u32,
     ) -> Result<()> {
         let stride = std::mem::size_of::<T>() as u32;
+        if std::env::var_os("HGPUI_TRACE_QUADS").is_some() {
+            eprintln!(
+                "[draw_range_texture] {} first={} count={} stride={} buffer_elems={} tex0={}",
+                self.label,
+                first_instance,
+                instance_count,
+                stride,
+                self.buffer_size,
+                texture[0].is_some()
+            );
+        }
         let view = create_buffer_view_range(
             device,
             &self.buffer,
             first_instance * stride,
             instance_count * stride,
-        )?;
+        )
+        .with_context(|| {
+            format!(
+                "instances buffer view ({}) first={} count={} stride={} buffer_elems={}",
+                self.label, first_instance, instance_count, stride, self.buffer_size
+            )
+        })?;
         set_pipeline_state(
             device_context,
             slice::from_ref(&view),
@@ -2676,8 +2748,10 @@ mod tests {
     use super::{
         create_blend_state, create_blend_state_for_path_rasterization,
         create_blend_state_for_path_sprite, create_blend_state_no_blend,
-        corner_radii_array, create_blur_sampler, create_color_target, create_constant_buffer,
-        create_fragment_shader, create_vertex_shader, update_buffer, BlurParams,
+        create_buffer, create_buffer_view_range, corner_radii_array, create_blur_sampler,
+        create_color_target, create_constant_buffer,
+        create_fragment_shader, create_vertex_shader, set_pipeline_state, update_buffer,
+        BlurParams,
         FontRasterizationUniforms, GlobalUniforms, PathRasterizationSprite,
         PipelineState,
         RawShaderBytes, ShaderTarget, RENDER_TARGET_FORMAT,
@@ -4427,6 +4501,8 @@ mod tests {
             thickness: ScaledPixels(0.0),
             wavy: false.into(),
             transformation: TransformationMatrix::unit(),
+            padding0: 0,
+            padding1: 0,
         };
         pipeline.update_buffer(&device, &context, &[underline])?;
         unsafe {
@@ -4520,6 +4596,8 @@ mod tests {
                 ),
             },
             transformation: TransformationMatrix::unit(),
+            padding0: 0,
+            padding1: 0,
         };
         pipeline.update_buffer(&device, &context, &[sprite])?;
         let sampler = create_blur_sampler(&device)?;
@@ -4679,6 +4757,8 @@ mod tests {
                 ),
             },
             transformation: TransformationMatrix::unit(),
+            padding0: 0,
+            padding1: 0,
         };
         draw(
             &mut pipeline,
@@ -4840,6 +4920,126 @@ mod tests {
             let px = read_pixel(&context, &target.texture, &target.staging, x, 32)?;
             assert_red_close(px, expected, what);
         }
+        Ok(())
+    }
+
+    /// Direct3D 11 raw buffer views are used as sprite instance buffers. Their offsets may be
+    /// subject to an alignment rule stricter than four bytes: the polychrome instance stride is
+    /// 152 bytes, so the second instance starts at byte 152 (not 16-byte aligned). Verify which
+    /// offsets the driver accepts.
+    #[test]
+    fn raw_buffer_view_offset_alignment() -> Result<()> {
+        let Some((device, _context)) = create_hardware_device().or_else(create_warp_device) else {
+            eprintln!("[raw_srv] Direct3D device unavailable, skipping");
+            return Ok(());
+        };
+        // 16 instances of the 152-byte polychrome sprite = 2432 bytes.
+        let buffer = create_buffer(&device, 152, 16)?;
+        for (first_element, expected) in [(0u32, true), (38, false), (76, true), (114, false)] {
+            let result = create_buffer_view_range(&device, &buffer, first_element * 4, 38 * 4);
+            eprintln!(
+                "[raw_srv] first_element={first_element} byte_offset={} result={:?}",
+                first_element * 4,
+                result.as_ref().err()
+            );
+            if expected {
+                assert!(
+                    result.is_ok(),
+                    "expected raw view at byte {} to succeed: {result:?}",
+                    first_element * 4
+                );
+            } else {
+                assert!(
+                    result.is_err(),
+                    "raw view at byte {} must be rejected (offset not 16-byte aligned)",
+                    first_element * 4
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// `DrawInstanced` has a start-instance location. If `SV_InstanceID` includes it, batches
+    /// can share one full-buffer raw view instead of creating per-range views at byte offsets
+    /// that D3D11 rejects unless they are 16-byte aligned.
+    #[test]
+    fn quad_instance_start_location_readback() -> Result<()> {
+        let Some((device, context)) = create_hardware_device().or_else(create_warp_device) else {
+            eprintln!("[instance_start] Direct3D device unavailable, skipping");
+            return Ok(());
+        };
+        let (texture, rtv, _srv) = create_color_target(&device, TEST_SIZE, TEST_SIZE)?;
+        let rtv = rtv.expect("color target render target view");
+        let staging = {
+            let desc = D3D11_TEXTURE2D_DESC {
+                Width: TEST_SIZE,
+                Height: TEST_SIZE,
+                MipLevels: 1,
+                ArraySize: 1,
+                Format: RENDER_TARGET_FORMAT,
+                SampleDesc: DXGI_SAMPLE_DESC {
+                    Count: 1,
+                    Quality: 0,
+                },
+                Usage: D3D11_USAGE_STAGING,
+                BindFlags: 0,
+                CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
+                MiscFlags: 0,
+            };
+            let mut staging = None;
+            unsafe { device.CreateTexture2D(&desc, None, Some(&mut staging)) }?;
+            staging.unwrap()
+        };
+        let globals = install_globals(&device, &context)?;
+        let blend = create_blend_state(&device)?;
+        let mut pipeline = PipelineState::<Quad>::new(
+            &device,
+            "test_instance_start",
+            ShaderModule::Quad,
+            4,
+            blend.clone(),
+        )?;
+        let quad = |x: f32, color: u32| Quad {
+            bounds: bounds(
+                point(ScaledPixels(x), ScaledPixels(8.0)),
+                size(ScaledPixels(16.0), ScaledPixels(16.0)),
+            ),
+            content_mask: viewport_mask(),
+            background: Background::from(rgba(color)),
+            ..Default::default()
+        };
+        pipeline.update_buffer(&device, &context, &[quad(8.0, 0xff0000ff), quad(40.0, 0x00ff00ff)])?;
+        set_pipeline_state(
+            &context,
+            &[pipeline.view.clone()],
+            D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP,
+            &[test_viewport()],
+            &pipeline.vertex,
+            &pipeline.fragment,
+            &globals,
+            &blend,
+        );
+        unsafe {
+            context.ClearRenderTargetView(&rtv, &[0.0, 0.0, 0.0, 1.0]);
+            context.OMSetRenderTargets(Some(slice::from_ref(&Some(rtv.clone()))), None);
+            context.DrawInstanced(4, 1, 0, 1);
+        }
+        dump_device_errors(&device);
+        // `SV_InstanceID` does NOT include `StartInstanceLocation`: the first quad is drawn
+        // even though the draw starts at instance 1. That is why batches bind a range view
+        // (with a 16-byte-aligned offset) instead of indexing the full buffer.
+        let first = read_pixel(&context, &texture, &staging, 16, 16)?;
+        assert_eq!(
+            first,
+            [0, 0, 255, 255],
+            "SV_InstanceID must not be offset by StartInstanceLocation, got {first:?} (B,G,R,A)"
+        );
+        let second = read_pixel(&context, &texture, &staging, 48, 16)?;
+        assert_eq!(
+            second,
+            [0, 0, 0, 255],
+            "the second quad must not be drawn when only one instance is drawn, got {second:?} (B,G,R,A)"
+        );
         Ok(())
     }
 

@@ -134,13 +134,23 @@ impl WindowsWindowInner {
             WM_NCMBUTTONUP => {
                 self.handle_nc_mouse_up_msg(handle, MouseButton::Middle, wparam, lparam)
             }
-            WM_LBUTTONDOWN => self.handle_mouse_down_msg(handle, MouseButton::Left, lparam),
+            WM_LBUTTONDOWN => {
+                if std::env::var_os("HGPUI_TRACE_QUADS").is_some() {
+                    eprintln!("[input] left down");
+                }
+                self.handle_mouse_down_msg(handle, MouseButton::Left, lparam)
+            }
             WM_RBUTTONDOWN => self.handle_mouse_down_msg(handle, MouseButton::Right, lparam),
             WM_MBUTTONDOWN => self.handle_mouse_down_msg(handle, MouseButton::Middle, lparam),
             WM_XBUTTONDOWN => {
                 self.handle_xbutton_msg(handle, wparam, lparam, Self::handle_mouse_down_msg)
             }
-            WM_LBUTTONUP => self.handle_mouse_up_msg(handle, MouseButton::Left, lparam),
+            WM_LBUTTONUP => {
+                if std::env::var_os("HGPUI_TRACE_QUADS").is_some() {
+                    eprintln!("[input] left up");
+                }
+                self.handle_mouse_up_msg(handle, MouseButton::Left, lparam)
+            }
             WM_RBUTTONUP => self.handle_mouse_up_msg(handle, MouseButton::Right, lparam),
             WM_MBUTTONUP => self.handle_mouse_up_msg(handle, MouseButton::Middle, lparam),
             WM_XBUTTONUP => {
@@ -491,7 +501,11 @@ impl WindowsWindowInner {
     ) -> Option<isize> {
         unsafe { SetCapture(handle) };
 
+        let trace = std::env::var_os("HGPUI_TRACE_QUADS").is_some();
         let Some(mut func) = self.state.callbacks.input.take() else {
+            if trace {
+                eprintln!("[input] mouse down without callback");
+            }
             return Some(1);
         };
         let x = lparam.signed_loword();
@@ -499,6 +513,9 @@ impl WindowsWindowInner {
         let physical_point = point(DevicePixels(x as i32), DevicePixels(y as i32));
         let click_count = self.state.click_state.update(button, physical_point);
         let scale_factor = self.state.scale_factor.get();
+        if trace {
+            eprintln!("[input] mouse down dispatch at ({x},{y})");
+        }
 
         let input = PlatformInput::MouseDown(MouseDownEvent {
             button,
@@ -508,6 +525,9 @@ impl WindowsWindowInner {
             first_mouse: false,
         });
         let handled = !func(input).propagate;
+        if trace {
+            eprintln!("[input] mouse down handled={handled}");
+        }
         self.state.callbacks.input.set(Some(func));
 
         if handled { Some(0) } else { Some(1) }

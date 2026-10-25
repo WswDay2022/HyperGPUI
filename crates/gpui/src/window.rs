@@ -2986,6 +2986,16 @@ impl Window {
         if !cx.mode.skip_drawing() {
             self.draw_roots(cx);
         }
+        if std::env::var_os("HGPUI_TRACE_QUADS").is_some() {
+            eprintln!(
+                "[draw] viewport={:?} quads={} polys={} monos={} shadows={}",
+                self.viewport_size,
+                self.next_frame.scene.quads.len(),
+                self.next_frame.scene.polychrome_sprites.len(),
+                self.next_frame.scene.monochrome_sprites.len(),
+                self.next_frame.scene.shadows.len(),
+            );
+        }
         self.dirty_views.clear();
         self.next_frame.window_active = self.active.get();
 
@@ -4435,6 +4445,8 @@ impl Window {
             thickness,
             wavy: style.wavy.into(),
             transformation: self.current_transform(),
+            padding0: 0,
+            padding1: 0,
         });
     }
 
@@ -4466,6 +4478,8 @@ impl Window {
             color: style.color.unwrap_or_default().opacity(opacity).into(),
             wavy: false.into(),
             transformation: self.current_transform(),
+            padding0: 0,
+            padding1: 0,
         });
     }
 
@@ -4632,6 +4646,8 @@ impl Window {
                 opacity,
                 corner_smoothing: 0.0,
                 transformation: self.current_transform(),
+                padding0: 0,
+                padding1: 0,
             });
         }
         Ok(())
@@ -4825,6 +4841,8 @@ impl Window {
             opacity,
             corner_smoothing: 0.0,
             transformation: self.current_transform(),
+            padding0: 0,
+            padding1: 0,
         });
         Ok(())
     }
@@ -5450,6 +5468,31 @@ impl Window {
 
     fn dispatch_mouse_event(&mut self, event: &dyn Any, cx: &mut App) {
         let hit_test = self.rendered_frame.hit_test(self.mouse_position());
+        if std::env::var_os("HGPUI_TRACE_QUADS").is_some() {
+            if let Some(down) = event.downcast_ref::<crate::MouseDownEvent>() {
+                eprintln!(
+                    "[hit] down mouse_pos={:?} event_pos={:?} ids={:?} captured={:?} hitboxes={}",
+                    self.mouse_position(),
+                    down.position,
+                    hit_test.ids,
+                    self.captured_hitbox,
+                    self.rendered_frame.hitboxes.len(),
+                );
+                if hit_test.ids.is_empty() {
+                    for hitbox in &self.rendered_frame.hitboxes {
+                        eprintln!("[hitbox] {:?} {:?}", hitbox.id, hitbox.bounds);
+                    }
+                }
+            } else if let Some(up) = event.downcast_ref::<crate::MouseUpEvent>() {
+                eprintln!(
+                    "[hit] up mouse_pos={:?} event_pos={:?} ids={:?} captured={:?}",
+                    self.mouse_position(),
+                    up.position,
+                    hit_test.ids,
+                    self.captured_hitbox,
+                );
+            }
+        }
         if hit_test != self.mouse_hit_test {
             self.mouse_hit_test = hit_test;
             self.reset_cursor_style(cx);
