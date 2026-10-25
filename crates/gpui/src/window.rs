@@ -3576,6 +3576,28 @@ impl Window {
         if !Self::mask_chain_needed(&self.raw_content_mask_stack) {
             return 0;
         }
+        self.intern_current_mask_chain_unconditionally()
+    }
+
+    /// Path vertices no longer duplicate the mask's corner radii/fades (they live in the chain),
+    /// so even a single rounded mask needs a chain. Other primitives keep the full single mask
+    /// and only need a chain for genuinely nested rounded masks.
+    pub(crate) fn mask_chain_for_path(&mut self) -> u32 {
+        let current = self.mask_chain();
+        if current != 0 {
+            return current;
+        }
+        if !self
+            .raw_content_mask_stack
+            .iter()
+            .any(Self::mask_is_rounded_or_faded)
+        {
+            return 0;
+        }
+        self.intern_current_mask_chain_unconditionally()
+    }
+
+    fn intern_current_mask_chain_unconditionally(&mut self) -> u32 {
         let scale_factor = self.scale_factor();
         let masks: SmallVec<[ContentMask<ScaledPixels>; 8]> = self
             .raw_content_mask_stack
@@ -4483,7 +4505,7 @@ impl Window {
         let content_mask = self.content_mask();
         let opacity = self.element_opacity();
         path.content_mask = content_mask;
-        path.mask_chain = self.mask_chain();
+        path.mask_chain = self.mask_chain_for_path();
         let color: Background = color.into();
         path.color = color.opacity(opacity);
         self.next_frame
