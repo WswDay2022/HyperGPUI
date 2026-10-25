@@ -348,14 +348,8 @@ impl WindowsPlatform {
             .name("VSyncProvider".to_owned())
             .spawn(move || {
                 let vsync_provider = VSyncProvider::new();
-                let trace = std::env::var_os("HGPUI_TRACE_FRAMES").is_some();
-                let mut ticks: u64 = 0;
                 loop {
                     vsync_provider.wait_for_vsync();
-                    ticks += 1;
-                    if trace && ticks % 300 == 0 {
-                        eprintln!("[vsync] alive ticks={ticks}");
-                    }
                     #[cfg(not(feature = "wgpu"))]
                     {
                         if check_device_lost(&directx_device.device)
@@ -1406,9 +1400,6 @@ fn check_device_lost(device: &ID3D11Device) -> bool {
         Ok(_) => false,
         Err(err) => {
             log::error!("DirectX device lost detected: {:?}", err);
-            if std::env::var_os("HGPUI_TRACE_QUADS").is_some() {
-                eprintln!("[dx] device lost detected: {err:?}");
-            }
             true
         }
     }
@@ -1422,9 +1413,6 @@ fn handle_gpu_device_lost(
     all_windows: &std::sync::Weak<RwLock<SmallVec<[SafeHwnd; 4]>>>,
     text_system: &std::sync::Weak<DirectWriteTextSystem>,
 ) -> Result<()> {
-    if std::env::var_os("HGPUI_TRACE_QUADS").is_some() {
-        eprintln!("[dx] recovering from device lost");
-    }
     // Here we wait a bit to ensure the system has time to recover from the device lost state.
     // If we don't wait, the final drawing result will be blank.
     std::thread::sleep(std::time::Duration::from_millis(350));

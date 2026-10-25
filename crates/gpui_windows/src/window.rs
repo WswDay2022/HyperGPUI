@@ -1149,11 +1149,6 @@ impl PlatformWindow for WindowsWindow {
                 .renderer
                 .borrow_mut()
                 .draw(scene, self.state.background_appearance.get());
-            if std::env::var_os("HGPUI_TRACE_QUADS").is_some()
-                && let Err(err) = &result
-            {
-                eprintln!("[dx] renderer.draw error: {err:#}");
-            }
             result.log_err();
         }
 

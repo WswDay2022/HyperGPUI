@@ -1647,14 +1647,6 @@ impl Window {
                     || input_rate_tracker.borrow_mut().is_high_rate();
 
                 if invalidator.is_dirty() || force_render {
-                    let trace_frame = std::env::var_os("HGPUI_TRACE_FRAMES").is_some();
-                    let trace_started = Instant::now();
-                    if trace_frame {
-                        eprintln!(
-                            "[frame] draw begin force={force_render} dirty={}",
-                            invalidator.is_dirty()
-                        );
-                    }
                     measure("frame duration", || {
                         handle
                             .update(&mut cx, |_, window, cx| {
@@ -1669,9 +1661,6 @@ impl Window {
                             })
                             .log_err();
                     });
-                    if trace_frame {
-                        eprintln!("[frame] draw end {:?}", trace_started.elapsed());
-                    }
                 } else if needs_present {
                     handle
                         .update(&mut cx, |_, window, _| window.present())
@@ -2962,7 +2951,6 @@ impl Window {
     /// the contents of the new [`Scene`], use [`Self::present`].
     #[profiling::function]
     pub fn draw(&mut self, cx: &mut App) -> ArenaClearNeeded {
-        record_draw_timestamp();
         // Drain unconditionally so a stale first-invalidation timestamp can't
         // leak into a later frame across enable/disable of frame tracing.
         let frame_dirty = self.invalidator.take_frame_dirty();
@@ -2997,16 +2985,6 @@ impl Window {
         }
         if !cx.mode.skip_drawing() {
             self.draw_roots(cx);
-        }
-        if std::env::var_os("HGPUI_TRACE_QUADS").is_some() {
-            eprintln!(
-                "[draw] viewport={:?} quads={} polys={} monos={} shadows={}",
-                self.viewport_size,
-                self.next_frame.scene.quads.len(),
-                self.next_frame.scene.polychrome_sprites.len(),
-                self.next_frame.scene.monochrome_sprites.len(),
-                self.next_frame.scene.shadows.len(),
-            );
         }
         self.dirty_views.clear();
         self.next_frame.window_active = self.active.get();
@@ -3177,8 +3155,6 @@ impl Window {
         // Layout all root elements. Like the root element on the web, which
         // stretches to fill the viewport unless explicitly sized, window roots
         // fill the window when their size is `auto`.
-        let trace_frame = std::env::var_os("HGPUI_TRACE_FRAMES").is_some();
-        let phase_started = Instant::now();
         let scale_factor = self.scale_factor();
         let mut root_element = self.root.as_ref().unwrap().clone().into_any_element();
         let root_layout_id = root_element.request_layout(self, cx);
@@ -3186,19 +3162,12 @@ impl Window {
             .as_mut()
             .unwrap()
             .stretch_auto_size_to_fill(root_layout_id, root_size, scale_factor);
-        if trace_frame {
-            eprintln!("[frame] layout end {:?}", phase_started.elapsed());
-        }
-        let phase_started = Instant::now();
         root_element.prepaint_as_root(Point::default(), root_size.into(), self, cx);
 
         #[cfg(any(feature = "inspector", debug_assertions))]
         let inspector_element = self.prepaint_inspector(_inspector_width, cx);
 
         self.prepaint_deferred_draws(cx);
-        if trace_frame {
-            eprintln!("[frame] prepaint end {:?}", phase_started.elapsed());
-        }
 
         let mut prompt_element = None;
         let mut active_drag_element = None;
@@ -3224,7 +3193,6 @@ impl Window {
 
         // Now actually paint the elements.
         self.invalidator.set_phase(DrawPhase::Paint);
-        let phase_started = Instant::now();
         root_element.paint(self, cx);
 
         #[cfg(any(feature = "inspector", debug_assertions))]
@@ -3236,9 +3204,6 @@ impl Window {
             prompt_element.paint(self, cx);
         } else if let Some(mut drag_element) = active_drag_element {
             drag_element.paint(self, cx);
-        }
-        if std::env::var_os("HGPUI_TRACE_FRAMES").is_some() {
-            eprintln!("[frame] paint end {:?}", phase_started.elapsed());
         }
 
         #[cfg(any(feature = "inspector", debug_assertions))]
@@ -4361,37 +4326,6 @@ impl Window {
                 .compose(quad.transformation.unwrap_or(TransformationMatrix::unit())),
         };
 
-        // TEMP DEBUG: large surfaces, to trace half-pixel edges around the window frame.
-        if std::env::var_os("HGPUI_TRACE_QUADS").is_some()
-            && snapped_bounds.size.width.0 > 1500.0
-        {
-            eprintln!(
-                "[quad] raw=({:.3},{:.3} {:.3}x{:.3}) snapped=({:.3},{:.3} {:.3}x{:.3}) mask=({:.3},{:.3} {:.3}x{:.3}) mask_radii={:?} radii={:?} tx={:?} scale={}",
-                quad.bounds.origin.x.0,
-                quad.bounds.origin.y.0,
-                quad.bounds.size.width.0,
-                quad.bounds.size.height.0,
-                snapped_bounds.origin.x.0,
-                snapped_bounds.origin.y.0,
-                snapped_bounds.size.width.0,
-                snapped_bounds.size.height.0,
-                quad.content_mask.bounds.origin.x.0,
-                quad.content_mask.bounds.origin.y.0,
-                quad.content_mask.bounds.size.width.0,
-                quad.content_mask.bounds.size.height.0,
-                quad.content_mask.corner_radii,
-                quad.corner_radii,
-                quad.transformation,
-                self.scale_factor(),
-            );
-            eprintln!(
-                "[quad] smoothing={} border={:?} bg={:?}",
-                quad.corner_smoothing,
-                quad.border_widths,
-                quad.background,
-            );
-        }
-
         if !quad.background.is_transparent() {
             self.next_frame.scene.insert_primitive(quad);
             return;
@@ -4845,13 +4779,6 @@ impl Window {
         }
         if image_bounds.size.width <= Pixels::ZERO || image_bounds.size.height <= Pixels::ZERO {
             return Ok(());
-        }
-
-        if std::env::var_os("HGPUI_TRACE_FRAMES").is_some() {
-            eprintln!(
-                "[img] id={} frame={} bounds={:?} image_bounds={:?} radii={:?}",
-                data.id.0, frame_index, visible_bounds, image_bounds, corner_radii
-            );
         }
 
         let params = RenderImageParams {
@@ -5571,31 +5498,6 @@ impl Window {
 
     fn dispatch_mouse_event(&mut self, event: &dyn Any, cx: &mut App) {
         let hit_test = self.rendered_frame.hit_test(self.mouse_position());
-        if std::env::var_os("HGPUI_TRACE_QUADS").is_some() {
-            if let Some(down) = event.downcast_ref::<crate::MouseDownEvent>() {
-                eprintln!(
-                    "[hit] down mouse_pos={:?} event_pos={:?} ids={:?} captured={:?} hitboxes={}",
-                    self.mouse_position(),
-                    down.position,
-                    hit_test.ids,
-                    self.captured_hitbox,
-                    self.rendered_frame.hitboxes.len(),
-                );
-                if hit_test.ids.is_empty() {
-                    for hitbox in &self.rendered_frame.hitboxes {
-                        eprintln!("[hitbox] {:?} {:?}", hitbox.id, hitbox.bounds);
-                    }
-                }
-            } else if let Some(up) = event.downcast_ref::<crate::MouseUpEvent>() {
-                eprintln!(
-                    "[hit] up mouse_pos={:?} event_pos={:?} ids={:?} captured={:?}",
-                    self.mouse_position(),
-                    up.position,
-                    hit_test.ids,
-                    self.captured_hitbox,
-                );
-            }
-        }
         if hit_test != self.mouse_hit_test {
             self.mouse_hit_test = hit_test;
             self.reset_cursor_style(cx);
@@ -7335,27 +7237,6 @@ impl PaintQuad {
             ..self
         }
     }
-}
-
-// TEMP DEBUG: draw heartbeat for the About-hang watchdog. One relaxed atomic store per frame.
-static DRAW_CLOCK: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
-static LAST_DRAW_MICROS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-fn record_draw_timestamp() {
-    let start = DRAW_CLOCK.get_or_init(std::time::Instant::now);
-    LAST_DRAW_MICROS.store(
-        start.elapsed().as_micros() as u64,
-        std::sync::atomic::Ordering::Relaxed,
-    );
-}
-
-/// TEMP DEBUG: how long ago the last frame was drawn, or `None` before the first draw.
-/// Used by the IshiTone About-hang watchdog to prove whether the render loop stopped.
-pub fn last_draw_age() -> Option<std::time::Duration> {
-    let start = DRAW_CLOCK.get()?;
-    let now = start.elapsed().as_micros() as u64;
-    let last = LAST_DRAW_MICROS.load(std::sync::atomic::Ordering::Relaxed);
-    Some(std::time::Duration::from_micros(now.saturating_sub(last)))
 }
 
 /// Creates a quad with the given parameters.

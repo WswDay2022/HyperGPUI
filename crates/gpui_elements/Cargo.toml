@@ -41,7 +41,3 @@ path = "examples/image_repro.rs"
 [[example]]
 name = "image-transition-repro"
 path = "examples/image_transition_repro.rs"
-
-[[example]]
-name = "transparent-image-repro"
-path = "examples/transparent_image_repro.rs"

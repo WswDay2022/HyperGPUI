@@ -313,28 +313,6 @@ impl DirectXRenderer {
 
     fn pre_draw(&self, clear_color: &[f32; 4], scene: &Scene) -> Result<()> {
         let resources = self.resources.as_ref().expect("resources missing");
-        if std::env::var_os("HGPUI_TRACE_QUADS").is_some() {
-            let vp = resources.viewport;
-            let back_buffer_size = unsafe {
-                resources
-                    .render_target
-                    .as_ref()
-                    .map(|t| {
-                        let mut desc = D3D11_TEXTURE2D_DESC::default();
-                        t.GetDesc(&mut desc);
-                        (desc.Width, desc.Height)
-                    })
-            };
-            eprintln!(
-                "[dx] viewport=({},{},{},{}) self={}x{} back_buffer={:?} window_mask={:?}",
-                vp.TopLeftX, vp.TopLeftY, vp.Width, vp.Height, self.width, self.height,
-                back_buffer_size, scene.window_mask
-            );
-            if let Ok(swap_chain3) = resources.swap_chain.cast::<IDXGISwapChain3>() {
-                let index = unsafe { swap_chain3.GetCurrentBackBufferIndex() };
-                eprintln!("[swap] current_back_buffer={index}");
-            }
-        }
         let device_context = &self
             .devices
             .as_ref()
@@ -395,9 +373,6 @@ impl DirectXRenderer {
                 .swap_chain
                 .Present(0, DXGI_PRESENT(0))
         };
-        if std::env::var_os("HGPUI_TRACE_QUADS").is_some() {
-            eprintln!("[present] result={result:?}");
-        }
         result.ok().context("Presenting swap chain failed")?;
         if let Some(composition) = self.direct_composition.as_ref() {
             composition.commit()?;
@@ -485,9 +460,6 @@ impl DirectXRenderer {
         background_appearance: WindowBackgroundAppearance,
     ) -> Result<()> {
         if self.skip_draws {
-            if std::env::var_os("HGPUI_TRACE_QUADS").is_some() {
-                eprintln!("[dx] skipping draw (skip_draws)");
-            }
             // skip drawing this frame, we just recovered from a device lost event
             // and so likely do not have the textures anymore that are required for drawing
             return Ok(());
@@ -671,11 +643,6 @@ impl DirectXRenderer {
                     }
                 }
             };
-            if std::env::var_os("HGPUI_TRACE_QUADS").is_some()
-                && let Err(err) = &batch_result
-            {
-                eprintln!("[dx] batch {batch_label} failed: {err:#}");
-            }
             batch_result.with_context(|| {
                 format!(
                     "scene too large (batch {batch_label}):\
@@ -1919,12 +1886,6 @@ impl<T> PipelineState<T> {
         instance_count: u32,
     ) -> Result<()> {
         let stride = std::mem::size_of::<T>() as u32;
-        if std::env::var_os("HGPUI_TRACE_QUADS").is_some() {
-            eprintln!(
-                "[draw_range] {} first={} count={} stride={} buffer_elems={}",
-                self.label, first_instance, instance_count, stride, self.buffer_size
-            );
-        }
         let view = create_buffer_view_range(
             device,
             &self.buffer,
@@ -1965,17 +1926,6 @@ impl<T> PipelineState<T> {
         instance_count: u32,
     ) -> Result<()> {
         let stride = std::mem::size_of::<T>() as u32;
-        if std::env::var_os("HGPUI_TRACE_QUADS").is_some() {
-            eprintln!(
-                "[draw_range_texture] {} first={} count={} stride={} buffer_elems={} tex0={}",
-                self.label,
-                first_instance,
-                instance_count,
-                stride,
-                self.buffer_size,
-                texture[0].is_some()
-            );
-        }
         let view = create_buffer_view_range(
             device,
             &self.buffer,
