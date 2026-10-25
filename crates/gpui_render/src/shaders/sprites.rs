@@ -30,7 +30,10 @@ pub mod underline {
             / sqrt(1.0 + wave_slope * wave_slope)
             * underline.bounds.size.y;
         let stroke_distance = abs(signed_distance) - underline.thickness * 0.5;
-        antialiased_coverage(stroke_distance)
+        antialiased_coverage_with_max_gradient(
+            stroke_distance,
+            aa_max_gradient(underline.transformation),
+        )
     }
 
     #[derive(Wgsl)]
@@ -318,11 +321,14 @@ pub mod polychrome_sprite {
         blend_color(
             color,
             sprite.opacity
-                * antialiased_coverage(rounded_rectangle_signed_distance(
-                    input.local_position,
-                    sprite.bounds,
-                    sprite.corner_radii,
-                ))
+                * antialiased_coverage_with_max_gradient(
+                    rounded_rectangle_signed_distance(
+                        input.local_position,
+                        sprite.bounds,
+                        sprite.corner_radii,
+                    ),
+                    aa_max_gradient(sprite.transformation),
+                )
                 * ContentMask::alpha_with_own(
                     sprite.content_mask,
                     input.scene_position,
@@ -398,18 +404,21 @@ pub mod polychrome_sprite {
         blend_color(
             color,
             sprite.opacity
-                * antialiased_coverage(prepared_corner_signed_distance(
-                    input.local_position,
-                    sprite.bounds,
-                    sprite.corner_radii,
-                    sprite.corner_smoothing,
-                    PreparedCorners {
-                        horizontal_reaches: input.horizontal_corner_reaches,
-                        vertical_reaches: input.vertical_corner_reaches,
-                        smoothing_factors: input.smoothing_factors,
-                        superellipse_power: input.superellipse_power,
-                    },
-                ))
+                * antialiased_coverage_with_max_gradient(
+                    prepared_corner_signed_distance(
+                        input.local_position,
+                        sprite.bounds,
+                        sprite.corner_radii,
+                        sprite.corner_smoothing,
+                        PreparedCorners {
+                            horizontal_reaches: input.horizontal_corner_reaches,
+                            vertical_reaches: input.vertical_corner_reaches,
+                            smoothing_factors: input.smoothing_factors,
+                            superellipse_power: input.superellipse_power,
+                        },
+                    ),
+                    aa_max_gradient(sprite.transformation),
+                )
                 * ContentMask::alpha(sprite.content_mask, input.scene_position),
         )
     }

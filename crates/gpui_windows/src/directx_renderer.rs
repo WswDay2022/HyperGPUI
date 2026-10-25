@@ -308,6 +308,24 @@ impl DirectXRenderer {
 
     fn pre_draw(&self, clear_color: &[f32; 4]) -> Result<()> {
         let resources = self.resources.as_ref().expect("resources missing");
+        if std::env::var_os("HGPUI_TRACE_QUADS").is_some() {
+            let vp = resources.viewport;
+            let back_buffer_size = unsafe {
+                resources
+                    .render_target
+                    .as_ref()
+                    .map(|t| {
+                        let mut desc = D3D11_TEXTURE2D_DESC::default();
+                        t.GetDesc(&mut desc);
+                        (desc.Width, desc.Height)
+                    })
+            };
+            eprintln!(
+                "[dx] viewport=({},{},{},{}) self={}x{} back_buffer={:?}",
+                vp.TopLeftX, vp.TopLeftY, vp.Width, vp.Height, self.width, self.height,
+                back_buffer_size
+            );
+        }
         let device_context = &self
             .devices
             .as_ref()
@@ -2667,7 +2685,7 @@ mod tests {
         Foundation::HMODULE,
         Graphics::{
             Direct3D::{
-                D3D_DRIVER_TYPE_WARP, D3D_PRIMITIVE_TOPOLOGY,
+                D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP, D3D_PRIMITIVE_TOPOLOGY,
                 D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST, D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP,
             },
             Direct3D11::{
@@ -2686,6 +2704,43 @@ mod tests {
     };
 
     const TEST_SIZE: u32 = 64;
+
+    /// Same as [`create_warp_device`], but on the real GPU. Used to catch behaviour that the
+    /// WARP software rasterizer does not reproduce.
+    fn create_hardware_device() -> Option<(ID3D11Device, ID3D11DeviceContext)> {
+        unsafe {
+            let mut device: Option<ID3D11Device> = None;
+            let mut device_context: Option<ID3D11DeviceContext> = None;
+            let mut result = D3D11CreateDevice(
+                None,
+                D3D_DRIVER_TYPE_HARDWARE,
+                HMODULE::default(),
+                D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                None,
+                D3D11_SDK_VERSION,
+                Some(&mut device),
+                None,
+                Some(&mut device_context),
+            );
+            if result.is_err() {
+                device = None;
+                device_context = None;
+                result = D3D11CreateDevice(
+                    None,
+                    D3D_DRIVER_TYPE_HARDWARE,
+                    HMODULE::default(),
+                    D3D11_CREATE_DEVICE_DEBUG | D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                    None,
+                    D3D11_SDK_VERSION,
+                    Some(&mut device),
+                    None,
+                    Some(&mut device_context),
+                );
+            }
+            result.ok()?;
+            Some((device?, device_context?))
+        }
+    }
 
     fn create_warp_device() -> Option<(ID3D11Device, ID3D11DeviceContext)> {
         unsafe {
@@ -4771,6 +4826,139 @@ mod tests {
         ] {
             let px = read_pixel(&context, &target.texture, &target.staging, x, 32)?;
             assert_red_close(px, expected, what);
+        }
+        Ok(())
+    }
+
+    /// The white window background is a rounded quad at (5, 5) in a large window. Its AA margin
+    /// reaches one device pixel outside the bounds, but the coverage at the pixel just outside
+    /// must be zero — a half-covered pixel there reads as a faint one-pixel frame around the
+    /// window. This renders the exact bounds the IshiTone borderless window uses.
+    #[test]
+    fn hlsl_large_window_quad_edge_readback() -> Result<()> {
+        // Prefer the real GPU: this bug was only visible in the window, not under WARP.
+        let Some((device, context)) = create_hardware_device().or_else(create_warp_device) else {
+            eprintln!("[large_quad] Direct3D device unavailable, skipping");
+            return Ok(());
+        };
+        eprintln!(
+            "[large_quad] feature_level={:?}",
+            unsafe { device.GetFeatureLevel() }
+        );
+        const WIDTH: u32 = 1911;
+        const HEIGHT: u32 = 1090;
+        let (texture, rtv, _srv) = create_color_target(&device, WIDTH, HEIGHT)?;
+        let rtv = rtv.expect("color target render target view");
+        let staging = {
+            let desc = D3D11_TEXTURE2D_DESC {
+                Width: WIDTH,
+                Height: HEIGHT,
+                MipLevels: 1,
+                ArraySize: 1,
+                Format: RENDER_TARGET_FORMAT,
+                SampleDesc: DXGI_SAMPLE_DESC {
+                    Count: 1,
+                    Quality: 0,
+                },
+                Usage: D3D11_USAGE_STAGING,
+                BindFlags: 0,
+                CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
+                MiscFlags: 0,
+            };
+            let mut staging = None;
+            unsafe { device.CreateTexture2D(&desc, None, Some(&mut staging)) }?;
+            staging.unwrap()
+        };
+
+        let globals_buffer =
+            create_constant_buffer(&device, std::mem::size_of::<GlobalUniforms>())?;
+        update_buffer(
+            &context,
+            &globals_buffer,
+            &[GlobalUniforms {
+                viewport_size: [WIDTH as f32, HEIGHT as f32],
+                premultiplied_alpha: 0,
+                padding: 0,
+            }],
+        )?;
+        let font_buffer =
+            create_constant_buffer(&device, std::mem::size_of::<FontRasterizationUniforms>())?;
+        update_buffer(
+            &context,
+            &font_buffer,
+            &[FontRasterizationUniforms::default()],
+        )?;
+        let draw_constants_buffer = create_constant_buffer(&device, 16)?;
+        update_buffer(
+            &context,
+            &draw_constants_buffer,
+            &[hgpui_render::artifacts::Dx11DrawConstants::default()],
+        )?;
+        let globals = [
+            Some(globals_buffer),
+            Some(font_buffer),
+            None,
+            Some(draw_constants_buffer),
+        ];
+
+        let blend = create_blend_state(&device)?;
+        let mut pipeline =
+            PipelineState::<Quad>::new(&device, "test_large_quad", ShaderModule::Quad, 4, blend)?;
+        let radius = ScaledPixels(99.0);
+        let quad = Quad {
+            bounds: bounds(
+                point(ScaledPixels(5.0), ScaledPixels(5.0)),
+                size(ScaledPixels(1901.0), ScaledPixels(1080.0)),
+            ),
+            content_mask: ContentMask {
+                bounds: bounds(
+                    point(ScaledPixels(0.0), ScaledPixels(0.0)),
+                    size(ScaledPixels(WIDTH as f32), ScaledPixels(HEIGHT as f32)),
+                ),
+                corner_radii: Corners::default(),
+                fade_out: Default::default(),
+            },
+            background: Background::from(rgba(0xff00ffff)),
+            corner_radii: Corners {
+                top_left: radius,
+                top_right: radius,
+                bottom_right: radius,
+                bottom_left: radius,
+            },
+            ..Default::default()
+        };
+        pipeline.update_buffer(&device, &context, &[quad])?;
+        let viewport = D3D11_VIEWPORT {
+            TopLeftX: 0.0,
+            TopLeftY: 0.0,
+            Width: WIDTH as f32,
+            Height: HEIGHT as f32,
+            MinDepth: 0.0,
+            MaxDepth: 1.0,
+        };
+        unsafe {
+            context.ClearRenderTargetView(&rtv, &[0.0, 0.0, 0.0, 1.0]);
+            context.OMSetRenderTargets(Some(slice::from_ref(&Some(rtv.clone()))), None);
+        }
+        pipeline.draw_range(&device, &context, &[viewport], &globals, 4, 0, 1)?;
+        dump_device_errors(&device);
+
+        for (x, y, what) in [
+            (4, 500, "left margin ring"),
+            (1906, 500, "right margin ring"),
+            (500, 4, "top margin ring"),
+            (500, 1085, "bottom margin ring"),
+            (5, 500, "left edge pixel"),
+        ] {
+            let px = read_pixel(&context, &texture, &staging, x, y)?;
+            if what.ends_with("edge pixel") {
+                assert_eq!(px[2], 255, "{what} must be fully covered, got {px:?}");
+            } else {
+                assert_eq!(
+                    px[2], 0,
+                    "{what} is outside the quad and must stay clear, got {px:?}"
+                );
+            }
         }
         Ok(())
     }

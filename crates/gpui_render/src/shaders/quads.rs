@@ -636,6 +636,7 @@ pub mod quad {
         }
 
         let distances = border_distances(geometry);
+        let max_gradient = aa_max_gradient(quad.transformation);
         let mut color = fill_color;
         if max(distances.inner, distances.outer) < PIXEL_ANTIALIAS_RADIUS {
             let mut border_color = paint_color(
@@ -647,14 +648,18 @@ pub mod quad {
                 border_color.w *= dashed_border_alpha(quad, geometry);
             }
             let blended_border = over(fill_color, border_color);
-            let factor = antialiased_coverage(distances.inner);
+            let factor =
+                antialiased_coverage_with_max_gradient(distances.inner, max_gradient);
             color = mix(
                 fill_color,
                 blended_border,
                 vec4f(factor, factor, factor, factor),
             );
         }
-        blend_color(color, antialiased_coverage(distances.outer) * fade)
+        blend_color(
+            color,
+            antialiased_coverage_with_max_gradient(distances.outer, max_gradient) * fade,
+        )
     }
 
     #[derive(Wgsl)]
@@ -781,7 +786,13 @@ pub mod quad {
                 prepared,
             );
 
-            return blend_color(fill_color, antialiased_coverage(distance) * fade);
+            return blend_color(
+                fill_color,
+                antialiased_coverage_with_max_gradient(
+                    distance,
+                    aa_max_gradient(quad.transformation),
+                ) * fade,
+            );
         }
 
         let geometry = quad_geometry(quad, input.local_position);
@@ -879,7 +890,8 @@ pub mod quad {
             }
 
             let blended_border = over(fill_color, border_color);
-            let factor = antialiased_coverage(inner);
+            let max_gradient = aa_max_gradient(quad.transformation);
+            let factor = antialiased_coverage_with_max_gradient(inner, max_gradient);
 
             color = mix(
                 fill_color,
@@ -888,6 +900,12 @@ pub mod quad {
             );
         }
 
-        blend_color(color, antialiased_coverage(outer) * fade)
+        blend_color(
+            color,
+            antialiased_coverage_with_max_gradient(
+                outer,
+                aa_max_gradient(quad.transformation),
+            ) * fade,
+        )
     }
 }

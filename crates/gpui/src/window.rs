@@ -4243,6 +4243,37 @@ impl Window {
                 .compose(quad.transformation.unwrap_or(TransformationMatrix::unit())),
         };
 
+        // TEMP DEBUG: large surfaces, to trace half-pixel edges around the window frame.
+        if std::env::var_os("HGPUI_TRACE_QUADS").is_some()
+            && snapped_bounds.size.width.0 > 1500.0
+        {
+            eprintln!(
+                "[quad] raw=({:.3},{:.3} {:.3}x{:.3}) snapped=({:.3},{:.3} {:.3}x{:.3}) mask=({:.3},{:.3} {:.3}x{:.3}) mask_radii={:?} radii={:?} tx={:?} scale={}",
+                quad.bounds.origin.x.0,
+                quad.bounds.origin.y.0,
+                quad.bounds.size.width.0,
+                quad.bounds.size.height.0,
+                snapped_bounds.origin.x.0,
+                snapped_bounds.origin.y.0,
+                snapped_bounds.size.width.0,
+                snapped_bounds.size.height.0,
+                quad.content_mask.bounds.origin.x.0,
+                quad.content_mask.bounds.origin.y.0,
+                quad.content_mask.bounds.size.width.0,
+                quad.content_mask.bounds.size.height.0,
+                quad.content_mask.corner_radii,
+                quad.corner_radii,
+                quad.transformation,
+                self.scale_factor(),
+            );
+            eprintln!(
+                "[quad] smoothing={} border={:?} bg={:?}",
+                quad.corner_smoothing,
+                quad.border_widths,
+                quad.background,
+            );
+        }
+
         if !quad.background.is_transparent() {
             self.next_frame.scene.insert_primitive(quad);
             return;
