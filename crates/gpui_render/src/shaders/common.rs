@@ -28,12 +28,6 @@ mod source {
     pub const DIAGONAL_STRIPE_ANGLE: f32 = PI / 4.0;
     pub const REC_601_LUMA_WEIGHTS: Vec3f = vec3f(0.30, 0.59, 0.11);
     pub const LINEAR_RGB_LUMA_WEIGHTS: Vec3f = vec3f(0.2126, 0.7152, 0.0722);
-    pub const SRGB_DECODE_CUTOFF: f32 = 0.04045;
-    pub const SRGB_ENCODE_CUTOFF: f32 = 0.0031308;
-    pub const SRGB_TRANSFER_OFFSET: f32 = 0.055;
-    pub const SRGB_TRANSFER_SCALE: f32 = 1.055;
-    pub const SRGB_DECODE_EXPONENT: f32 = 2.4;
-    pub const SRGB_LINEAR_SCALE: f32 = 12.92;
     pub const ERROR_FUNCTION_LINEAR_COEFFICIENT: f32 = 0.278393;
     pub const ERROR_FUNCTION_QUADRATIC_COEFFICIENT: f32 = 0.230389;
     pub const ERROR_FUNCTION_CUBIC_COEFFICIENT: f32 = 0.000972;
@@ -554,55 +548,6 @@ mod source {
     pub fn unclipped_distances() -> Vec4f {
         vec4f(1.0, 1.0, 1.0, 1.0)
     }
-    pub fn srgb_to_linear(srgb: Vec3f) -> Vec3f {
-        let cutoff = vec3b(
-            srgb.x < SRGB_DECODE_CUTOFF,
-            srgb.y < SRGB_DECODE_CUTOFF,
-            srgb.z < SRGB_DECODE_CUTOFF,
-        );
-        let higher = pow(
-            (srgb + SRGB_TRANSFER_OFFSET) / SRGB_TRANSFER_SCALE,
-            vec3f(
-                SRGB_DECODE_EXPONENT,
-                SRGB_DECODE_EXPONENT,
-                SRGB_DECODE_EXPONENT,
-            ),
-        );
-        select(higher, srgb / SRGB_LINEAR_SCALE, cutoff)
-    }
-    pub fn linear_to_srgb(linear: Vec3f) -> Vec3f {
-        let cutoff = vec3b(
-            linear.x < SRGB_ENCODE_CUTOFF,
-            linear.y < SRGB_ENCODE_CUTOFF,
-            linear.z < SRGB_ENCODE_CUTOFF,
-        );
-        let inverse_exponent = 1.0 / SRGB_DECODE_EXPONENT;
-        let higher = SRGB_TRANSFER_SCALE
-            * pow(
-                linear,
-                vec3f(inverse_exponent, inverse_exponent, inverse_exponent),
-            )
-            - SRGB_TRANSFER_OFFSET;
-        select(higher, linear * SRGB_LINEAR_SCALE, cutoff)
-    }
-    pub fn linear_to_srgba(color: Vec4f) -> Vec4f {
-        let red_green_blue = linear_to_srgb(color.rgb());
-        vec4f(
-            red_green_blue.x,
-            red_green_blue.y,
-            red_green_blue.z,
-            color.w,
-        )
-    }
-    pub fn srgba_to_linear(color: Vec4f) -> Vec4f {
-        let red_green_blue = srgb_to_linear(color.rgb());
-        vec4f(
-            red_green_blue.x,
-            red_green_blue.y,
-            red_green_blue.z,
-            color.w,
-        )
-    }
     pub fn hue_to_unit_rgb(hue: f32) -> Vec3f {
         let phases = fract(vec3f(hue, hue + 2.0 / 3.0, hue + 1.0 / 3.0));
         saturate(abs(phases * 6.0 - 3.0) - 1.0)
@@ -767,10 +712,9 @@ mod source {
         {
             prepared.color0 = hsla_to_rgba(paint.background.colors[0usize].color);
             prepared.color1 = hsla_to_rgba(paint.background.colors[1usize].color);
-            if paint.background.color_space == ColorSpace::Srgb {
-                prepared.color0 = linear_to_srgba(prepared.color0);
-                prepared.color1 = linear_to_srgba(prepared.color1);
-            } else {
+            // Upstream gpui interpolates sRGB stops in their native (non-linear) space.
+            // Only the Oklab color space needs the stop colors converted up front.
+            if paint.background.color_space == ColorSpace::Oklab {
                 prepared.color0 = linear_srgb_to_oklab(prepared.color0);
                 prepared.color1 = linear_srgb_to_oklab(prepared.color1);
             }
@@ -823,11 +767,9 @@ mod source {
         let ratio = linear_gradient_ratio(paint, position);
         let ratio4 = vec4f(ratio, ratio, ratio, ratio);
         let interpolated = mix(prepared.color0, prepared.color1, ratio4);
-        let mut color = transparent();
+        let mut color = interpolated;
         if paint.background.color_space == ColorSpace::Oklab {
             color = oklab_to_linear_srgb(interpolated);
-        } else {
-            color = srgba_to_linear(interpolated);
         }
         color + gradient_dither(position)
     }
@@ -899,11 +841,9 @@ mod source {
         );
         let ratio = vec4f(stop_t, stop_t, stop_t, stop_t);
         let interpolated = mix(prepared.color0, prepared.color1, ratio);
-        let mut color = transparent();
+        let mut color = interpolated;
         if paint.background.color_space == ColorSpace::Oklab {
             color = oklab_to_linear_srgb(interpolated);
-        } else {
-            color = srgba_to_linear(interpolated);
         }
         color + gradient_dither(position)
     }

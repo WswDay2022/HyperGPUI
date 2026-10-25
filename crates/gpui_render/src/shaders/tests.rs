@@ -193,6 +193,62 @@ fn shader_discriminants_match_scene_types() {
 }
 
 #[test]
+fn srgb_gradients_interpolate_in_native_srgb_space() {
+    use common::*;
+    use wgsl_rs::std::*;
+
+    let black = Hsla {
+        h: 0.0,
+        s: 0.0,
+        l: 0.0,
+        a: 1.0,
+    };
+    let white = Hsla {
+        h: 0.0,
+        s: 0.0,
+        l: 1.0,
+        a: 1.0,
+    };
+    let background = Background {
+        tag: BackgroundTag::LinearGradient,
+        color_space: ColorSpace::Srgb,
+        solid: black,
+        gradient_angle_or_pattern_height: 90.0,
+        colors: [
+            LinearColorStop {
+                color: black,
+                percentage: 0.0,
+            },
+            LinearColorStop {
+                color: white,
+                percentage: 1.0,
+            },
+        ],
+        radial_center_y: 0.0,
+        radial_size: 0,
+        padding: 0,
+    };
+    let bounds = Bounds {
+        origin: vec2f(0.0, 0.0),
+        size: vec2f(100.0, 100.0),
+    };
+    let paint = Paint::new(background, bounds);
+    let prepared = prepare_paint(paint);
+    // Upstream gpui lerps sRGB stops directly (CSS behaviour): the midpoint of black -> white is
+    // ~0.5, not the gamma-shifted ~0.21 that an encode/decode round-trip would produce.
+    let middle = paint_color(paint, vec2f(50.0, 50.0), prepared);
+    assert!(
+        (middle.x - 0.5).abs() < 0.02,
+        "sRGB gradient midpoint should be ~0.5, got {}",
+        middle.x
+    );
+    let start = paint_color(paint, vec2f(0.0, 50.0), prepared);
+    assert!(start.x < 0.02, "first stop should stay black, got {}", start.x);
+    let end = paint_color(paint, vec2f(100.0, 50.0), prepared);
+    assert!(end.x > 0.98, "last stop should stay white, got {}", end.x);
+}
+
+#[test]
 fn linear_gradients_preserve_native_dithering() {
     use common::*;
     use wgsl_rs::std::*;

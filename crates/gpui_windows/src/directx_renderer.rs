@@ -5585,7 +5585,7 @@ mod tests {
         // (Against the clipped [24,40] box it would be (28.5-24)/16 = 0.281 -> 72.)
         for (x, y) in [(28, 32), (28, 20), (28, 44)] {
             let px = read_pixel(&context, &target.texture, &target.staging, x, y)?;
-            assert_red_close(px, 38, "path gradient anchored to the path bounds");
+            assert_red_close(px, 109, "path gradient anchored to the path bounds");
         }
         Ok(())
     }
@@ -5653,7 +5653,7 @@ mod tests {
         };
         let target = render_quad(&device, &context, quad, [0.0, 0.0, 0.0, 1.0])?;
         let px = read_pixel(&context, &target.texture, &target.staging, 4, 32)?;
-        assert_red_close(px, 198, "off-box closest-corner radial gradient");
+        assert_red_close(px, 211, "off-box closest-corner radial gradient");
         Ok(())
     }
 
