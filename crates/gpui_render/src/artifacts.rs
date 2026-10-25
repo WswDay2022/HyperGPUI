@@ -109,4 +109,60 @@ mod tests {
             "pipeline table and native shader table must stay in lockstep"
         );
     }
+
+    fn registers(source: &str, class: char) -> Vec<u32> {
+        let needle = format!("register({class}");
+        source
+            .match_indices(&needle)
+            .filter_map(|(index, _)| {
+                let rest = &source[index + needle.len()..];
+                let end = rest.find(')')?;
+                rest[..end].parse().ok()
+            })
+            .collect()
+    }
+
+    /// The frame-wide content-mask arena must use one dedicated register/slot in every native
+    /// dialect. A collision here is a runtime binding bug that FXC/WGSL validation alone does not
+    /// catch (two resources would silently share a register).
+    #[test]
+    fn content_mask_arena_has_a_dedicated_native_binding() {
+        for shader in NATIVE_SHADERS {
+            if shader.label == interface::EMOJI_RASTERIZATION.label {
+                continue;
+            }
+            assert!(
+                shader.hlsl.contains("CONTENT_MASKS : register(t5)"),
+                "{} does not bind CONTENT_MASKS at t5",
+                shader.label
+            );
+            let texture_registers = registers(shader.hlsl, 't');
+            assert_eq!(
+                texture_registers.iter().filter(|&&register| register == 5).count(),
+                1,
+                "{} has a t5 collision: {texture_registers:?}",
+                shader.label
+            );
+            for class in ['b', 's'] {
+                let mut seen = registers(shader.hlsl, class);
+                seen.sort_unstable();
+                seen.dedup();
+                let mut all = registers(shader.hlsl, class);
+                all.sort_unstable();
+                assert_eq!(all, seen, "{} has duplicate {} registers", shader.label, class);
+            }
+
+            // MSL only declares resources the entry points actually use (naga prunes unused
+            // ones, e.g. the path-sprite blit), so presence is conditional. What must never
+            // happen is another resource occupying buffer(4): that would silently alias the
+            // mask arena wherever both are used.
+            let mask_bindings = shader.msl.matches("CONTENT_MASKS [[buffer(4)]]").count();
+            let buffer_four_bindings = shader.msl.matches("[[buffer(4)]]").count();
+            assert_eq!(
+                mask_bindings, buffer_four_bindings,
+                "{} has an MSL buffer(4) collision",
+                shader.label
+            );
+        }
+    }
 }

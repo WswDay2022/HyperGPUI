@@ -92,7 +92,6 @@
             LD_LIBRARY_PATH = lib.makeLibraryPath linuxLibs;
           };
 
-          cargoExtraArgs = "--features runtime_shaders";
         };
 
         cargoArtifacts = craneLib.buildDepsOnly commonArgs;
