@@ -60,11 +60,8 @@ pub mod underline {
         #[builtin(instance_index)] instance_id: u32,
     ) -> UnderlineVarying {
         let underline = get!(UNDERLINES)[instance_id as usize];
-        let margin = aa_margin_local(underline.transformation);
         let unit_position = rectangle_corner(vertex_id);
-        let local_position = unit_position
-            * (underline.bounds.size + 2.0 * margin)
-            + (underline.bounds.origin - margin);
+        let local_position = unit_position * underline.bounds.size + underline.bounds.origin;
         let scene_position = TransformationMatrix::transform_position(
             underline.transformation,
             local_position,
@@ -73,7 +70,7 @@ pub mod underline {
             position: to_device_position_impl(scene_position),
             color: hsla_to_rgba(underline.color),
             underline_id: instance_id,
-            clip_distances: distance_from_clip_rect_aa_impl(
+            clip_distances: distance_from_clip_rect_impl(
                 scene_position,
                 underline.content_mask.bounds,
             ),
@@ -98,9 +95,9 @@ pub mod underline {
             false,
         );
         if !is_enabled(underline.wavy) {
-            // The line geometry is grown by the AA margin; its own bounds must shape the
-            // fragment. Combining the box distance and the mask distance with `max` also keeps
-            // a mask edge that coincides with the line's end from being applied twice.
+            // The line's own bounds shape the fragment. Combining the box distance and the
+            // mask distance with `max` also keeps a mask edge that coincides with the line's
+            // end from being applied twice.
             let box_distance = rounded_rectangle_signed_distance(
                 input.local_position,
                 underline.bounds,
@@ -257,22 +254,15 @@ pub mod polychrome_sprite {
         instance_id: u32,
         sprite: PolychromeSprite,
     ) -> PolychromeVertexData {
-        let margin = aa_margin_local(sprite.transformation);
         let unit_position = rectangle_corner(vertex_id);
-        let local_position =
-            unit_position * (sprite.bounds.size + 2.0 * margin) + (sprite.bounds.origin - margin);
+        let local_position = unit_position * sprite.bounds.size + sprite.bounds.origin;
         let scene_position =
             TransformationMatrix::transform_position(sprite.transformation, local_position);
-        // The quad is expanded by the AA margin, but the texture must stay registered to the
-        // original bounds: driving UVs from `unit_position` would stretch the image across the
-        // grown quad and sample outside the tile on every edge.
-        let bounds_size = max(sprite.bounds.size, vec2f(1e-6, 1e-6));
-        let tile_unit_position = (local_position - sprite.bounds.origin) / bounds_size;
         PolychromeVertexData {
             position: to_device_position_impl(scene_position),
-            tile_position: tile_unit_position,
+            tile_position: unit_position,
             sprite_id: instance_id,
-            clip_distances: distance_from_clip_rect_aa_impl(
+            clip_distances: distance_from_clip_rect_impl(
                 scene_position,
                 sprite.content_mask.bounds,
             ),
@@ -281,10 +271,8 @@ pub mod polychrome_sprite {
         }
     }
 
-    /// `tile_position` is the position inside the tile in unit space (0..1 over the tile); it
-    /// may fall outside that range for fragments in the AA margin. Converting and clamping here
-    /// rather than in the vertex shader keeps the interpolation linear in local space: clamping
-    /// vertex UVs would compress the whole tile into the grown quad.
+    /// `tile_position` is the position inside the tile in unit space (0..1 over the tile).
+    /// Clamping happens in the fragment shader so interpolation stays linear in local space.
     pub fn polychrome_color(sprite: PolychromeSprite, tile_position: Vec2f) -> Vec4f {
         let tile_position = atlas_texture_coordinates_clamped(
             tile_position,

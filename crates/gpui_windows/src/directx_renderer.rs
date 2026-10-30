@@ -2031,9 +2031,8 @@ struct PathRasterizationSprite {
     /// The path's own bounds: the gradient box. (Used to be `clipped_bounds`, which made the
     /// gradient shift/scale whenever an ancestor clip cut the path.)
     bounds: Bounds<ScaledPixels>,
-    /// The content mask the path is painted under. The shader clips with the padded AA margin
-    /// and cuts the mask's distance field in the fragment, so rounded mask corners apply to
-    /// vector paths too.
+    /// The content mask the path is painted under. The shader clips to the mask and evaluates
+    /// its distance field in the fragment, so rounded mask corners apply to vector paths too.
     content_mask: Bounds<ScaledPixels>,
     /// Packed reference into the frame's content-mask chain arena.
     mask_chain: u32,
@@ -4271,9 +4270,8 @@ mod tests {
     //
     // Every test below drives the real HLSL entry point through WARP and reads the pixels
     // back. They pin the behaviours the precision pass fixed:
-    //   * straight edges of quads/underlines now use their distance field (the early-out no
-    //     longer fires for the whole interior, and AA_MARGIN gives the ramp fragments outside
-    //     the shape),
+    //   * straight edges of quads/underlines use their own distance field (the early-out no
+    //     longer fires for the whole interior),
     //   * mask edges are shaped by the mask's distance field on both sides of straight edges,
     //   * vector paths honour a rounded content mask and resolve gradients against their own
     //     bounds,
@@ -4529,13 +4527,13 @@ mod tests {
         let target = render_quad(&device, &context, quad, [0.0, 0.0, 0.0, 1.0])?;
 
         // On the left/top the boundary pixel's centre is 0.2 device px inside -> coverage
-        // 0.7 -> 179. On the right/bottom the centre is 0.2 px outside -> coverage 0.3 -> 77;
-        // both need the margin (an outside fragment) to exist at all.
+        // 0.7 -> 179. On the right/bottom the boundary pixel's centre falls outside the exact
+        // transformed bounds, so it is not rasterized at all.
         for (x, y, expected, what) in [
             (14, 20, 179, "scaled left edge"),
-            (26, 20, 77, "scaled right edge"),
+            (26, 20, 0, "scaled right edge outside exact bounds"),
             (20, 14, 179, "scaled top edge"),
-            (20, 26, 77, "scaled bottom edge"),
+            (20, 26, 0, "scaled bottom edge outside exact bounds"),
         ] {
             let px = read_pixel(&context, &target.texture, &target.staging, x, y)?;
             assert_red_close(px, expected, what);
@@ -4548,9 +4546,9 @@ mod tests {
     }
 
     /// A straight content-mask edge on a half pixel must taper over one pixel, exactly like a
-    /// rounded arc. The clip is padded by AA_MARGIN and the fragment applies the mask's distance
-    /// field for unrounded masks too; before this, the exact clip plus the "unrounded mask =>
-    /// coverage 1" short-circuit made every straight mask edge a hard step.
+    /// rounded arc. The fragment applies the mask's distance field for unrounded masks too;
+    /// before this, the exact clip plus the "unrounded mask => coverage 1" short-circuit made
+    /// every straight mask edge a hard step.
     #[test]
     fn hlsl_quad_mask_straight_edge_aa_readback() -> Result<()> {
         let Some((device, context)) = create_warp_device() else {
@@ -4586,10 +4584,10 @@ mod tests {
         Ok(())
     }
 
-    /// A wavy-free underline's ends must taper: the geometry is grown by AA_MARGIN and the
-    /// fragment cuts the extra margin with the underline's own rectangle.
+    /// A wavy-free underline must keep its exact bounds: pixels inside are solid and pixels
+    /// outside are not rasterized.
     #[test]
-    fn hlsl_underline_end_aa_readback() -> Result<()> {
+    fn hlsl_underline_keeps_exact_bounds_readback() -> Result<()> {
         let Some((device, context)) = create_warp_device() else {
             eprintln!("[underline_end_aa] WARP device unavailable, skipping");
             return Ok(());
@@ -4605,7 +4603,7 @@ mod tests {
             blend,
         )?;
         let underline_bounds = bounds(
-            point(ScaledPixels(16.5), ScaledPixels(16.0)),
+            point(ScaledPixels(16.0), ScaledPixels(16.0)),
             size(ScaledPixels(31.0), ScaledPixels(32.0)),
         );
         let underline = hgpui::Underline {
@@ -4632,17 +4630,21 @@ mod tests {
         dump_device_errors(&device);
 
         let left = read_pixel(&context, &texture, &staging, 16, 32)?;
-        assert_red_close(left, 128, "underline left end");
-        let right = read_pixel(&context, &texture, &staging, 47, 32)?;
-        assert_red_close(right, 128, "underline right end");
+        assert_eq!(left[2], 255, "underline left inside edge must be solid");
+        let right = read_pixel(&context, &texture, &staging, 46, 32)?;
+        assert_eq!(right[2], 255, "underline right inside edge must be solid");
         let middle = read_pixel(&context, &texture, &staging, 32, 32)?;
         assert_eq!(middle[2], 255, "underline body must be solid, got {middle:?}");
+        for x in [15, 47] {
+            let outside = read_pixel(&context, &texture, &staging, x, 32)?;
+            assert_eq!(outside[2], 0, "pixel {x} outside the underline must stay clear");
+        }
         Ok(())
     }
 
-    /// A polychrome sprite's own corner SDF must taper on fractional edges. The quad is grown
-    /// by AA_MARGIN and the tile lookup is clamped with `saturate`, so the extra fragments
-    /// replay the edge texel with partial coverage instead of a hard snapped edge.
+    /// A polychrome sprite's own corner SDF must taper on fractional edges. The tile lookup is
+    /// clamped with `saturate`, so edge texels are replayed with partial coverage instead of a
+    /// hard snapped edge.
     #[test]
     fn hlsl_polychrome_sprite_fractional_edge_aa_readback() -> Result<()> {
         let Some((device, context)) = create_warp_device() else {
@@ -4790,11 +4792,9 @@ mod tests {
     }
 
     /// The tile lookup must stay registered to the sprite's original bounds and must stay
-    /// inside its own texels. The quad is grown by `AA_MARGIN`, so driving UVs from the vertex'
-    /// unit position stretches the image across the grown quad; and bilinear taps within half a
-    /// texel of the tile border otherwise read the neighbouring atlas tile, which is what shows
-    /// up as dark fringes around images and as stray strokes beside glyphs scaled by a CSS
-    /// transform.
+    /// inside its own texels: bilinear taps within half a texel of the tile border otherwise
+    /// read the neighbouring atlas tile, which shows up as dark fringes around images and as
+    /// stray strokes beside glyphs scaled by a CSS transform.
     #[test]
     fn hlsl_polychrome_sprite_tile_sampling_readback() -> Result<()> {
         let Some((device, context)) = create_warp_device() else {
@@ -4894,7 +4894,7 @@ mod tests {
         assert_eq!(
             texel_one,
             [255, 0, 0, 255],
-            "texel 1 must stay blue (B,G,R,A); the tile was stretched by the AA margin: {texel_one:?}"
+            "texel 1 must stay blue (B,G,R,A); the tile lookup stretched the image: {texel_one:?}"
         );
         let texel_two = read_pixel(&context, &texture, &staging, 10, 12)?;
         assert_eq!(
@@ -5127,12 +5127,10 @@ mod tests {
         Ok(())
     }
 
-    /// A thin straight quad must keep its exact bounds. The vertex expands every quad by the AA
-    /// margin; the straight-edge fast path used to take its coverage from the content mask, which
-    /// for ordinary quads is the viewport (alpha 1), so the margin painted one extra row/column
-    /// around every rectangle. A 2px Divider rendered 4px thick.
+    /// A thin straight quad must keep its exact bounds: pixels inside are solid and pixels
+    /// outside are not rasterized.
     #[test]
-    fn hlsl_quad_straight_edge_does_not_bleed_aa_margin() -> Result<()> {
+    fn hlsl_quad_straight_edge_keeps_exact_bounds() -> Result<()> {
         let Some((device, context)) = create_warp_device() else {
             eprintln!("[thin_quad] WARP device unavailable, skipping");
             return Ok(());
@@ -5148,12 +5146,12 @@ mod tests {
         };
         let target = render_quad(&device, &context, quad, [0.0, 0.0, 0.0, 1.0])?;
         for (y, expected, what) in [
-            (28, 0, "above the AA margin"),
-            (29, 0, "AA margin row above"),
+            (28, 0, "above the bounds"),
+            (29, 0, "row above the bounds"),
             (30, 255, "first covered row"),
             (31, 255, "second covered row"),
-            (32, 0, "AA margin row below"),
-            (33, 0, "below the AA margin"),
+            (32, 0, "row below the bounds"),
+            (33, 0, "below the bounds"),
         ] {
             let px = read_pixel(&context, &target.texture, &target.staging, 32, y)?;
             assert_eq!(
@@ -5782,9 +5780,9 @@ mod tests {
         Ok(())
     }
 
-    /// An inset shadow's element edge is both its outer shape and its clip, so the geometry is
-    /// grown by AA_MARGIN; without that the fragment stage's element-edge ramp had no fragment
-    /// outside the element and the edge snapped inward by up to half a pixel.
+    /// An inset shadow's element edge is both its outer shape and its clip; the geometry is
+    /// expanded by the shadow's Gaussian margin so the fragment stage has pixels outside the
+    /// element for its edge ramp.
     #[test]
     fn hlsl_inset_shadow_element_edge_aa_readback() -> Result<()> {
         let Some((device, context)) = create_warp_device() else {

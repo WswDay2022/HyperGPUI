@@ -56,7 +56,7 @@ pub mod path_rasterization {
             position: viewport_to_clip_position(vertex.xy_position),
             curve_position: vertex.curve_position,
             vertex_id,
-            clip_distances: distance_from_clip_rect_aa_impl(
+            clip_distances: distance_from_clip_rect_impl(
                 vertex.xy_position,
                 vertex.content_mask,
             ),

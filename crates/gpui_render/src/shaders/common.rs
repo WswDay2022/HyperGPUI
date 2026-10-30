@@ -9,8 +9,6 @@ mod source {
     pub const FULL_TURN_DEGREES: f32 = 360.0;
     pub const CSS_GRADIENT_OFFSET_DEGREES: f32 = 90.0;
     pub const PIXEL_ANTIALIAS_RADIUS: f32 = 0.5;
-    /// Extra device pixels a transformed primitive may cover beyond its layout bounds.
-    pub const AA_MARGIN: f32 = 1.0;
     pub const GAUSSIAN_CUTOFF_STANDARD_DEVIATIONS: f32 = 3.0;
     pub const PATTERN_COMPONENT_SCALE: f32 = 255.0;
     pub const PATTERN_PACKING_RADIX: f32 = 65535.0;
@@ -398,8 +396,8 @@ mod source {
     /// transparent background), which shows up as dark fringes around images and as stray
     /// strokes beside scaled glyphs. Clamping the *texel* coordinate to the centres of the
     /// tile's outermost texels keeps the footprint inside the tile while leaving 1:1 sampling
-    /// exactly where it was. The vertex shader may supply unit positions outside 0..1 when it
-    /// grows a primitive by the AA margin; those clamp to the edge texel instead of spilling.
+    /// exactly where it was. Interpolation at the tile's edge may still produce unit positions
+    /// slightly outside 0..1; those clamp to the edge texel instead of spilling.
     pub fn atlas_texture_coordinates_clamped(
         unit_position: Vec2f,
         tile: AtlasTile,
@@ -1056,31 +1054,10 @@ mod source {
         )) * fade
     }
 
-    /// Expansion, in local units, that widens a primitive by [`AA_MARGIN`] device pixels
-    /// under `transformation`.
-    pub fn aa_margin_local(transformation: TransformationMatrix) -> Vec2f {
-        let axis_x = vec2f(
-            transformation.rotation_scale[0usize][0usize],
-            transformation.rotation_scale[1usize][0usize],
-        );
-        let axis_y = vec2f(
-            transformation.rotation_scale[0usize][1usize],
-            transformation.rotation_scale[1usize][1usize],
-        );
-        let det = abs(axis_x.x * axis_y.y - axis_x.y * axis_y.x);
-        let margins = vec2f(length(axis_y), length(axis_x)) / max(det, 1e-3);
-        AA_MARGIN * margins
-    }
-
     pub fn distance_from_clip_rect_impl(position: Vec2f, clip_bounds: Bounds) -> Vec4f {
         let top_left = position - clip_bounds.origin;
         let bottom_right = clip_bounds.origin + clip_bounds.size - position;
         vec4f(top_left.x, bottom_right.x, top_left.y, bottom_right.y)
-    }
-
-    pub fn distance_from_clip_rect_aa_impl(position: Vec2f, clip_bounds: Bounds) -> Vec4f {
-        distance_from_clip_rect_impl(position, clip_bounds)
-            + vec4f(AA_MARGIN, AA_MARGIN, AA_MARGIN, AA_MARGIN)
     }
 
     pub fn to_device_position_impl(position: Vec2f) -> Vec4f {
@@ -1097,14 +1074,6 @@ mod source {
         clip_bounds: Bounds,
     ) -> Vec4f {
         distance_from_clip_rect_impl(Bounds::position(bounds, unit_vertex), clip_bounds)
-    }
-
-    pub fn distance_from_clip_rect_aa(
-        unit_vertex: Vec2f,
-        bounds: Bounds,
-        clip_bounds: Bounds,
-    ) -> Vec4f {
-        distance_from_clip_rect_aa_impl(Bounds::position(bounds, unit_vertex), clip_bounds)
     }
 
     /// Coverage of a distance field, one device pixel wide. Kept for the local blur

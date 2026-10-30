@@ -183,9 +183,8 @@ struct PathRasterizationVertex {
     /// The path's own bounds: the gradient box. (Used to be `clipped_bounds`, which made the
     /// gradient shift/scale whenever an ancestor clip cut the path.)
     bounds: Bounds<ScaledPixels>,
-    /// The content mask the path is painted under. The shader clips with the padded AA margin
-    /// and cuts the mask's distance field in the fragment, so rounded mask corners apply to
-    /// vector paths too.
+    /// The content mask the path is painted under. The shader clips to the mask and evaluates
+    /// its distance field in the fragment, so rounded mask corners apply to vector paths too.
     content_mask: Bounds<ScaledPixels>,
     /// Packed reference into the frame's content-mask chain arena.
     mask_chain: u32,

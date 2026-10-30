@@ -376,7 +376,7 @@ fn wgsl_shader_modules_validate_and_render_quad() {
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
-    // Chain arena: [0] = the fractional quad's own bounds, [1] = the half-covered mask edge.
+    // Chain arena: [0] = the fractional quad's own bounds, [1] = the partially covered mask edge.
     let mask_arena = [
         ContentMask {
             bounds: bounds(
@@ -389,7 +389,7 @@ fn wgsl_shader_modules_validate_and_render_quad() {
         ContentMask {
             bounds: bounds(
                 point(ScaledPixels(8.0), ScaledPixels(8.0)),
-                size(ScaledPixels(32.5), ScaledPixels(48.0)),
+                size(ScaledPixels(32.75), ScaledPixels(48.0)),
             ),
             corner_radii: Corners::default(),
             fade_out: Default::default(),
@@ -495,7 +495,7 @@ fn wgsl_shader_modules_validate_and_render_quad() {
     assert_eq!(pixel(&data, 49, 32)[0], 0, "outside the quad must stay clear");
     assert_eq!(pixel(&data, 32, 32)[0], 255, "interior must be fully covered");
 
-    // Case 2: the unrounded mask's right edge sits on the centre of pixel 40 -> coverage 0.5.
+    // Case 2: the unrounded mask's right edge sits 0.25px inside pixel 40 -> coverage 0.75.
     let masked = Quad {
         bounds: bounds(
             point(ScaledPixels(8.0), ScaledPixels(8.0)),
@@ -504,7 +504,7 @@ fn wgsl_shader_modules_validate_and_render_quad() {
         content_mask: ContentMask {
             bounds: bounds(
                 point(ScaledPixels(8.0), ScaledPixels(8.0)),
-                size(ScaledPixels(32.5), ScaledPixels(48.0)),
+                size(ScaledPixels(32.75), ScaledPixels(48.0)),
             ),
             corner_radii: Corners::default(),
                     fade_out: Default::default(),
@@ -526,7 +526,7 @@ fn wgsl_shader_modules_validate_and_render_quad() {
         &masked,
         wgpu::Color::BLACK,
     );
-    assert_red_close(pixel(&data, 40, 32), 128, "half-covered mask edge");
+    assert_red_close(pixel(&data, 40, 32), 191, "partially covered mask edge");
     assert_eq!(pixel(&data, 41, 32)[0], 0, "pixel past the mask must be clipped");
     assert_eq!(pixel(&data, 39, 32)[0], 255, "pixel inside the mask must be solid");
 

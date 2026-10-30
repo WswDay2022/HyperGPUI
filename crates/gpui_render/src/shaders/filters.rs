@@ -200,15 +200,11 @@ pub mod blur {
     #[vertex]
     pub fn blur_composite_vertex(#[builtin(vertex_index)] vertex_id: u32) -> BlurVarying {
         let unit_vertex = rectangle_corner(vertex_id);
-        let mut geometry = get!(BLUR_LOCALS).bounds;
-        if get!(BLUR_LOCALS).clip_rounded > 0.5 {
-            geometry.origin = geometry.origin - vec2f(AA_MARGIN, AA_MARGIN);
-            geometry.size = geometry.size + 2.0 * vec2f(AA_MARGIN, AA_MARGIN);
-        }
+        let geometry = get!(BLUR_LOCALS).bounds;
         BlurVarying {
             position: to_device_position(unit_vertex, geometry),
             uv: unit_vertex,
-            clip_distances: distance_from_clip_rect_aa(
+            clip_distances: distance_from_clip_rect(
                 unit_vertex,
                 geometry,
                 get!(BLUR_LOCALS).content_mask,
