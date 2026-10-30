@@ -24,7 +24,7 @@ pub mod emoji_rasterization {
     }
 
     #[vertex]
-    pub fn emoji_rasterization_vertex(
+    pub fn vertex_emoji_rasterization(
         #[builtin(vertex_index)] vertex_id: u32,
     ) -> EmojiRasterizationVarying {
         let texture_coordinates = vec2f(
@@ -43,7 +43,7 @@ pub mod emoji_rasterization {
     }
 
     #[fragment]
-    pub fn emoji_rasterization_fragment(input: EmojiRasterizationVarying) -> Vec4f {
+    pub fn fragment_emoji_rasterization(input: EmojiRasterizationVarying) -> Vec4f {
         let params = get!(GLYPH_LAYER_PARAMS);
         let sample = texture_sample_level(
             GLYPH_LAYER_TEXTURE,

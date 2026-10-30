@@ -97,8 +97,8 @@ define_pipelines! {
 
 pub const EMOJI_RASTERIZATION: Pipeline = Pipeline {
     label: "emoji_rasterization",
-    vertex_entry: "emoji_rasterization_vertex",
-    fragment_entry: "emoji_rasterization_fragment",
+    vertex_entry: "vertex_emoji_rasterization",
+    fragment_entry: "fragment_emoji_rasterization",
     topology: PrimitiveTopology::TriangleStrip,
     data_layout: DataLayout::NativeOnly,
     vertex_count: VertexCount::Rectangle,

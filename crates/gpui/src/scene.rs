@@ -29,6 +29,9 @@ fn has_corner_smoothing(corner_smoothing: f32) -> bool {
 }
 
 
+/// Maximum nesting depth of isolated filter groups.
+pub const MAX_FILTER_GROUP_DEPTH: usize = 2;
+
 /// Default length of each border dash, as a multiple of the border width.
 pub(crate) const DEFAULT_BORDER_DASHED_LENGTH: f32 = 2.0;
 /// Default gap between border dashes, as a multiple of the border width.
