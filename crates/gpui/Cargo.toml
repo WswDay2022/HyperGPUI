@@ -250,6 +250,18 @@ path = "examples/learn/transform.rs"
 name = "radial-gradient"
 path = "examples/learn/radial_gradient.rs"
 
+[[example]]
+name = "style-transitions"
+path = "examples/learn/style_transitions.rs"
+
+[[example]]
+name = "motion-showcase"
+path = "examples/learn/motion_showcase.rs"
+
+[[example]]
+name = "transitions"
+path = "examples/learn/transitions.rs"
+
 # ============================================================================
 # Bench Examples - Performance benchmarks
 # ============================================================================
