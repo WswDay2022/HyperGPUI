@@ -632,9 +632,12 @@ pub trait Styled: Sized {
         self
     }
 
-    /// Sets a gradient border. Takes precedence over [`Styled::border_color`].
+    /// Sets a gradient border.
+    ///
+    /// This is a convenience alias for [`Styled::border_color`] that reads better when the
+    /// argument is a gradient.
     fn border_gradient(mut self, gradient: impl Into<hgpui::Background>) -> Self {
-        self.style().border_gradient = Some(gradient.into());
+        self.style().border_color = Some(gradient.into());
         self
     }
 

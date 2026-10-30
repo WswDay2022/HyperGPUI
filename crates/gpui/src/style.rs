@@ -283,11 +283,8 @@ pub struct Style {
     /// The fill color of this element
     pub background: Option<Fill>,
 
-    /// The border color of this element
-    pub border_color: Option<Hsla>,
-
-    /// An optional gradient border. When set, it takes precedence over `border_color`.
-    pub border_gradient: Option<Background>,
+    /// The background painted into the border of this element
+    pub border_color: Option<Background>,
 
     /// The border style of this element
     pub border_style: BorderStyle,
@@ -815,7 +812,10 @@ impl Style {
                 let mut min = bounds.origin;
                 let mut max = bounds.bottom_right();
 
-                if self.border_color.is_some_and(|color| color.alpha > 0.) {
+                if self
+                    .border_color
+                    .is_some_and(|background| !background.is_transparent())
+                {
                     min.x += self.border_widths.left.to_pixels(rem_size);
                     max.x -= self.border_widths.right.to_pixels(rem_size);
                     min.y += self.border_widths.top.to_pixels(rem_size);
@@ -953,9 +953,7 @@ impl Style {
 
             if self.is_border_visible() {
                 let border_widths = self.border_widths.to_pixels(rem_size);
-                let border_color = self
-                    .border_gradient
-                    .unwrap_or_else(|| self.border_color.unwrap_or_default().into());
+                let border_color = self.border_color.unwrap_or_default();
                 let background = border_color.opacity(0.0);
                 window.paint_quad(
                     quad(
@@ -1004,8 +1002,8 @@ impl Style {
     }
 
     fn is_border_visible(&self) -> bool {
-        (self.border_gradient.is_some()
-            || self.border_color.is_some_and(|color| color.alpha > 0.))
+        self.border_color
+            .is_some_and(|background| !background.is_transparent())
             && self.border_widths.any(|length| !length.is_zero())
     }
 }
@@ -1047,7 +1045,6 @@ impl Default for Style {
             flex_basis: Length::Auto,
             background: None,
             border_color: None,
-            border_gradient: None,
             border_style: BorderStyle::default(),
             border_dashed_length: crate::scene::DEFAULT_BORDER_DASHED_LENGTH,
             border_dashed_gap: crate::scene::DEFAULT_BORDER_DASHED_GAP,

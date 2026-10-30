@@ -108,6 +108,13 @@ pub fn style_helpers(input: TokenStream) -> TokenStream {
     styles::style_helpers(input)
 }
 
+/// Generates the declarative style transitions builder.
+#[proc_macro]
+#[doc(hidden)]
+pub fn style_transitions(input: TokenStream) -> TokenStream {
+    styles::style_transitions(input)
+}
+
 /// Generates methods for visibility styles.
 #[proc_macro]
 pub fn visibility_style_methods(input: TokenStream) -> TokenStream {
