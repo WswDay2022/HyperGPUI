@@ -4373,6 +4373,51 @@ impl Window {
             opacity: 1.0,
             is_start: true,
             mask_chain: self.mask_chain(),
+            clip_group: false,
+        };
+
+        self.next_frame.scene.insert_primitive(boundary.clone());
+        let result = f(self);
+        self.next_frame.scene.insert_primitive(FilterBoundary {
+            is_start: false,
+            ..boundary
+        });
+
+        result
+    }
+
+    /// Paints `f` into an isolated group and composites it back clipped to the given rounded
+    /// rectangle **once**.
+    ///
+    /// This matches CSS `overflow: hidden` + `border-radius` / `clip-path`: the subtree is
+    /// rendered offscreen under the current (ancestor) masks, then a single rounded-rect
+    /// coverage is applied at composite time. Per-primitive masks would otherwise compound their
+    /// antialiasing wherever layers overlap.
+    pub fn with_clip_group<R>(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        corner_radii: Corners<Pixels>,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        self.invalidator.debug_assert_paint();
+
+        if corner_radii == Corners::default() {
+            return f(self);
+        }
+
+        let scale_factor = self.scale_factor();
+        let boundary = FilterBoundary {
+            order: 0,
+            bounds: self.snap_bounds(bounds),
+            // Children are painted under the current ancestor mask. The rounded clip belongs to
+            // the composite, so the renderer ignores this field for a clip group.
+            content_mask: self.snapped_content_mask(),
+            corner_radii: corner_radii.scale(scale_factor),
+            filters: SmallVec::new(),
+            opacity: 1.0,
+            is_start: true,
+            mask_chain: 0,
+            clip_group: true,
         };
 
         self.next_frame.scene.insert_primitive(boundary.clone());

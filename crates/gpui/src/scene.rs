@@ -1025,6 +1025,13 @@ pub struct FilterBoundary {
     pub is_start: bool,
     /// Reference to the clip chain (see [`Scene::mask_chains`]); `0` means no chain.
     pub mask_chain: u32,
+    /// Whether this boundary is a group-level rounded clip rather than a filter group.
+    ///
+    /// A clip group renders its subtree into the isolated target and composites it back once,
+    /// clipped to `bounds`/`corner_radii`, instead of applying the rounded mask to every child
+    /// primitive. This matches CSS `overflow: hidden` + `border-radius` / `clip-path` at the
+    /// group level.
+    pub clip_group: bool,
 }
 
 impl From<FilterBoundary> for Primitive {
@@ -1553,6 +1560,7 @@ mod tests {
             opacity: 1.0,
             is_start,
             mask_chain: 0,
+            clip_group: false,
         }
     }
 

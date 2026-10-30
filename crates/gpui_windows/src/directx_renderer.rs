@@ -662,17 +662,27 @@ impl DirectXRenderer {
                         Ok(())
                     } else if let Some((parent_rtv, parent_srv, isolated)) = filter_stack.pop() {
                         let result = if isolated {
-                            self.dx_blur_and_composite(
-                                &current_srv,
-                                &parent_rtv,
-                                boundary.bounds,
-                                boundary.content_mask,
-                                boundary.mask_chain,
-                                corner_radii_array(boundary.corner_radii),
-                                max_blur_radius(&boundary.filters),
-                                boundary.opacity,
-                                false,
-                            )
+                            if boundary.clip_group {
+                                self.dx_clip_composite(
+                                    &current_srv,
+                                    &parent_rtv,
+                                    boundary.bounds,
+                                    corner_radii_array(boundary.corner_radii),
+                                    boundary.opacity,
+                                )
+                            } else {
+                                self.dx_blur_and_composite(
+                                    &current_srv,
+                                    &parent_rtv,
+                                    boundary.bounds,
+                                    boundary.content_mask,
+                                    boundary.mask_chain,
+                                    corner_radii_array(boundary.corner_radii),
+                                    max_blur_radius(&boundary.filters),
+                                    boundary.opacity,
+                                    false,
+                                )
+                            }
                         } else {
                             Ok(())
                         };
@@ -1314,6 +1324,54 @@ impl DirectXRenderer {
             false,
         )?;
         Ok(())
+    }
+
+    /// Composites an isolated clip-group target into its parent, applying the rounded-rect
+    /// coverage once. No blur passes run: the group texture is sampled at the scene position and
+    /// clipped to `bounds`/`corner_radii`.
+    fn dx_clip_composite(
+        &self,
+        source_srv: &Option<ID3D11ShaderResourceView>,
+        target_rtv: &Option<ID3D11RenderTargetView>,
+        bounds: Bounds<ScaledPixels>,
+        corner_radii: [f32; 4],
+        opacity: f32,
+    ) -> Result<()> {
+        let full_vp = self
+            .resources
+            .as_ref()
+            .context("resources missing")?
+            .viewport;
+        // The group's children already carry the ancestor masks; only the element's rounded
+        // outline is applied here, so the composite's own content mask covers the whole viewport.
+        let full_content_mask = Bounds {
+            origin: point(ScaledPixels(0.0), ScaledPixels(0.0)),
+            size: size(
+                ScaledPixels(self.width as f32),
+                ScaledPixels(self.height as f32),
+            ),
+        };
+        self.dx_blur_pass(
+            &self.pipelines.blur_composite_vertex,
+            &self.pipelines.blur_composite_fragment,
+            &self.pipelines.blur_blend_composite,
+            target_rtv,
+            source_srv,
+            BlurParams {
+                bounds,
+                content_mask: full_content_mask,
+                content_mask_radii: [0.0; 4],
+                mask_chain: 0,
+                corner_radii,
+                opacity,
+                clip_rounded: 1.0,
+                ..Default::default()
+            },
+            &full_vp,
+            D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP,
+            4,
+            false,
+        )
     }
 
     /// Present the offscreen scene texture by drawing a full-screen quad into the swapchain.

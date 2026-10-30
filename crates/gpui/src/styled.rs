@@ -653,6 +653,25 @@ pub trait Styled: Sized {
         self
     }
 
+    /// Clips this element's children as a single rounded group.
+    ///
+    /// This matches CSS `overflow: hidden` + `border-radius` / `clip-path`: the subtree is
+    /// rendered offscreen and the rounded mask is applied once at composite time. Without it,
+    /// every child is masked independently and the antialiasing of overlapping layers compounds
+    /// at the rounded edge.
+    ///
+    /// Off by default. Only meaningful together with a rounded overflow clip.
+    fn clip_group(mut self) -> Self {
+        self.style().clip_group = Some(true);
+        self
+    }
+
+    /// Explicitly enables or disables group-level rounded clipping. See [`Styled::clip_group`].
+    fn clip_group_enabled(mut self, enabled: bool) -> Self {
+        self.style().clip_group = Some(enabled);
+        self
+    }
+
     /// Returns a mutable reference to the text style that has been configured on this element.
     fn text_style(&mut self) -> &mut TextStyleRefinement {
         let style: &mut StyleRefinement = self.style();

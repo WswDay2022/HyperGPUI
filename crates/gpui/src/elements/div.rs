@@ -18,8 +18,9 @@
 use crate::ResultExt;
 use crate::{
     Action, AnyDrag, AnyElement, AnyView, App, Bounds, ClickEvent, DispatchPhase,
-    Display, Element, ElementId, Entity, ExternalDragPayload, ExternalDragPayloadSource,
-    FocusHandle, Global, GlobalElementId, Hitbox, HitboxBehavior, HitboxId, InspectorElementId,
+    Corners, Display, Edges, Element, ElementId, Entity, ExternalDragPayload,
+    ExternalDragPayloadSource, FocusHandle, Global, GlobalElementId, Hitbox, HitboxBehavior,
+    HitboxId, InspectorElementId,
     IntoElement, IsZero, KeyContext, KeyDownEvent, KeyUpEvent, KeyboardButton, KeyboardClickEvent,
     LayoutId, ModifiersChangedEvent, MouseButton, MouseClickEvent, MouseDownEvent, MouseExitEvent,
     MouseMoveEvent, MousePressureEvent, MouseUpEvent, OngoingScroll, Overflow, ParentElement,
@@ -2527,11 +2528,25 @@ impl Interactivity {
 
                 window.with_element_opacity(style.opacity, |window| {
                     style.paint(bounds, window, cx, |window: &mut Window, cx: &mut App| {
+                        let overflow_mask = style.overflow_mask(bounds, window.rem_size());
+                        let clip_mask = if style.clip_group
+                            && style.overflow_fade == Edges::default()
+                        {
+                            match overflow_mask {
+                                Some(mask) if mask.corner_radii != Corners::default() => Some(mask),
+                                _ => None,
+                            }
+                        } else {
+                            None
+                        };
+                        let use_clip_group = clip_mask.is_some();
+
                         window.with_text_style(style.text_style().cloned(), |window| {
-                            window.with_content_mask(
-                                style.overflow_mask(bounds, window.rem_size()),
-                                |window| {
-                                    window.with_tab_group(tab_group, |window| {
+                            let paint_children = |window: &mut Window| {
+                                window.with_content_mask(
+                                    if use_clip_group { None } else { overflow_mask },
+                                    |window| {
+                                        window.with_tab_group(tab_group, |window| {
                                         // Register the container's own focus handle *inside* its
                                         // tab group, so that focusing the container and then
                                         // calling `focus_next` descends into this group's first
@@ -2611,8 +2626,18 @@ impl Interactivity {
                                             }
                                         }
                                     })
-                                },
-                            );
+                                        },
+                                    );
+                            };
+                            if let Some(mask) = clip_mask {
+                                window.with_clip_group(
+                                    mask.bounds,
+                                    mask.corner_radii,
+                                    paint_children,
+                                );
+                            } else {
+                                paint_children(window);
+                            }
                         });
                     });
                 });
@@ -4533,5 +4558,45 @@ mod tests {
             .unwrap();
 
         assert_eq!(focused, Some(item_b.id));
+    }
+
+    #[hgpui::test]
+    fn clip_group_emits_one_matched_boundary_pair(cx: &mut TestAppContext) {
+        struct ClipGroupView;
+        impl Render for ClipGroupView {
+            fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+                div()
+                    .size_full()
+                    .clip_group()
+                    .overflow_hidden()
+                    .rounded(px(8.))
+                    .child(div().size_full().background(crate::rgb(0x336699)))
+            }
+        }
+
+        let window = cx.add_window(|_, _| ClipGroupView);
+        let window: AnyWindowHandle = window.into();
+        let (start, end) = cx
+            .update_window(window, |_, window, cx| {
+                window.draw(cx).clear(cx);
+                let boundaries = &window.rendered_frame.scene.filter_boundaries;
+                assert_eq!(boundaries.len(), 2, "a clip group must emit a start/end pair");
+                assert!(
+                    window
+                        .rendered_frame
+                        .scene
+                        .quads
+                        .iter()
+                        .all(|quad| quad.mask_chain == 0),
+                    "children inside a clip group must not carry the element's own mask"
+                );
+                (boundaries[0].clone(), boundaries[1].clone())
+            })
+            .unwrap();
+
+        assert!(start.is_start && !end.is_start);
+        assert!(start.clip_group && end.clip_group);
+        assert_eq!(start.bounds, end.bounds);
+        assert_eq!(start.corner_radii, end.corner_radii);
     }
 }

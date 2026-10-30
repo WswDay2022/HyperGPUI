@@ -188,6 +188,11 @@ pub struct Style {
     /// Edge fade distances for overflow masking.
     #[refineable]
     pub overflow_fade: Edges<AbsoluteLength>,
+    /// Whether this element's children are clipped as one group (CSS `overflow: hidden` +
+    /// `border-radius` semantics) instead of applying the rounded mask to every child.
+    ///
+    /// Off by default. Enable with [`Styled::clip_group`].
+    pub clip_group: bool,
     /// How much space (in points) should be reserved for the scrollbars of `Overflow::Scroll` and `Overflow::Auto` nodes.
     pub scrollbar_width: AbsoluteLength,
     /// Whether both x and y axis should be scrollable at the same time.
@@ -1018,6 +1023,7 @@ impl Default for Style {
                 y: Overflow::Visible,
             },
             overflow_fade: Edges::default(),
+            clip_group: false,
             allow_concurrent_scroll: false,
             restrict_scroll_to_axis: false,
             smooth_scroll: None,

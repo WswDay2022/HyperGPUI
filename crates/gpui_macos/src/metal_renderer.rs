@@ -1186,7 +1186,17 @@ impl MetalRenderer {
                     } else if let Some((boundary, parent, isolated)) = filter_stack.pop() {
                         if isolated {
                             command_encoder.end_encoding();
-                            if let (Some(ping), Some(pong)) =
+                            if boundary.clip_group {
+                                self.metal_clip_composite(
+                                    command_buffer,
+                                    current_target,
+                                    parent,
+                                    viewport_size,
+                                    boundary.bounds,
+                                    boundary.corner_radii,
+                                    boundary.opacity,
+                                );
+                            } else if let (Some(ping), Some(pong)) =
                                 (blur_ping_owned.as_deref(), blur_pong_owned.as_deref())
                             {
                                 self.metal_blur_and_composite(
@@ -1304,6 +1314,46 @@ impl MetalRenderer {
         encoder.set_fragment_sampler(0, Some(&self.atlas_sampler));
         encoder.draw_primitives(metal::MTLPrimitiveType::Triangle, 0, 6);
         encoder.end_encoding();
+    }
+
+    /// Composites an isolated clip-group target into its parent, applying the rounded-rect
+    /// coverage once. No blur passes run.
+    #[allow(clippy::too_many_arguments)]
+    fn metal_clip_composite(
+        &self,
+        command_buffer: &metal::CommandBufferRef,
+        source: &metal::TextureRef,
+        target: &metal::TextureRef,
+        viewport_size: Size<DevicePixels>,
+        bounds: Bounds<ScaledPixels>,
+        corner_radii: Corners<ScaledPixels>,
+        opacity: f32,
+    ) {
+        let full_content_mask = Bounds {
+            origin: point(ScaledPixels(0.0), ScaledPixels(0.0)),
+            size: size(
+                ScaledPixels(viewport_size.width.0 as f32),
+                ScaledPixels(viewport_size.height.0 as f32),
+            ),
+        };
+        self.run_metal_blur_pass(
+            command_buffer,
+            &self.blur_composite_pipeline_state,
+            target,
+            source,
+            viewport_size,
+            BlurUniform {
+                bounds,
+                content_mask: full_content_mask,
+                content_mask_radii: [0.0; 4],
+                mask_chain: 0,
+                corner_radii: corner_radii_array(corner_radii),
+                opacity,
+                clip_rounded: 1.0,
+                ..Default::default()
+            },
+            true,
+        );
     }
 
     /// Blur `source` (full-resolution) using the half-res ping/pong textures and composite the

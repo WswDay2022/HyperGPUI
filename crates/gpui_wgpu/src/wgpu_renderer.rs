@@ -1991,23 +1991,35 @@ impl WgpuRenderer {
                             } else if let Some((boundary, parent, isolated)) = filter_stack.pop() {
                                 if isolated {
                                     drop(pass);
-                                    self.blur_and_composite(
-                                        &mut encoder,
-                                        &current_target,
-                                        &parent,
-                                        boundary.bounds,
-                                        boundary.content_mask,
-                                        boundary.mask_chain,
-                                        [
-                                            boundary.corner_radii.top_left.0,
-                                            boundary.corner_radii.top_right.0,
-                                            boundary.corner_radii.bottom_right.0,
-                                            boundary.corner_radii.bottom_left.0,
-                                        ],
-                                        max_blur_radius(&boundary.filters),
-                                        boundary.opacity,
-                                        false,
-                                    );
+                                    let corner_radii = [
+                                        boundary.corner_radii.top_left.0,
+                                        boundary.corner_radii.top_right.0,
+                                        boundary.corner_radii.bottom_right.0,
+                                        boundary.corner_radii.bottom_left.0,
+                                    ];
+                                    if boundary.clip_group {
+                                        self.clip_composite(
+                                            &mut encoder,
+                                            &current_target,
+                                            &parent,
+                                            boundary.bounds,
+                                            corner_radii,
+                                            boundary.opacity,
+                                        );
+                                    } else {
+                                        self.blur_and_composite(
+                                            &mut encoder,
+                                            &current_target,
+                                            &parent,
+                                            boundary.bounds,
+                                            boundary.content_mask,
+                                            boundary.mask_chain,
+                                            corner_radii,
+                                            max_blur_radius(&boundary.filters),
+                                            boundary.opacity,
+                                            false,
+                                        );
+                                    }
                                     current_target = parent;
                                     pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                                         label: Some("main_pass_continued"),
@@ -2282,6 +2294,59 @@ impl WgpuRenderer {
         pass.set_bind_group(1, &bind_group, &[]);
         pass.set_scissor_rect(scissor[0], scissor[1], scissor[2], scissor[3]);
         pass.draw(0..3, 0..1);
+    }
+
+    /// Composites an isolated clip-group target into its parent, applying the rounded-rect
+    /// coverage once. No blur passes run.
+    fn clip_composite(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        source: &wgpu::TextureView,
+        target: &wgpu::TextureView,
+        bounds: Bounds<ScaledPixels>,
+        corner_radii: [f32; 4],
+        opacity: f32,
+    ) {
+        let full_content_mask = Bounds {
+            origin: Point {
+                x: ScaledPixels(0.0),
+                y: ScaledPixels(0.0),
+            },
+            size: Size {
+                width: ScaledPixels(self.surface_config.width as f32),
+                height: ScaledPixels(self.surface_config.height as f32),
+            },
+        };
+        let params = BlurParams {
+            bounds: bounds.into(),
+            content_mask: full_content_mask.into(),
+            content_mask_radii: [0.0; 4],
+            mask_chain: 0,
+            corner_radii,
+            opacity,
+            clip_rounded: 1.0,
+            ..Default::default()
+        };
+        let bind_group = self.make_blur_bind_group(params, source);
+        let resources = self.resources();
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("clip_composite"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+                depth_slice: None,
+            })],
+            depth_stencil_attachment: None,
+            ..Default::default()
+        });
+        pass.set_pipeline(&resources.pipelines.blur_composite);
+        pass.set_bind_group(0, &resources.globals_bind_group, &[]);
+        pass.set_bind_group(1, &bind_group, &[]);
+        pass.draw(0..4, 0..1);
     }
 
     /// Blur `source` (full-resolution) and composite the result into `target`, clipped to
