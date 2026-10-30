@@ -650,8 +650,20 @@ impl PlatformWindow for WebWindow {
         None
     }
 
-    fn activate(&self) {
+    fn activate(&self, token: Option<&str>) -> bool {
+        if token.is_some() {
+            return false;
+        }
         self.inner.state.borrow_mut().is_active = true;
+        true
+    }
+
+    fn set_visible(&self, visible: bool) {
+        self.inner
+            .canvas
+            .style()
+            .set_property("display", if visible { "block" } else { "none" })
+            .unwrap_or_else(|error| log::error!("Failed to update canvas visibility: {error:?}"));
     }
 
     fn is_active(&self) -> bool {

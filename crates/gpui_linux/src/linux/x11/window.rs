@@ -1473,7 +1473,10 @@ impl PlatformWindow for X11Window {
         None
     }
 
-    fn activate(&self) {
+    fn activate(&self, token: Option<&str>) -> bool {
+        if token.is_some() {
+            return false;
+        }
         let data = [1, xproto::Time::CURRENT_TIME.into(), 0, 0, 0];
         let message = xproto::ClientMessageEvent::new(
             32,
@@ -1498,6 +1501,34 @@ impl PlatformWindow for X11Window {
                 xproto::Time::CURRENT_TIME,
             )
             .log_err();
+        xcb_flush(&self.0.xcb);
+        true
+    }
+
+    fn set_visible(&self, visible: bool) {
+        let mut state = self.0.state.borrow_mut();
+        if state.hidden == !visible {
+            return;
+        }
+        state.hidden = !visible;
+        drop(state);
+
+        let result = if visible {
+            self.0.xcb.map_window(self.0.x_window)
+        } else {
+            self.0.xcb.unmap_window(self.0.x_window)
+        };
+        check_reply(
+            || {
+                if visible {
+                    "X11 MapWindow failed."
+                } else {
+                    "X11 UnmapWindow failed."
+                }
+            },
+            result,
+        )
+        .log_err();
         xcb_flush(&self.0.xcb);
     }
 

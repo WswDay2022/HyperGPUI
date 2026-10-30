@@ -11,7 +11,7 @@ mod example {
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use hgpui::{
-        App, Bounds, Context, FontWeight, Size, Window, WindowBackgroundAppearance, WindowBounds,
+        App, Bounds, Context, FontWeight, Size, Window, WindowBounds,
         WindowKind, WindowOptions, div, layer_shell::*, point, prelude::*, px, rems, rgba, white,
     };
 
@@ -68,7 +68,12 @@ mod example {
                         size: Size::new(px(500.), px(200.)),
                     })),
                     app_id: Some("hgpui-layer-shell-example".to_string()),
-                    window_background: WindowBackgroundAppearance::Transparent,
+                    #[cfg(target_os = "windows")]
+                    windows_window_background: hgpui::WindowsWindowBackground::Transparent,
+                    #[cfg(target_os = "macos")]
+                    macos_window_background: hgpui::MacosWindowBackground::Transparent,
+                    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+                    linux_window_background: hgpui::LinuxWindowBackground::Transparent,
                     kind: WindowKind::LayerShell(LayerShellOptions {
                         namespace: "hgpui".to_string(),
                         anchor: Anchor::LEFT | Anchor::RIGHT | Anchor::BOTTOM,

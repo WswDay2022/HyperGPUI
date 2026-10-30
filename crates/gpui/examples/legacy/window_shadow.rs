@@ -1,6 +1,6 @@
 use hgpui::{
     App, Bounds, Context, CursorStyle, Decorations, HitboxBehavior, Hsla, MouseButton, Pixels,
-    Point, ResizeEdge, Size, Window, WindowBackgroundAppearance, WindowBounds, WindowDecorations,
+    Point, ResizeEdge, Size, Window, WindowBounds, WindowDecorations,
     WindowOptions, black, canvas, div, green, point, prelude::*, px, rgb, size, transparent_black,
     white,
 };
@@ -203,7 +203,12 @@ fn main() {
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
-                window_background: WindowBackgroundAppearance::Opaque,
+                #[cfg(target_os = "windows")]
+                windows_window_background: hgpui::WindowsWindowBackground::Opaque,
+                #[cfg(target_os = "macos")]
+                macos_window_background: hgpui::MacosWindowBackground::Opaque,
+                #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+                linux_window_background: hgpui::LinuxWindowBackground::Opaque,
                 window_decorations: Some(WindowDecorations::Client),
                 ..Default::default()
             },

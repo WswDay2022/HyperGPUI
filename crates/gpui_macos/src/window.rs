@@ -1469,7 +1469,10 @@ impl PlatformWindow for MacWindow {
         }
     }
 
-    fn activate(&self) {
+    fn activate(&self, token: Option<&str>) -> bool {
+        if token.is_some() {
+            return false;
+        }
         let lock = self.0.lock();
         let window = lock.native_window;
         let closed = lock.closed.clone();
@@ -1479,6 +1482,27 @@ impl PlatformWindow for MacWindow {
                 if !closed.load(Ordering::Acquire) {
                     unsafe {
                         let _: () = msg_send![window, makeKeyAndOrderFront: nil];
+                    }
+                }
+            })
+            .detach();
+        true
+    }
+
+    fn set_visible(&self, visible: bool) {
+        let lock = self.0.lock();
+        let window = lock.native_window;
+        let closed = lock.closed.clone();
+        let executor = lock.foreground_executor.clone();
+        executor
+            .spawn(async move {
+                if !closed.load(Ordering::Acquire) {
+                    unsafe {
+                        if visible {
+                            let _: () = msg_send![window, orderFront: nil];
+                        } else {
+                            let _: () = msg_send![window, orderOut: nil];
+                        }
                     }
                 }
             })

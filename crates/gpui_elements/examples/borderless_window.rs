@@ -17,7 +17,7 @@ mod example_prelude;
 
 use hgpui::{
     App, Bounds, Context, CursorStyle, MouseButton, ResizeEdge, SharedString, TitlebarOptions,
-    Window, WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowDecorations,
+    Window, WindowBounds, WindowControlArea, WindowDecorations,
     WindowOptions, div, hsla, prelude::*, px, rgb, size, transparent_black,
 };
 
@@ -177,7 +177,12 @@ fn main() {
                     appears_transparent: false,
                     ..Default::default()
                 }),
-                window_background: WindowBackgroundAppearance::Transparent,
+                #[cfg(target_os = "windows")]
+                windows_window_background: hgpui::WindowsWindowBackground::Transparent,
+                #[cfg(target_os = "macos")]
+                macos_window_background: hgpui::MacosWindowBackground::Transparent,
+                #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+                linux_window_background: hgpui::LinuxWindowBackground::Transparent,
                 is_resizable: true,
                 window_decorations: Some(WindowDecorations::Client),
                 ..Default::default()

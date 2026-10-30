@@ -1,6 +1,6 @@
 use hgpui::{
     App, Bounds, Context, DisplayId, Hsla, Pixels, SharedString, Size, Window,
-    WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, div, point, prelude::*,
+    WindowBounds, WindowKind, WindowOptions, div, point, prelude::*,
     px, rgb,
 };
 
@@ -54,7 +54,12 @@ fn build_window_options(display_id: DisplayId, bounds: Bounds<Pixels>) -> Window
         // Specify the display_id to ensure the window is created on the correct screen
         display_id: Some(display_id),
         titlebar: None,
-        window_background: WindowBackgroundAppearance::Transparent,
+        #[cfg(target_os = "windows")]
+        windows_window_background: hgpui::WindowsWindowBackground::Transparent,
+        #[cfg(target_os = "macos")]
+        macos_window_background: hgpui::MacosWindowBackground::Transparent,
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        linux_window_background: hgpui::LinuxWindowBackground::Transparent,
         focus: false,
         show: true,
         kind: WindowKind::PopUp,

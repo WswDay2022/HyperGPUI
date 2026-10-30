@@ -122,6 +122,7 @@ pub struct WaylandWindowState {
     handle: AnyWindowHandle,
     active: bool,
     hovered: bool,
+    visible: bool,
     pub(crate) force_render_after_recovery: bool,
     renderer_presented: bool,
     in_progress_configure: Option<InProgressConfigure>,
@@ -627,6 +628,7 @@ impl WaylandWindowState {
             handle,
             active: false,
             hovered: false,
+            visible: options.show,
             force_render_after_recovery: false,
             renderer_presented: false,
             in_progress_window_controls: None,
@@ -1577,10 +1579,21 @@ impl PlatformWindow for WaylandWindow {
         None
     }
 
-    fn activate(&self) {
+    fn activate(&self, token: Option<&str>) -> bool {
+        let state = self.borrow();
+        if let Some(token) = token {
+            let Some(activation) = &state.globals.activation else {
+                return false;
+            };
+            if token.is_empty() {
+                return false;
+            }
+            activation.activate(token.to_owned(), &state.surface);
+            return true;
+        }
+
         // Try to request an activation token. Even though the activation is likely going to be rejected,
         // KWin and Mutter can use the app_id to visually indicate we're requesting attention.
-        let state = self.borrow();
         if let (Some(activation), Some(app_id)) = (&state.globals.activation, state.app_id.clone())
         {
             state.client.set_pending_activation(state.surface.id());
@@ -1591,6 +1604,23 @@ impl PlatformWindow for WaylandWindow {
             token.set_serial(serial.as_raw(), &state.globals.seat);
             token.set_surface(&state.surface);
             token.commit();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn set_visible(&self, visible: bool) {
+        let mut state = self.borrow_mut();
+        if state.visible == visible {
+            return;
+        }
+        state.visible = visible;
+        if visible {
+            state.surface.commit();
+        } else {
+            state.surface.attach(None, 0, 0);
+            state.surface.commit();
         }
     }
 

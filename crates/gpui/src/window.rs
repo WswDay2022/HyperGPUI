@@ -1379,6 +1379,7 @@ impl Window {
         options: WindowOptions,
         cx: &mut App,
     ) -> Result<Self> {
+        let background_appearance = options.background_appearance();
         let WindowOptions {
             window_bounds,
             titlebar,
@@ -1387,10 +1388,10 @@ impl Window {
             kind,
             is_movable,
             app_owns_titlebar_drag,
+            inactive_frame_interval,
             is_resizable,
             is_minimizable,
             display_id,
-            window_background,
             app_id,
             window_min_size,
             window_decorations,
@@ -1401,6 +1402,7 @@ impl Window {
             icon,
             #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
             tabbing_identifier,
+            ..
         } = options;
 
         let initial_window_title = titlebar
@@ -1455,7 +1457,7 @@ impl Window {
 
         platform_window
             .request_decorations(window_decorations.unwrap_or(WindowDecorations::Server));
-        platform_window.set_background_appearance(window_background);
+        platform_window.set_background_appearance(background_appearance);
 
         match window_bounds {
             WindowBounds::Fullscreen(_) => platform_window.toggle_fullscreen(),
@@ -1605,7 +1607,7 @@ impl Window {
                 {
                     None
                 } else if !active.get() && !input_rate_tracker.borrow_mut().is_high_rate() {
-                    Some(Duration::from_micros(33333))
+                    inactive_frame_interval
                 } else if let Some(ThermalState::Critical | ThermalState::Serious) = thermal_state {
                     Some(Duration::from_micros(16667))
                 } else {
@@ -6177,7 +6179,18 @@ impl Window {
 
     /// Focus the current window and bring it to the foreground at the platform level.
     pub fn activate(&self) {
-        self.platform_window.activate();
+        self.platform_window.activate(None);
+    }
+
+    /// Request focus using a token supplied by the desktop shell, such as a
+    /// Wayland tray host. Show the window before calling this method.
+    ///
+    /// Returns whether the platform submitted the request. The compositor may
+    /// still deny focus. Returns false for empty tokens or unsupported platforms;
+    /// callers can then fall back to [`Self::activate`]. Tokens must not
+    /// be reused for subsequent activations.
+    pub fn activate_with_token(&self, token: &str) -> bool {
+        !token.is_empty() && self.platform_window.activate(Some(token))
     }
 
     /// Deprecated alias for [`Window::activate`].
@@ -6189,6 +6202,14 @@ impl Window {
     /// Requests that the operating system draw attention to this window.
     pub fn request_attention(&self) {
         self.platform_window.request_attention();
+    }
+
+    /// Show or hide the current window at the platform level.
+    ///
+    /// Call [`Window::activate`] separately when the window should also receive focus.
+    /// The window manager may still focus a window when it is shown.
+    pub fn set_visible(&self, visible: bool) {
+        self.platform_window.set_visible(visible);
     }
 
     /// Minimize the current window at the platform level.

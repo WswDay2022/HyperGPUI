@@ -2,8 +2,8 @@
 
 use hgpui::{
     AnyElement, App, Bounds, CursorStyle, ElementId, InteractiveElement, IntoElement, MouseButton,
-    ParentElement, Pixels, RenderOnce, ResizeEdge, Styled, Window, WindowBackgroundAppearance,
-    WindowBounds, WindowDecorations, WindowOptions, div, px, transparent_black,
+    ParentElement, Pixels, RenderOnce, ResizeEdge, Styled, Window, WindowBounds, WindowDecorations,
+    WindowOptions, div, px, transparent_black,
 };
 
 /// Default inset reserved around the window content (room for a drop shadow).
@@ -114,14 +114,26 @@ impl BorderlessWindow {
     /// [`WindowOptions`] for a borderless window: no title bar, a transparent
     /// background, client-side decorations and native resizing.
     pub fn options(bounds: Bounds<Pixels>) -> WindowOptions {
-        WindowOptions {
+        let mut options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             titlebar: None,
-            window_background: WindowBackgroundAppearance::Transparent,
             window_decorations: Some(WindowDecorations::Client),
             is_resizable: true,
             ..Default::default()
+        };
+        #[cfg(target_os = "windows")]
+        {
+            options.windows_window_background = hgpui::WindowsWindowBackground::Transparent;
         }
+        #[cfg(target_os = "macos")]
+        {
+            options.macos_window_background = hgpui::MacosWindowBackground::Transparent;
+        }
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        {
+            options.linux_window_background = hgpui::LinuxWindowBackground::Transparent;
+        }
+        options
     }
 }
 

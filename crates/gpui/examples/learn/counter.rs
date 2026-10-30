@@ -344,7 +344,12 @@ fn main() {
                     appears_transparent: false,
                     ..Default::default()
                 }),
-                window_background: hgpui::WindowBackgroundAppearance::Opaque,
+                #[cfg(target_os = "windows")]
+                windows_window_background: hgpui::WindowsWindowBackground::Opaque,
+                #[cfg(target_os = "macos")]
+                macos_window_background: hgpui::MacosWindowBackground::Opaque,
+                #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+                linux_window_background: hgpui::LinuxWindowBackground::Opaque,
                 is_resizable: false,
                 window_decorations: Some(WindowDecorations::Client),
                 ..Default::default()

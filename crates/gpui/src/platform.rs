@@ -870,7 +870,9 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
         detail: Option<&str>,
         answers: &[PromptButton],
     ) -> Option<oneshot::Receiver<usize>>;
-    fn activate(&self);
+    /// Request activation, optionally using an externally supplied token.
+    /// Returns whether a request was sent, not whether focus was granted.
+    fn activate(&self, token: Option<&str>) -> bool;
     /// Requests that the operating system draw attention to this window.
     fn request_attention(&self) {}
     fn is_active(&self) -> bool;
@@ -878,6 +880,11 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn background_appearance(&self) -> WindowBackgroundAppearance;
     fn set_title(&mut self, title: &str);
     fn set_background_appearance(&self, background_appearance: WindowBackgroundAppearance);
+    /// Show or hide the window without explicitly requesting focus.
+    ///
+    /// The default implementation does nothing for platforms that do not support
+    /// changing window visibility at runtime.
+    fn set_visible(&self, _visible: bool) {}
     fn minimize(&self);
     fn zoom(&self);
     fn toggle_fullscreen(&self);
@@ -1868,8 +1875,25 @@ pub trait InputHandler: 'static {
     }
 }
 
-/// The variables that can be configured when creating a new window
-#[derive(Debug)]
+/// Options for creating a window.
+///
+/// Chain setters on [`WindowOptions::default`] (or [`WindowOptions::new`]) to
+/// override individual fields. Optional setters accept a value or an `Option`.
+/// Pass `None` to clear the field.
+///
+/// The window background is configured per platform, so consumers explicitly
+/// decide what each target needs:
+///
+/// ```
+/// use hgpui::WindowOptions;
+///
+/// let options = WindowOptions::new()
+///     .focus(false)
+///     .titlebar(None)
+///     .app_id("org.example.app".to_owned());
+/// ```
+#[derive(Debug, derive_setters::Setters)]
+#[setters(into)]
 pub struct WindowOptions {
     /// Specifies the state and bounds of the window in screen coordinates.
     /// - `None`: Inherit the bounds.
@@ -1906,6 +1930,11 @@ pub struct WindowOptions {
     /// Leave this `false` for windows that rely on AppKit's native titlebar dragging.
     pub app_owns_titlebar_drag: bool,
 
+    /// The minimum interval between animation frames while the window is inactive.
+    ///
+    /// Set to `None` to disable inactive-window animation frame throttling.
+    pub inactive_frame_interval: Option<Duration>,
+
     /// Whether the window should be resizable by the user
     pub is_resizable: bool,
 
@@ -1916,8 +1945,21 @@ pub struct WindowOptions {
     /// the window will be created on the main display
     pub display_id: Option<DisplayId>,
 
-    /// The appearance of the window background.
-    pub window_background: WindowBackgroundAppearance,
+    /// The background appearance of a macOS window.
+    #[cfg(target_os = "macos")]
+    pub macos_window_background: MacosWindowBackground,
+
+    /// The background appearance of a Windows window.
+    #[cfg(target_os = "windows")]
+    pub windows_window_background: WindowsWindowBackground,
+
+    /// The background appearance of a Linux window.
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    pub linux_window_background: LinuxWindowBackground,
+
+    /// The background appearance of a web window.
+    #[cfg(target_family = "wasm")]
+    pub web_window_background: WebWindowBackground,
 
     /// Application identifier of the window. Can by used by desktop environments to group applications together.
     pub app_id: Option<String>,
@@ -2056,10 +2098,18 @@ impl Default for WindowOptions {
             kind: WindowKind::Normal,
             is_movable: true,
             app_owns_titlebar_drag: false,
+            inactive_frame_interval: Some(Duration::from_micros(33_333)),
             is_resizable: true,
             is_minimizable: true,
             display_id: None,
-            window_background: WindowBackgroundAppearance::default(),
+            #[cfg(target_os = "macos")]
+            macos_window_background: MacosWindowBackground::default(),
+            #[cfg(target_os = "windows")]
+            windows_window_background: WindowsWindowBackground::default(),
+            #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+            linux_window_background: LinuxWindowBackground::default(),
+            #[cfg(target_family = "wasm")]
+            web_window_background: WebWindowBackground::default(),
             icon: None,
             app_id: None,
             window_min_size: None,
@@ -2069,8 +2119,49 @@ impl Default for WindowOptions {
     }
 }
 
+impl crate::util::FluentBuilder for WindowOptions {}
+
+impl WindowOptions {
+    /// Returns window options with the platform's defaults: a focused, shown,
+    /// resizable, minimizable, movable normal window with a titlebar.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Returns the window's background appearance for the current platform,
+    /// erased into the renderer-facing [`WindowBackgroundAppearance`].
+    pub fn background_appearance(&self) -> WindowBackgroundAppearance {
+        #[cfg(target_os = "macos")]
+        {
+            self.macos_window_background.into()
+        }
+        #[cfg(target_os = "windows")]
+        {
+            self.windows_window_background.into()
+        }
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        {
+            self.linux_window_background.into()
+        }
+        #[cfg(target_family = "wasm")]
+        {
+            self.web_window_background.into()
+        }
+        #[cfg(not(any(
+            target_os = "macos",
+            target_os = "windows",
+            any(target_os = "linux", target_os = "freebsd"),
+            target_family = "wasm",
+        )))]
+        {
+            WindowBackgroundAppearance::default()
+        }
+    }
+}
+
 /// The options that can be configured for a window's titlebar
-#[derive(Debug, Default)]
+#[derive(Debug, Default, derive_setters::Setters)]
+#[setters(into)]
 pub struct TitlebarOptions {
     /// The initial title of the window
     pub title: Option<SharedString>,
@@ -2082,6 +2173,8 @@ pub struct TitlebarOptions {
     /// The position of the macOS traffic light buttons
     pub traffic_light_position: Option<Point<Pixels>>,
 }
+
+impl crate::util::FluentBuilder for TitlebarOptions {}
 
 /// The kind of window to create
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2165,6 +2258,111 @@ pub enum WindowBackgroundAppearance {
     MicaBackdrop,
     /// The Mica Alt backdrop material, supported on Windows 11.
     MicaAltBackdrop,
+}
+
+/// The background appearance of a macOS window, set through
+/// [`WindowOptions::macos_window_background`].
+#[cfg(target_os = "macos")]
+#[derive(Copy, Clone, Debug, Default, PartialEq)]
+pub enum MacosWindowBackground {
+    /// Hides everything behind the window. Themes should define a fully
+    /// opaque background color instead of relying on the system's.
+    #[default]
+    Opaque,
+    /// Plain alpha transparency.
+    Transparent,
+    /// Transparency with the contents behind the window blurred, via the
+    /// system's vibrancy materials.
+    Blurred,
+}
+
+/// The background appearance of a Windows window, set through
+/// [`WindowOptions::windows_window_background`].
+#[cfg(target_os = "windows")]
+#[derive(Copy, Clone, Debug, Default, PartialEq)]
+pub enum WindowsWindowBackground {
+    /// Hides everything behind the window. Themes should define a fully
+    /// opaque background color instead of relying on the system's.
+    #[default]
+    Opaque,
+    /// Plain alpha transparency.
+    Transparent,
+    /// Transparency with the contents behind the window blurred.
+    Blurred,
+    /// The Mica backdrop material, supported on Windows 11.
+    MicaBackdrop,
+    /// The Mica Alt backdrop material, supported on Windows 11.
+    MicaAltBackdrop,
+}
+
+/// The background appearance of a Linux window, set through
+/// [`WindowOptions::linux_window_background`]. Whether blurring is honored
+/// depends on the compositor; X11 treats it as plain transparency.
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+#[derive(Copy, Clone, Debug, Default, PartialEq)]
+pub enum LinuxWindowBackground {
+    /// Hides everything behind the window. Themes should define a fully
+    /// opaque background color instead of relying on the system's.
+    #[default]
+    Opaque,
+    /// Plain alpha transparency.
+    Transparent,
+    /// Transparency with the contents behind the window blurred, when the
+    /// compositor supports it.
+    Blurred,
+}
+
+/// The background appearance of a web window, set through
+/// [`WindowOptions::web_window_background`]. Web windows are always opaque at
+/// the platform level.
+#[cfg(target_family = "wasm")]
+#[derive(Copy, Clone, Debug, Default, PartialEq)]
+pub enum WebWindowBackground {
+    /// The window background is always opaque.
+    #[default]
+    Opaque,
+}
+
+#[cfg(target_os = "macos")]
+impl From<MacosWindowBackground> for WindowBackgroundAppearance {
+    fn from(background: MacosWindowBackground) -> Self {
+        match background {
+            MacosWindowBackground::Opaque => Self::Opaque,
+            MacosWindowBackground::Transparent => Self::Transparent,
+            MacosWindowBackground::Blurred => Self::Blurred,
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl From<WindowsWindowBackground> for WindowBackgroundAppearance {
+    fn from(background: WindowsWindowBackground) -> Self {
+        match background {
+            WindowsWindowBackground::Opaque => Self::Opaque,
+            WindowsWindowBackground::Transparent => Self::Transparent,
+            WindowsWindowBackground::Blurred => Self::Blurred,
+            WindowsWindowBackground::MicaBackdrop => Self::MicaBackdrop,
+            WindowsWindowBackground::MicaAltBackdrop => Self::MicaAltBackdrop,
+        }
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+impl From<LinuxWindowBackground> for WindowBackgroundAppearance {
+    fn from(background: LinuxWindowBackground) -> Self {
+        match background {
+            LinuxWindowBackground::Opaque => Self::Opaque,
+            LinuxWindowBackground::Transparent => Self::Transparent,
+            LinuxWindowBackground::Blurred => Self::Blurred,
+        }
+    }
+}
+
+#[cfg(target_family = "wasm")]
+impl From<WebWindowBackground> for WindowBackgroundAppearance {
+    fn from(_background: WebWindowBackground) -> Self {
+        Self::Opaque
+    }
 }
 
 /// The text rendering mode to use for drawing glyphs.
@@ -3000,5 +3198,53 @@ mod tests {
     #[test]
     fn test_window_button_layout_parse_all_invalid() {
         assert!(WindowButtonLayout::parse("asdfghjkl").is_err());
+    }
+}
+
+#[cfg(test)]
+mod window_options_tests {
+    use super::*;
+
+    #[test]
+    fn window_options_builder_and_background_appearance() {
+        let options = WindowOptions::new()
+            .focus(false)
+            .titlebar(None)
+            .inactive_frame_interval(None)
+            .app_id("org.example.app".to_owned());
+        assert!(!options.focus);
+        assert!(options.titlebar.is_none());
+        assert_eq!(options.inactive_frame_interval, None);
+        assert_eq!(options.app_id.as_deref(), Some("org.example.app"));
+
+        #[cfg(target_os = "windows")]
+        {
+            let options = WindowOptions::new()
+                .windows_window_background(WindowsWindowBackground::Transparent);
+            assert_eq!(
+                options.background_appearance(),
+                WindowBackgroundAppearance::Transparent
+            );
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            let options =
+                WindowOptions::new().macos_window_background(MacosWindowBackground::Blurred);
+            assert_eq!(
+                options.background_appearance(),
+                WindowBackgroundAppearance::Blurred
+            );
+        }
+
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        {
+            let options =
+                WindowOptions::new().linux_window_background(LinuxWindowBackground::Transparent);
+            assert_eq!(
+                options.background_appearance(),
+                WindowBackgroundAppearance::Transparent
+            );
+        }
     }
 }
