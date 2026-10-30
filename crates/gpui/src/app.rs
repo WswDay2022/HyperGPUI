@@ -2539,21 +2539,44 @@ impl App {
         self.active_drag.is_some()
     }
 
+    /// Returns a reference to the current drag payload.
+    pub fn active_drag(&self) -> Option<&AnyDrag> {
+        self.active_drag.as_ref()
+    }
+
     /// Gets the cursor style of the currently active drag operation.
     pub fn active_drag_cursor_style(&self) -> Option<CursorStyle> {
         self.active_drag.as_ref().and_then(|drag| drag.cursor_style)
     }
 
-    /// Stops active drag and clears any related effects.
-    pub fn stop_active_drag(&mut self, window: &mut Window) -> bool {
-        if self.active_drag.is_some() {
-            self.active_drag = None;
-            if self.platform_owned_drag.as_ref().is_some_and(|drag| {
-                drag.source_window == window.window_handle().window_id()
-                    && matches!(&drag.state, PlatformOwnedDragState::RestoredInSourceWindow)
-            }) {
+    /// Sets the current drag payload. Its recommended the window be refreshed when this is called.
+    pub fn start_drag(&mut self, drag: AnyDrag) {
+        debug_assert!(self.active_drag.is_none());
+        self.active_drag = Some(drag);
+    }
+
+    /// Takes the current drag payload. Its recommended the window be refreshed when this is called.
+    /// If there is a platform drag interop active, it is canceled.
+    pub fn stop_drag(&mut self, window: &Window) -> Option<Arc<dyn Any>> {
+        let drag = self.active_drag.take();
+        if drag.is_some()
+            && let Some(platform_drag) = self.platform_owned_drag.as_ref()
+        {
+            if platform_drag.source_window == window.window_handle().window_id()
+                && matches!(
+                    &platform_drag.state,
+                    PlatformOwnedDragState::RestoredInSourceWindow
+                )
+            {
                 self.platform_owned_drag = None;
             }
+        }
+        Some(drag?.value)
+    }
+
+    /// Stops active drag and clears any related effects.
+    pub fn stop_active_drag(&mut self, window: &mut Window) -> bool {
+        if self.stop_drag(window).is_some() {
             window.refresh();
             true
         } else {
@@ -2981,6 +3004,8 @@ impl<G: Global> DerefMut for GlobalLease<G> {
 
 /// Contains state associated with an active drag operation, started by dragging an element
 /// within the window or by dragging into the app from the underlying platform.
+#[derive(derive_setters::Setters)]
+#[setters(generate = false)]
 pub struct AnyDrag {
     /// The view used to render this drag
     pub view: AnyView,
@@ -2990,14 +3015,45 @@ pub struct AnyDrag {
 
     /// This is used to render the dragged item in the same place
     /// on the original element that the drag was initiated
+    #[setters(generate, rename = "offset")]
     pub cursor_offset: Point<Pixels>,
 
     /// The cursor style to use while dragging
+    #[setters(generate)]
     pub cursor_style: Option<CursorStyle>,
 
     /// Resolves the payload to offer the platform if the drag leaves the window.
     /// Invoked at most once per drag gesture, at promotion time.
     pub external_payload_source: Option<ExternalDragPayloadSource>,
+}
+
+impl AnyDrag {
+    /// Constructs a new drag with a value and view.
+    pub fn new<T: 'static + Sized>(value: T, view: impl Into<AnyView>) -> Self {
+        Self {
+            view: view.into(),
+            value: Arc::new(value),
+            cursor_offset: Point::default(),
+            cursor_style: None,
+            external_payload_source: None,
+        }
+    }
+
+    /// Assigns a constructor of an external payload to be called when the drag moves outside of the application window.
+    pub fn external_payload(
+        mut self,
+        predicate: impl FnOnce(&mut Window, &mut App) -> Option<ExternalDragPayload> + 'static,
+    ) -> Self {
+        self.external_payload_source = Some(Box::new(predicate));
+        self
+    }
+
+    /// Returns true if the type of the internal value matches the provided type.
+    pub fn is_type<T: 'static>(&self) -> bool {
+        // Call through the trait object: `Arc<dyn Any>` itself implements `Any`, so
+        // `self.value.type_id()` would report the `Arc` type instead of the payload.
+        self.value.as_ref().type_id() == TypeId::of::<T>()
+    }
 }
 
 /// Lazily resolves the payload handed to the platform when an internal drag is
