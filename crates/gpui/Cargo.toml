@@ -262,6 +262,10 @@ path = "examples/learn/motion_showcase.rs"
 name = "transitions"
 path = "examples/learn/transitions.rs"
 
+[[example]]
+name = "clip-group"
+path = "examples/learn/clip_group.rs"
+
 # ============================================================================
 # Bench Examples - Performance benchmarks
 # ============================================================================
