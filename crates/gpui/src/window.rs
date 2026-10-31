@@ -14,7 +14,8 @@ use crate::{
     PlatformWindow, Point, PolychromeSprite, Priority, PromptButton, PromptLevel, Quad, Render,
     RenderGlyphParams, RenderImage, RenderImageParams, RenderSvgParams, Replay, ResizeEdge,
     SMOOTH_SVG_SCALE_FACTOR, SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledFilter, ScaledPixels,
-    Scene, Shadow, SharedString, Size, StrikethroughStyle, Style, SubpixelSprite, SubscriberSet,
+    Scene, SceneHsla, Shadow, SharedString, Size, StrikethroughStyle, Style, SubpixelSprite,
+    SubscriberSet,
     Subscription, SystemWindowTab, SystemWindowTabController, TabStopMap, TaffyLayoutEngine, Task,
     TextRenderingMode, TextStyle, TextStyleRefinement, ThermalState, TransformationMatrix,
     Transition, TransitionState, Underline, UnderlineStyle, WindowAppearance,
@@ -22,6 +23,9 @@ use crate::{
     WindowParams, WindowTextSystem, point, prelude::*, profiler, px, rems, size, transparent_black,
 };
 
+use crate::shadow_cache::{
+    SHADOW_GAUSSIAN_CUTOFF, ShadowTileKey, ShadowTileLookup, generate_shadow_tile,
+};
 use crate::{ResultExt, measure};
 use anyhow::{Context as _, Result, anyhow};
 use collections::{FxHashMap, FxHashSet};
@@ -1073,6 +1077,8 @@ pub struct Window {
     pub(crate) platform_window: Box<dyn PlatformWindow>,
     display_id: Option<DisplayId>,
     sprite_atlas: Arc<dyn PlatformAtlas>,
+    /// Baked drop-shadow tiles, reused across frames. See [`crate::shadow_cache`].
+    shadow_tile_cache: crate::shadow_cache::ShadowTileCache,
     text_system: Arc<WindowTextSystem>,
     text_rendering_mode: Rc<Cell<TextRenderingMode>>,
     rem_size: Pixels,
@@ -1841,6 +1847,7 @@ impl Window {
             platform_window,
             display_id,
             sprite_atlas,
+            shadow_tile_cache: crate::shadow_cache::ShadowTileCache::default(),
             text_system,
             text_rendering_mode: cx.text_rendering_mode.clone(),
             rem_size: px(16.),
@@ -2963,6 +2970,10 @@ impl Window {
     /// the contents of the new [`Scene`], use [`Self::present`].
     #[profiling::function]
     pub fn draw(&mut self, cx: &mut App) -> ArenaClearNeeded {
+        // Advance the per-frame cache epoch before any element paints. The shadow cache uses
+        // it to defer baking until a shape has been stable for one full frame.
+        self.shadow_tile_cache.begin_frame();
+
         // Drain unconditionally so a stale first-invalidation timestamp can't
         // leak into a later frame across enable/disable of frame tracing.
         let frame_dirty = self.invalidator.take_frame_dirty();
@@ -4267,12 +4278,30 @@ impl Window {
                 continue;
             }
             let shadow_bounds = (bounds + shadow.offset).dilate(shadow.spread_radius);
+            let blur_radius = shadow.blur_radius.scale(scale_factor);
+            let scaled_corner_radii = corner_radii.scale(scale_factor);
+            let scaled_shadow_bounds = self.cover_bounds(shadow_bounds);
+
+            // Solid drop shadows with circular corners are baked into the sprite atlas and
+            // reused across frames. Gradient colours, smoothing, inset shadows, and oversized
+            // tiles stay on the analytic path.
+            if corner_smoothing == 0.0 && shadow.color.as_solid().is_some() {
+                if self.paint_cached_drop_shadow(
+                    scaled_shadow_bounds,
+                    scaled_corner_radii,
+                    blur_radius,
+                    shadow.color.solid,
+                ) {
+                    continue;
+                }
+            }
+
             self.next_frame.scene.insert_primitive(Shadow {
                 order: 0,
-                blur_radius: shadow.blur_radius.scale(scale_factor),
-                bounds: self.cover_bounds(shadow_bounds),
+                blur_radius,
+                bounds: scaled_shadow_bounds,
                 content_mask,
-                corner_radii: corner_radii.scale(scale_factor),
+                corner_radii: scaled_corner_radii,
                 color: shadow.color.opacity(opacity),
                 element_bounds,
                 element_corner_radii,
@@ -4280,6 +4309,101 @@ impl Window {
                 corner_smoothing,
             });
         }
+    }
+
+    /// Tries to paint a drop shadow from the cross-frame tile cache.
+    ///
+    /// Returns `false` when the shadow should stay on the analytic path this frame: the shape
+    /// is not cacheable, it is still waiting for its one-frame stability check, or the atlas
+    /// rejected the tile.
+    fn paint_cached_drop_shadow(
+        &mut self,
+        shape_bounds: Bounds<ScaledPixels>,
+        corner_radii: Corners<ScaledPixels>,
+        blur_radius: ScaledPixels,
+        color: SceneHsla,
+    ) -> bool {
+        let Some(key) = ShadowTileKey::new(shape_bounds, corner_radii, blur_radius, color) else {
+            return false;
+        };
+        match self.shadow_tile_cache.lookup(key) {
+            ShadowTileLookup::Deferred | ShadowTileLookup::BudgetDeferred => false,
+            ShadowTileLookup::Generate => {
+                log::debug!(
+                    "baking {}x{} drop-shadow tile",
+                    key.dimensions().0,
+                    key.dimensions().1
+                );
+                let image =
+                    generate_shadow_tile(&key, shape_bounds, corner_radii, blur_radius, color);
+                if let Some(evicted) = self.shadow_tile_cache.insert(key, Arc::clone(&image)) {
+                    self.sprite_atlas.remove(
+                        &RenderImageParams {
+                            image_id: evicted.id,
+                            frame_index: 0,
+                        }
+                        .into(),
+                    );
+                }
+                self.paint_shadow_tile(image, shape_bounds, blur_radius)
+            }
+            ShadowTileLookup::Hit(image) => {
+                self.paint_shadow_tile(image, shape_bounds, blur_radius)
+            }
+        }
+    }
+
+    fn paint_shadow_tile(
+        &mut self,
+        image: Arc<RenderImage>,
+        shape_bounds: Bounds<ScaledPixels>,
+        blur_radius: ScaledPixels,
+    ) -> bool {
+        let margin = blur_radius.0 * SHADOW_GAUSSIAN_CUTOFF;
+        let geometry = Bounds {
+            origin: point(
+                ScaledPixels(shape_bounds.origin.x.0 - margin),
+                ScaledPixels(shape_bounds.origin.y.0 - margin),
+            ),
+            size: size(
+                ScaledPixels(shape_bounds.size.width.0 + 2.0 * margin),
+                ScaledPixels(shape_bounds.size.height.0 + 2.0 * margin),
+            ),
+        };
+        let params = RenderImageParams {
+            image_id: image.id,
+            frame_index: 0,
+        };
+        let tile = self
+            .sprite_atlas
+            .get_or_insert_with(&params.into(), &mut || {
+                Ok(Some((
+                    image.size(0),
+                    Cow::Borrowed(
+                        image
+                            .as_bytes(0)
+                            .expect("baked shadow tiles always have frame 0"),
+                    ),
+                )))
+            });
+        let Ok(Some(tile)) = tile else {
+            return false;
+        };
+
+        self.next_frame.scene.insert_primitive(PolychromeSprite {
+            order: 0,
+            grayscale: false.into(),
+            opacity: self.element_opacity(),
+            corner_smoothing: 0.0,
+            bounds: geometry,
+            content_mask: self.snapped_content_mask(),
+            corner_radii: Corners::default(),
+            tile,
+            transformation: TransformationMatrix::unit(),
+            mask_chain: self.mask_chain(),
+            padding1: 0,
+        });
+        true
     }
 
     /// Paint the inset shadows from `shadows` into the scene at the current z-index. Should
@@ -7938,6 +8062,99 @@ mod tests {
                     );
                 })
                 .unwrap();
+        }
+    }
+
+    #[hgpui::test]
+    fn drop_shadows_reuse_baked_tiles_across_frames(cx: &mut TestAppContext) {
+        struct ShadowCacheView;
+        impl Render for ShadowCacheView {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div()
+                    .size(px(100.))
+                    .shadow_md()
+                    .background(crate::rgb(0xFF0000))
+            }
+        }
+
+        let window = cx.add_window(|_, _| ShadowCacheView);
+        let window: AnyWindowHandle = window.into();
+
+        // Opening a window may already draw a frame, so drive a few paints until the
+        // one-frame stability gate has baked both `shadow_md` layers into sprites. The two
+        // layers can cross the gate on different frames, so wait for the complete state.
+        let mut baked_tiles = Vec::new();
+        for _ in 0..6 {
+            let ready = cx
+                .update_window(window, |_, window, cx| {
+                    window.draw(cx).clear(cx);
+                    let scene = &window.rendered_frame.scene;
+                    let ready = scene.shadows.is_empty()
+                        && scene.polychrome_sprites.len() == 2;
+                    if ready {
+                        baked_tiles = scene
+                            .polychrome_sprites
+                            .iter()
+                            .map(|sprite| sprite.tile)
+                            .collect();
+                    }
+                    ready
+                })
+                .unwrap();
+            if ready {
+                break;
+            }
+        }
+        assert_eq!(
+            baked_tiles.len(),
+            2,
+            "both baked shadow layers should appear and replace the analytic primitives"
+        );
+
+        // A cache hit keeps using the same atlas tiles.
+        cx.update_window(window, |_, window, cx| {
+            window.draw(cx).clear(cx);
+            let scene = &window.rendered_frame.scene;
+            assert!(scene.shadows.is_empty());
+            let tiles: Vec<_> = scene
+                .polychrome_sprites
+                .iter()
+                .map(|sprite| sprite.tile)
+                .collect();
+            assert_eq!(tiles, baked_tiles, "cached sprites must keep their atlas tiles");
+        })
+        .unwrap();
+    }
+
+    #[hgpui::test]
+    fn oversized_shadows_stay_on_the_analytic_path(cx: &mut TestAppContext) {
+        struct LargeShadowView;
+        impl Render for LargeShadowView {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div()
+                    .size(px(600.))
+                    .shadow_md()
+                    .background(crate::rgb(0xFF0000))
+            }
+        }
+
+        let window = cx.add_window(|_, _| LargeShadowView);
+        let window: AnyWindowHandle = window.into();
+        for _ in 0..3 {
+            cx.update_window(window, |_, window, cx| {
+                window.draw(cx).clear(cx);
+                let scene = &window.rendered_frame.scene;
+                assert!(
+                    scene.polychrome_sprites.is_empty(),
+                    "a tile above the area budget must not be baked"
+                );
+                assert_eq!(
+                    scene.shadows.len(),
+                    2,
+                    "oversized shadows keep the analytic layers"
+                );
+            })
+            .unwrap();
         }
     }
 
