@@ -921,7 +921,8 @@ impl Style {
 
                         BackgroundTag::LinearGradient
                         | BackgroundTag::RadialGradient
-                        | BackgroundTag::RadialGradientCircle => color
+                        | BackgroundTag::RadialGradientCircle
+                        | BackgroundTag::ConicGradient => color
                             .colors
                             .first()
                             .map(|stop| stop.color.into())

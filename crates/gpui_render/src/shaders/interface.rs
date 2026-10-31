@@ -202,7 +202,7 @@ pub struct AbiBackground {
     colors: [AbiLinearColorStop; 2],
     radial_center_y: f32,
     radial_size: u32,
-    padding: u32,
+    conic_center_x: f32,
 }
 
 #[doc(hidden)]
@@ -210,7 +210,7 @@ pub const SCENE_BUFFER_LAYOUTS: &[SceneBufferLayout] = &[
     layout!(hgpui::Bounds<hgpui::ScaledPixels>, "Bounds", origin, size),
     layout!(hgpui::Corners<hgpui::ScaledPixels>, "Corners", top_left, top_right, bottom_right, bottom_left),
     layout!(hgpui::Edges<hgpui::ScaledPixels>, "Edges", top, right, bottom, left),
-    layout!(AbiBackground, "Background", tag, color_space, solid, gradient_angle_or_pattern_height, colors, radial_center_y, radial_size, padding),
+    layout!(AbiBackground, "Background", tag, color_space, solid, gradient_angle_or_pattern_height, colors, radial_center_y, radial_size, conic_center_x),
     layout!(hgpui::ContentMask<hgpui::ScaledPixels>, "ContentMask", bounds, corner_radii, fade_out),
     layout!(hgpui::TransformationMatrix, "TransformationMatrix", rotation_scale, translation),
     layout!(hgpui::Quad, "Quad", order, border_style, border_dashed_length, border_dashed_gap, bounds, content_mask, background, border_color, corner_radii, border_widths, corner_smoothing, mask_chain, transformation),

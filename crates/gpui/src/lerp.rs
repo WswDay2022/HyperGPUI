@@ -1,7 +1,8 @@
 //! Lerp trait defines behaviour for interpolating between two values of the same type.
 use crate::{
-    AbsoluteLength, Background, Bounds, Corners, DefiniteLength, DevicePixels, Edges, Fill, Length,
-    Percentage, Pixels, Point, Radians, Relative, Rems, RingColor, Size, colors::Colors,
+    AbsoluteLength, Background, BackgroundTag, Bounds, Corners, DefiniteLength, DevicePixels,
+    Edges, Fill, Length, LinearColorStop, Percentage, Pixels, Point, Radians, Relative, Rems,
+    RingColor, Size, colors::Colors,
 };
 use palette::{
     Hsla, IntoColor, Oklab, Oklaba,
@@ -217,7 +218,46 @@ impl Lerp for Background {
 
         match (self.as_solid(), to.as_solid()) {
             (Some(from), Some(to_color)) => {
-                Background::from(from.lerp(&to_color, delta)).color_space(to.interpolation_space())
+                return Background::from(from.lerp(&to_color, delta))
+                    .color_space(to.interpolation_space());
+            }
+            _ => {}
+        }
+
+        if self.tag != to.tag {
+            return *self;
+        }
+        match self.tag {
+            BackgroundTag::LinearGradient
+            | BackgroundTag::RadialGradient
+            | BackgroundTag::RadialGradientCircle
+            | BackgroundTag::ConicGradient => {
+                let mix = |from: f32, to: f32| from + (to - from) * delta;
+                let mut result = *self;
+                result.gradient_angle_or_pattern_height =
+                    mix(self.gradient_angle_or_pattern_height, to.gradient_angle_or_pattern_height);
+                result.conic_center_x = mix(self.conic_center_x, to.conic_center_x);
+                result.radial_center_y = mix(self.radial_center_y, to.radial_center_y);
+                // Discrete tag-specific fields switch at the midpoint; interpolating enum
+                // variants or the ending-shape keyword has no meaningful in-between state.
+                if delta >= 0.5 {
+                    result.radial_size = to.radial_size;
+                    result.color_space = to.color_space;
+                } else {
+                    result.radial_size = self.radial_size;
+                    result.color_space = self.color_space;
+                }
+                for i in 0..2 {
+                    let from = self.colors[i];
+                    let to = to.colors[i];
+                    let from_color: Hsla = from.color.into();
+                    let to_color: Hsla = to.color.into();
+                    result.colors[i] = LinearColorStop {
+                        color: from_color.lerp(&to_color, delta).into(),
+                        percentage: mix(from.percentage, to.percentage),
+                    };
+                }
+                result
             }
             _ => *self,
         }

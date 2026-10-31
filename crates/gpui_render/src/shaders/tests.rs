@@ -226,7 +226,7 @@ fn srgb_gradients_interpolate_in_native_srgb_space() {
         ],
         radial_center_y: 0.0,
         radial_size: 0,
-        padding: 0,
+        conic_center_x: 0.0,
     };
     let bounds = Bounds {
         origin: vec2f(0.0, 0.0),
@@ -246,6 +246,78 @@ fn srgb_gradients_interpolate_in_native_srgb_space() {
     assert!(start.x < 0.02, "first stop should stay black, got {}", start.x);
     let end = paint_color(paint, vec2f(100.0, 50.0), prepared);
     assert!(end.x > 0.98, "last stop should stay white, got {}", end.x);
+}
+
+#[test]
+fn conic_gradient_sweeps_clockwise_from_twelve_oclock() {
+    use common::*;
+    use wgsl_rs::std::*;
+
+    let black = Hsla {
+        h: 0.0,
+        s: 0.0,
+        l: 0.0,
+        a: 1.0,
+    };
+    let white = Hsla {
+        h: 0.0,
+        s: 0.0,
+        l: 1.0,
+        a: 1.0,
+    };
+    let background = Background {
+        tag: BackgroundTag::ConicGradient,
+        color_space: ColorSpace::Srgb,
+        solid: black,
+        gradient_angle_or_pattern_height: 0.0,
+        colors: [
+            LinearColorStop {
+                color: black,
+                percentage: 0.0,
+            },
+            LinearColorStop {
+                color: white,
+                percentage: 1.0,
+            },
+        ],
+        radial_center_y: 0.5,
+        radial_size: 0,
+        conic_center_x: 0.5,
+    };
+    let bounds = Bounds {
+        origin: vec2f(0.0, 0.0),
+        size: vec2f(100.0, 100.0),
+    };
+    let paint = Paint::new(background, bounds);
+    let prepared = prepare_paint(paint);
+
+    let sample = |x: f32, y: f32| paint_color(paint, vec2f(x, y), prepared).x;
+    assert!(sample(50.0, 0.0) < 0.03, "12 o'clock is the start stop");
+    assert!(
+        (sample(100.0, 50.0) - 0.25).abs() < 0.05,
+        "3 o'clock is a quarter turn clockwise"
+    );
+    assert!(
+        (sample(50.0, 100.0) - 0.5).abs() < 0.05,
+        "6 o'clock is half a turn clockwise"
+    );
+    assert!(
+        (sample(0.0, 50.0) - 0.75).abs() < 0.05,
+        "9 o'clock is three quarters clockwise"
+    );
+
+    // `from 90deg` rotates the start to 3 o'clock, so 12 o'clock lands at 0.75.
+    let rotated = Background {
+        gradient_angle_or_pattern_height: 90.0,
+        ..background
+    };
+    let rotated_paint = Paint::new(rotated, bounds);
+    let rotated_prepared = prepare_paint(rotated_paint);
+    let top = paint_color(rotated_paint, vec2f(50.0, 0.0), rotated_prepared).x;
+    assert!(
+        (top - 0.75).abs() < 0.05,
+        "a 90 degree start moves the sweep by a quarter turn, got {top}"
+    );
 }
 
 #[test]
@@ -276,7 +348,7 @@ fn linear_gradients_preserve_native_dithering() {
         ],
         radial_center_y: 0.0,
         radial_size: 0,
-        padding: 0,
+        conic_center_x: 0.0,
     };
     let bounds = Bounds {
         origin: vec2f(0.0, 0.0),

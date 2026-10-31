@@ -681,6 +681,8 @@ pub(crate) enum BackgroundTag {
     RadialGradient = 4,
     /// A radial gradient with a circular ending shape.
     RadialGradientCircle = 5,
+    /// A conic (sweep) gradient around a center point.
+    ConicGradient = 6,
 }
 
 /// A color space for color interpolation.
@@ -759,14 +761,13 @@ pub struct Background {
     /// The ending-shape size keyword of a radial gradient, unused by other backgrounds.
     #[serde(default)]
     pub(crate) radial_size: RadialSize,
-    /// Padding that keeps `Background` a multiple of 8 bytes. WGSL aligns the `mat2x2` in the
-    /// `Quad` struct's `transformation` to 8 while Rust's `repr(C)` layout (and FXC's structured
-    /// buffer packing) align it to 4, so the matrix must not land on a 4-byte-aligned offset.
-    ///
-    /// Skipped by serde: it is never anything but zero, and the name would otherwise collide with
-    /// `radial_center_y`'s `pad` alias.
-    #[serde(skip)]
-    pad: u32,
+    /// The horizontal fraction of the element's size for a conic gradient's center. Also keeps
+    /// `Background` a multiple of 8 bytes: WGSL aligns the `mat2x2` in the `Quad` struct's
+    /// `transformation` to 8 while Rust's `repr(C)` layout (and FXC's structured buffer packing)
+    /// align it to 4, so the matrix must not land on a 4-byte-aligned offset. Zero for every
+    /// other background kind.
+    #[serde(default)]
+    pub(crate) conic_center_x: f32,
 }
 
 impl std::fmt::Debug for Background {
@@ -797,6 +798,14 @@ impl std::fmt::Debug for Background {
                 self.colors[0],
                 self.colors[1]
             ),
+            BackgroundTag::ConicGradient => write!(
+                f,
+                "ConicGradient({}, {:?}, {:?}, {:?})",
+                self.gradient_angle_or_pattern_height,
+                self.conic_center(),
+                self.colors[0],
+                self.colors[1]
+            ),
         }
     }
 }
@@ -812,7 +821,7 @@ impl Default for Background {
             colors: [LinearColorStop::default(), LinearColorStop::default()],
             radial_center_y: 0.0,
             radial_size: RadialSize::default(),
-            pad: 0,
+            conic_center_x: 0.0,
         }
     }
 }
@@ -898,6 +907,30 @@ pub fn radial_gradient(
     }
 }
 
+/// Creates a new conic (sweep) gradient around `center`.
+///
+/// `angle` is the angle the sweep starts at, in degrees: `0.0` points up and increases
+/// clockwise, matching CSS `conic-gradient(from <angle> at <position>, ...)`. `center` is
+/// expressed as fractions of the element's size (CSS `at 50% 50%` is `point(0.5, 0.5)`).
+///
+/// The gradient interpolates between the two provided stops; values before the first stop and
+/// after the last one clamp to the nearest stop.
+pub fn conic_gradient(
+    center: crate::Point<f32>,
+    angle: f32,
+    from: impl Into<LinearColorStop>,
+    to: impl Into<LinearColorStop>,
+) -> Background {
+    Background {
+        tag: BackgroundTag::ConicGradient,
+        gradient_angle_or_pattern_height: angle,
+        conic_center_x: center.x,
+        radial_center_y: center.y,
+        colors: [from.into(), to.into()],
+        ..Default::default()
+    }
+}
+
 /// A color stop in a linear gradient.
 ///
 /// <https://developer.mozilla.org/en-US/docs/Web/CSS/gradient/linear-gradient#linear-color-stop>
@@ -954,6 +987,15 @@ pub enum BackgroundKind {
         /// The two ends of the gradient.
         stops: [LinearColorStop; 2],
     },
+    /// A conic gradient sweeping around a center point.
+    ConicGradient {
+        /// The gradient's center, as fractions of the element's size.
+        center: crate::Point<f32>,
+        /// The angle the sweep starts at, in degrees, `0.0` pointing up and increasing clockwise.
+        angle: f32,
+        /// The two ends of the gradient.
+        stops: [LinearColorStop; 2],
+    },
     /// A diagonal stripe pattern.
     PatternSlash {
         /// The stripe color.
@@ -998,6 +1040,11 @@ impl Background {
                     stops: self.colors,
                 }
             }
+            BackgroundTag::ConicGradient => BackgroundKind::ConicGradient {
+                center: self.conic_center(),
+                angle: self.gradient_angle_or_pattern_height,
+                stops: self.colors,
+            },
             BackgroundTag::PatternSlash => {
                 // `pattern_slash` packs both values into one f32 as `(width * 255) * 0xFFFF + (interval * 255)`.
                 // floor + rem_euclid to invert it since that's the pairing that stays correct for negative inputs.
@@ -1057,6 +1104,14 @@ impl Background {
         }
     }
 
+    /// The center of a conic gradient, as fractions of the element's size.
+    fn conic_center(&self) -> crate::Point<f32> {
+        crate::Point {
+            x: self.conic_center_x,
+            y: self.radial_center_y,
+        }
+    }
+
     /// The ending shape encoded in the tag (only meaningful for radial gradients).
     fn radial_shape_from_tag(&self) -> RadialShape {
         if self.tag == BackgroundTag::RadialGradientCircle {
@@ -1089,7 +1144,8 @@ impl Background {
             BackgroundTag::Solid => self.solid.a == 0.,
             BackgroundTag::LinearGradient
             | BackgroundTag::RadialGradient
-            | BackgroundTag::RadialGradientCircle => self.colors.iter().all(|c| c.color.a == 0.),
+            | BackgroundTag::RadialGradientCircle
+            | BackgroundTag::ConicGradient => self.colors.iter().all(|c| c.color.a == 0.),
             BackgroundTag::PatternSlash => self.solid.a == 0.,
             BackgroundTag::Checkerboard => self.solid.a == 0.,
         }
@@ -1136,6 +1192,82 @@ mod tests {
         assert_eq!(background.opacity(0.5).colors[1], to.opacity(0.5));
         assert!(!background.is_transparent());
         assert!(background.opacity(0.0).is_transparent());
+    }
+
+    #[test]
+    fn test_background_conic_gradient() {
+        let from = linear_color_stop(rgba(0xff0099ff), 0.0);
+        let to = linear_color_stop(rgba(0x00ff99ff), 1.0);
+        let background = conic_gradient(
+            crate::Point { x: 0.25, y: 0.75 },
+            45.0,
+            from,
+            to,
+        );
+        assert_eq!(background.tag, BackgroundTag::ConicGradient);
+        assert_eq!(background.gradient_angle_or_pattern_height, 45.0);
+        assert_eq!(background.conic_center(), crate::Point { x: 0.25, y: 0.75 });
+        assert_eq!(background.colors, [from, to]);
+        assert!(!background.is_transparent());
+        assert!(background.opacity(0.0).is_transparent());
+
+        match background.kind() {
+            BackgroundKind::ConicGradient { center, angle, stops } => {
+                assert_eq!(center, crate::Point { x: 0.25, y: 0.75 });
+                assert_eq!(angle, 45.0);
+                assert_eq!(stops, [from, to]);
+            }
+            other => panic!("expected a conic gradient, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_gradient_background_lerp() {
+        use crate::Lerp;
+
+        let black: Hsla = rgb(0x000000).into_color();
+        let white: Hsla = rgb(0xFFFFFF).into_color();
+        let from = linear_gradient(
+            0.0,
+            linear_color_stop(black, 0.0),
+            linear_color_stop(white, 1.0),
+        );
+        let to = linear_gradient(
+            180.0,
+            linear_color_stop(white, 0.0),
+            linear_color_stop(black, 1.0),
+        );
+
+        let mid = from.lerp(&to, 0.5);
+        assert_eq!(mid.tag, BackgroundTag::LinearGradient);
+        assert!((mid.gradient_angle_or_pattern_height - 90.0).abs() < 1e-3);
+        let first: Hsla = mid.colors[0].color.into();
+        let last: Hsla = mid.colors[1].color.into();
+        assert!(
+            (first.lightness - 0.5).abs() < 0.02,
+            "first stop should be mid grey"
+        );
+        assert!(
+            (last.lightness - 0.5).abs() < 0.02,
+            "last stop should be mid grey"
+        );
+
+        let conic_a = conic_gradient(
+            crate::Point { x: 0.0, y: 0.0 },
+            0.0,
+            linear_color_stop(black, 0.0),
+            linear_color_stop(white, 1.0),
+        );
+        let conic_b = conic_gradient(
+            crate::Point { x: 1.0, y: 1.0 },
+            90.0,
+            linear_color_stop(white, 0.0),
+            linear_color_stop(black, 1.0),
+        );
+        let conic_mid = conic_a.lerp(&conic_b, 0.5);
+        assert!((conic_mid.conic_center_x - 0.5).abs() < 1e-3);
+        assert!((conic_mid.radial_center_y - 0.5).abs() < 1e-3);
+        assert!((conic_mid.gradient_angle_or_pattern_height - 45.0).abs() < 1e-3);
     }
 
     #[test]

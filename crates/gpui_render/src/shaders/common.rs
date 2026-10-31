@@ -69,6 +69,7 @@ mod source {
         Checkerboard = 3,
         RadialGradient = 4,
         RadialGradientCircle = 5,
+        ConicGradient = 6,
     }
 
     #[repr(u32)]
@@ -272,11 +273,12 @@ mod source {
         pub solid: Hsla,
         pub gradient_angle_or_pattern_height: f32,
         pub colors: [LinearColorStop; 2],
-        /// Local radial-gradient center Y, packed into the old `pad` slot.
+        /// Local radial/conic-gradient center Y, packed into the old `pad` slot.
         pub radial_center_y: f32,
         /// Local radial-gradient size keyword (0 = farthest-corner, 1 = closest-side, ...).
         pub radial_size: u32,
-        pub padding: u32,
+        /// Local conic-gradient center X; zero for every other background kind.
+        pub conic_center_x: f32,
     }
     #[derive(Clone, Copy, Wgsl)]
     pub struct AtlasTextureId {
@@ -687,6 +689,7 @@ mod source {
         if paint.background.tag == BackgroundTag::LinearGradient
             || paint.background.tag == BackgroundTag::RadialGradient
             || paint.background.tag == BackgroundTag::RadialGradientCircle
+            || paint.background.tag == BackgroundTag::ConicGradient
         {
             prepared.color0 = hsla_to_rgba(paint.background.colors[0usize].color);
             prepared.color1 = hsla_to_rgba(paint.background.colors[1usize].color);
@@ -801,6 +804,9 @@ mod source {
             BackgroundTag::RadialGradientCircle => {
                 color = radial_gradient_color(paint, position, prepared);
             }
+            BackgroundTag::ConicGradient => {
+                color = conic_gradient_color(paint, position, prepared);
+            }
         }
         color
     }
@@ -856,6 +862,21 @@ mod source {
         if radii.x > 0.0 && radii.y > 0.0 {
             t = length(offset / radii);
         }
+        gradient_ramp_color(paint, t, position, prepared)
+    }
+
+    /// Local conic (sweep) gradient. `atan2(x, -y)` puts 0 at 12 o'clock and increases
+    /// clockwise, matching CSS `conic-gradient(from ...)`; the start angle is subtracted before
+    /// wrapping into `0..1`.
+    pub fn conic_gradient_color(paint: Paint, position: Vec2f, prepared: PreparedPaint) -> Vec4f {
+        let background = paint.background;
+        let center = paint.bounds.origin
+            + vec2f(background.conic_center_x, background.radial_center_y) * paint.bounds.size;
+        let offset = position - center;
+        let theta = atan2(offset.x, -offset.y);
+        let start_angle =
+            background.gradient_angle_or_pattern_height * PI / HALF_TURN_DEGREES;
+        let t = fract((theta - start_angle) / (2.0 * PI));
         gradient_ramp_color(paint, t, position, prepared)
     }
 
