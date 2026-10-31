@@ -4507,6 +4507,17 @@ impl Window {
             return;
         }
 
+        // With a transparent fill and either a transparent border colour or zero widths there is
+        // nothing left to paint; submitting four transparent strips would only cost work.
+        if quad.border_color.is_transparent()
+            || (quad.border_widths.top.0 == 0.0
+                && quad.border_widths.right.0 == 0.0
+                && quad.border_widths.bottom.0 == 0.0
+                && quad.border_widths.left.0 == 0.0)
+        {
+            return;
+        }
+
         // We're drawing a quad with a border but no fill color. Painting this quad would run the quad shader for every
         // transparent interior pixel, which is especially costly when the quad is large.
         // Instead, split it into four non-overlapping strips that cover the regions where borders are painted:
@@ -4570,7 +4581,26 @@ impl Window {
             ),
         ];
 
-        for strip in strips {
+        // With square corners a strip can only contain its own border plus one-pixel slivers of
+        // the perpendicular borders in the antialias slack. Skip the strips that carry neither.
+        let square_corners = radii.top_left.0 == 0.0
+            && radii.top_right.0 == 0.0
+            && radii.bottom_right.0 == 0.0
+            && radii.bottom_left.0 == 0.0;
+        let keep = [
+            !square_corners || widths.top.0 > 0.0 || widths.left.0 > 0.0 || widths.right.0 > 0.0,
+            !square_corners
+                || widths.bottom.0 > 0.0
+                || widths.left.0 > 0.0
+                || widths.right.0 > 0.0,
+            !square_corners || widths.left.0 > 0.0,
+            !square_corners || widths.right.0 > 0.0,
+        ];
+
+        for (strip, keep) in strips.into_iter().zip(keep) {
+            if !keep {
+                continue;
+            }
             // Map the strip into the quad's transformed space so the mask clip matches the
             // positions the shaders transform fragments to.
             let strip = quad.transformation.map_rect(strip);
@@ -7841,6 +7871,74 @@ mod tests {
                 assert_eq!(window.rendered_frame.scene.quads[0].transformation, rotate);
             })
             .unwrap();
+    }
+
+    #[hgpui::test]
+    fn border_strips_skip_edges_without_borders(cx: &mut TestAppContext) {
+        struct PruneProbe {
+            kind: u8,
+        }
+        impl Render for PruneProbe {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                let kind = self.kind;
+                div().size_full().child(canvas(
+                    |_, _, _| {},
+                    move |_, _, window, _| {
+                        let mut paint_quad = crate::PaintQuad::new(Bounds {
+                            origin: point(px(8.), px(8.)),
+                            size: size(px(48.), px(48.)),
+                        });
+                        paint_quad.background = transparent_black().into();
+                        paint_quad.border_color = match kind {
+                            3 => transparent_black().into(),
+                            _ => crate::red().into(),
+                        };
+                        paint_quad.border_widths = match kind {
+                            0 | 3 | 4 => Edges {
+                                top: px(0.),
+                                right: px(0.),
+                                bottom: px(4.),
+                                left: px(0.),
+                            },
+                            1 => Edges {
+                                top: px(0.),
+                                right: px(0.),
+                                bottom: px(4.),
+                                left: px(4.),
+                            },
+                            _ => Edges {
+                                top: px(0.),
+                                right: px(0.),
+                                bottom: px(0.),
+                                left: px(0.),
+                            },
+                        };
+                        if kind == 4 {
+                            paint_quad.corner_radii = Corners {
+                                top_left: px(8.),
+                                top_right: px(8.),
+                                bottom_right: px(8.),
+                                bottom_left: px(8.),
+                            };
+                        }
+                        window.paint_quad(paint_quad);
+                    },
+                ))
+            }
+        }
+
+        for (kind, expected) in [(0u8, 1usize), (1, 3), (2, 0), (3, 0), (4, 4)] {
+            let window = cx.add_window(move |_, _| PruneProbe { kind });
+            window
+                .update(cx, |_, window, _| {
+                    assert_eq!(
+                        window.rendered_frame.scene.quads.len(),
+                        expected,
+                        "kind {kind}: unexpected number of border strips"
+                    );
+                })
+                .unwrap();
+        }
     }
 
     struct CountingChildView {
