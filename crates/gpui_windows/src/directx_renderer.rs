@@ -5502,6 +5502,137 @@ mod tests {
         Ok(())
     }
 
+    /// A drop shadow can opt out of the window's global rounded mask. This keeps a window's
+    /// own shadow visible outside its rounded corners while ordinary shadows stay clipped.
+    #[test]
+    fn hlsl_drop_shadow_can_ignore_window_mask() -> Result<()> {
+        let Some((device, context)) = create_warp_device() else {
+            eprintln!("[shadow_window_mask] WARP device unavailable, skipping");
+            return Ok(());
+        };
+        let (texture, rtv, _srv) = create_color_target(&device, TEST_SIZE, TEST_SIZE)?;
+        let rtv = rtv.expect("color target render target view");
+        let staging = {
+            let desc = D3D11_TEXTURE2D_DESC {
+                Width: TEST_SIZE,
+                Height: TEST_SIZE,
+                MipLevels: 1,
+                ArraySize: 1,
+                Format: RENDER_TARGET_FORMAT,
+                SampleDesc: DXGI_SAMPLE_DESC {
+                    Count: 1,
+                    Quality: 0,
+                },
+                Usage: D3D11_USAGE_STAGING,
+                BindFlags: 0,
+                CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
+                MiscFlags: 0,
+            };
+            let mut staging = None;
+            unsafe { device.CreateTexture2D(&desc, None, Some(&mut staging)) }?;
+            staging.unwrap()
+        };
+        let radius = ScaledPixels(16.0);
+        let globals_buffer =
+            create_constant_buffer(&device, std::mem::size_of::<GlobalUniforms>())?;
+        update_buffer(
+            &context,
+            &globals_buffer,
+            &[GlobalUniforms {
+                viewport_size: [TEST_SIZE as f32, TEST_SIZE as f32],
+                premultiplied_alpha: 0,
+                padding: 0,
+                window_mask_params: [1.0, 0.0, 0.0, 0.0],
+                window_mask: ContentMask {
+                    bounds: bounds(
+                        point(ScaledPixels(0.0), ScaledPixels(0.0)),
+                        size(ScaledPixels(TEST_SIZE as f32), ScaledPixels(TEST_SIZE as f32)),
+                    ),
+                    corner_radii: Corners {
+                        top_left: radius,
+                        top_right: radius,
+                        bottom_right: radius,
+                        bottom_left: radius,
+                    },
+                    fade_out: Default::default(),
+                },
+            }],
+        )?;
+        let font_buffer =
+            create_constant_buffer(&device, std::mem::size_of::<FontRasterizationUniforms>())?;
+        update_buffer(
+            &context,
+            &font_buffer,
+            &[FontRasterizationUniforms::default()],
+        )?;
+        let draw_constants_buffer = create_constant_buffer(&device, 16)?;
+        update_buffer(
+            &context,
+            &draw_constants_buffer,
+            &[hgpui_render::artifacts::Dx11DrawConstants::default()],
+        )?;
+        let globals = [
+            Some(globals_buffer),
+            Some(font_buffer),
+            None,
+            Some(draw_constants_buffer),
+        ];
+
+        let blend = create_blend_state(&device)?;
+        let mut pipeline = PipelineState::<Shadow>::new(
+            &device,
+            "test_shadow_window_mask",
+            ShaderModule::Shadow,
+            4,
+            blend,
+        )?;
+        let full_bounds = bounds(
+            point(ScaledPixels(0.0), ScaledPixels(0.0)),
+            size(ScaledPixels(TEST_SIZE as f32), ScaledPixels(TEST_SIZE as f32)),
+        );
+        let shadow = |flags: u32| Shadow {
+            order: 0,
+            blur_radius: ScaledPixels(0.0),
+            bounds: full_bounds,
+            corner_radii: Corners::default(),
+            content_mask: viewport_mask(),
+            color: red().into(),
+            element_bounds: full_bounds,
+            element_corner_radii: Corners::default(),
+            inset_and_mask_chain: Shadow::pack_inset_and_mask_chain(false, 0),
+            corner_smoothing: 0.0,
+            flags,
+            padding: [0; 3],
+        };
+
+        pipeline.update_buffer(&device, &context, &[shadow(0)])?;
+        unsafe {
+            context.ClearRenderTargetView(&rtv, &[0.0, 0.0, 0.0, 1.0]);
+            context.OMSetRenderTargets(Some(slice::from_ref(&Some(rtv.clone()))), None);
+        }
+        pipeline.draw_range(&device, &context, &[test_viewport()], &globals, 4, 0, 1)?;
+        dump_device_errors(&device);
+        let clipped = read_pixel(&context, &texture, &staging, 2, 2)?;
+        assert_eq!(
+            clipped[2], 0,
+            "an ordinary shadow must be clipped by the rounded window mask, got {clipped:?}"
+        );
+
+        pipeline.update_buffer(&device, &context, &[shadow(Shadow::IGNORE_WINDOW_MASK)])?;
+        unsafe {
+            context.ClearRenderTargetView(&rtv, &[0.0, 0.0, 0.0, 1.0]);
+            context.OMSetRenderTargets(Some(slice::from_ref(&Some(rtv.clone()))), None);
+        }
+        pipeline.draw_range(&device, &context, &[test_viewport()], &globals, 4, 0, 1)?;
+        dump_device_errors(&device);
+        let unclipped = read_pixel(&context, &texture, &staging, 2, 2)?;
+        assert_eq!(
+            unclipped[2], 255,
+            "IGNORE_WINDOW_MASK must let the shadow paint outside the rounded window corner, got {unclipped:?}"
+        );
+        Ok(())
+    }
+
     /// When a primitive's content mask is its own rounded cutout, the mask's distance field is
     /// the same field the primitive already uses for its outline. Applying both squares the
     /// coverage of every edge pixel (0.5 × 0.5 = 0.25), which shows up as a dark one-pixel rim
@@ -5876,6 +6007,8 @@ mod tests {
             element_corner_radii: Corners::default(),
             inset_and_mask_chain: Shadow::pack_inset_and_mask_chain(true, 0),
             corner_smoothing: 0.0,
+            flags: 0,
+            padding: [0; 3],
         };
         pipeline.update_buffer(&device, &context, &[shadow])?;
         unsafe {

@@ -17,6 +17,9 @@ pub mod shadow {
         /// Bit 0: inset shadow. Remaining bits: packed clip-chain reference.
         pub inset_and_mask_chain: u32,
         pub corner_smoothing: f32,
+        /// Bit 0: ignore the window's global rounded mask.
+        pub flags: u32,
+        pub padding: [u32; 3],
     }
 
     pub fn shadow_is_inset(shadow: Shadow) -> bool {
@@ -25,6 +28,10 @@ pub mod shadow {
 
     pub fn shadow_mask_chain(shadow: Shadow) -> u32 {
         shadow.inset_and_mask_chain >> 1u32
+    }
+
+    pub fn shadow_ignores_window_mask(shadow: Shadow) -> bool {
+        (shadow.flags & 1u32) != 0u32
     }
     storage!(group(1), binding(0), SHADOWS: RuntimeArray<Shadow>);
 
@@ -79,6 +86,20 @@ pub mod shadow {
             sample_index += 1;
         }
         coverage
+    }
+
+    pub fn shadow_mask_alpha(shadow: Shadow, position: Vec2f) -> f32 {
+        let sample = content_mask_chain_sample_with_window(
+            shadow_mask_chain(shadow),
+            position,
+            shadow.content_mask,
+            position,
+            shadow.bounds,
+            shadow.corner_radii,
+            false,
+            !shadow_ignores_window_mask(shadow),
+        );
+        antialiased_coverage(sample.distance) * sample.fade
     }
 
     pub fn shadow_coverage(shadow: Shadow, position: Vec2f) -> f32 {
@@ -244,15 +265,7 @@ pub mod shadow {
         blend_color(
             color,
             shadow_coverage(shadow, input.position.xy())
-                * content_mask_chain_alpha(
-                    shadow_mask_chain(shadow),
-                    input.position.xy(),
-                    shadow.content_mask,
-                    input.position.xy(),
-                    shadow.bounds,
-                    shadow.corner_radii,
-                    false,
-                ),
+                * shadow_mask_alpha(shadow, input.position.xy()),
         )
     }
 
@@ -355,16 +368,7 @@ pub mod shadow {
         );
         blend_color(
             color,
-            coverage
-                * content_mask_chain_alpha(
-                    shadow_mask_chain(shadow),
-                    input.position.xy(),
-                    shadow.content_mask,
-                    input.position.xy(),
-                    shadow.bounds,
-                    shadow.corner_radii,
-                    false,
-                ),
+            coverage * shadow_mask_alpha(shadow, input.position.xy()),
         )
     }
 }

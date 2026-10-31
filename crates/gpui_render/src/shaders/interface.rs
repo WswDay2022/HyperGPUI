@@ -214,7 +214,7 @@ pub const SCENE_BUFFER_LAYOUTS: &[SceneBufferLayout] = &[
     layout!(hgpui::ContentMask<hgpui::ScaledPixels>, "ContentMask", bounds, corner_radii, fade_out),
     layout!(hgpui::TransformationMatrix, "TransformationMatrix", rotation_scale, translation),
     layout!(hgpui::Quad, "Quad", order, border_style, border_dashed_length, border_dashed_gap, bounds, content_mask, background, border_color, corner_radii, border_widths, corner_smoothing, mask_chain, transformation),
-    layout!(hgpui::Shadow, "Shadow", order, blur_radius, bounds, corner_radii, content_mask, color, element_bounds, element_corner_radii, inset_and_mask_chain, corner_smoothing),
+    layout!(hgpui::Shadow, "Shadow", order, blur_radius, bounds, corner_radii, content_mask, color, element_bounds, element_corner_radii, inset_and_mask_chain, corner_smoothing, flags, padding),
     layout!(hgpui::Underline, "Underline", order, mask_chain, bounds, content_mask, color, thickness, wavy, transformation, padding),
     layout!(hgpui::MonochromeSprite, "MonochromeSprite", order, mask_chain, bounds, content_mask, color, tile, transformation),
     layout!(hgpui::SubpixelSprite, "SubpixelSprite", order, mask_chain, bounds, content_mask, color, tile, transformation),
@@ -238,7 +238,8 @@ const _: () = {
     assert!(std::mem::size_of::<hgpui::Quad>() == 304);
     assert!(std::mem::offset_of!(hgpui::Quad, transformation) == 280);
     assert!(std::mem::offset_of!(hgpui::TransformationMatrix, translation) == 16);
-    assert!(std::mem::size_of::<hgpui::Shadow>() == 208);
+    assert!(std::mem::size_of::<hgpui::Shadow>() == 224);
+    assert!(std::mem::offset_of!(hgpui::Shadow, flags) == 208);
     assert!(std::mem::size_of::<hgpui::Underline>() == 128);
     assert!(std::mem::size_of::<hgpui::MonochromeSprite>() == 144);
     assert!(std::mem::size_of::<hgpui::SubpixelSprite>() == 144);

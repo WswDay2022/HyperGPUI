@@ -672,6 +672,21 @@ pub trait Styled: Sized {
         self
     }
 
+    /// Exempts this element's own drop shadow from the window's rounded clip mask.
+    ///
+    /// Useful for a rounded window whose shadow should extend past the rounded edge. Descendant
+    /// shadows are still clipped by their own content masks / the clip group.
+    fn clip_group_ignore_shadow(mut self) -> Self {
+        self.style().clip_group_ignore_shadow = Some(true);
+        self
+    }
+
+    /// Explicitly enables or disables shadow clipping exemption.
+    fn clip_group_ignore_shadow_enabled(mut self, enabled: bool) -> Self {
+        self.style().clip_group_ignore_shadow = Some(enabled);
+        self
+    }
+
     /// Returns a mutable reference to the text style that has been configured on this element.
     fn text_style(&mut self) -> &mut TextStyleRefinement {
         let style: &mut StyleRefinement = self.style();

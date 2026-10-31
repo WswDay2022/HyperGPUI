@@ -4217,6 +4217,24 @@ impl Window {
         corner_smoothing: f32,
         shadows: &[BoxShadow],
     ) {
+        self.paint_drop_shadows_internal(
+            bounds,
+            corner_radii,
+            corner_smoothing,
+            shadows,
+            false,
+        );
+    }
+
+    /// Paints drop shadows, optionally exempting them from the global window rounded mask.
+    pub(crate) fn paint_drop_shadows_internal(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        corner_radii: Corners<Pixels>,
+        corner_smoothing: f32,
+        shadows: &[BoxShadow],
+        ignore_window_mask: bool,
+    ) {
         self.invalidator.debug_assert_paint();
 
         let scale_factor = self.scale_factor();
@@ -4241,6 +4259,12 @@ impl Window {
                 element_corner_radii,
                 inset_and_mask_chain: Shadow::pack_inset_and_mask_chain(false, mask_chain),
                 corner_smoothing,
+                flags: if ignore_window_mask {
+                    Shadow::IGNORE_WINDOW_MASK
+                } else {
+                    0
+                },
+                padding: [0; 3],
             });
         }
     }
@@ -4288,6 +4312,8 @@ impl Window {
                 element_corner_radii,
                 inset_and_mask_chain: Shadow::pack_inset_and_mask_chain(true, mask_chain),
                 corner_smoothing,
+                flags: 0,
+                padding: [0; 3],
             });
         }
     }

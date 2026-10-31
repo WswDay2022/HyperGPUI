@@ -956,6 +956,30 @@ mod source {
         own_radii: Corners,
         owns_cutout: bool,
     ) -> MaskChainSample {
+        content_mask_chain_sample_with_window(
+            chain,
+            position,
+            single_mask,
+            single_mask_position,
+            own_bounds,
+            own_radii,
+            owns_cutout,
+            true,
+        )
+    }
+
+    /// Like [`content_mask_chain_sample`], but can skip the window's global rounded mask.
+    /// Used by the element's own drop shadow when it is explicitly exempt from the window clip.
+    pub fn content_mask_chain_sample_with_window(
+        chain: u32,
+        position: Vec2f,
+        single_mask: ContentMask,
+        single_mask_position: Vec2f,
+        own_bounds: Bounds,
+        own_radii: Corners,
+        owns_cutout: bool,
+        apply_window_mask: bool,
+    ) -> MaskChainSample {
         let count = chain >> 24u32;
         let offset = chain & 16777215u32;
         let window_active = get!(GLOBALS).window_mask_params.x >= 0.5;
@@ -991,7 +1015,7 @@ mod source {
             }
         }
 
-        if window_active {
+        if apply_window_mask && window_active {
             let mask = get!(GLOBALS).window_mask;
             fade = fade * content_mask_fade(mask.bounds, mask.fade_out, position);
             if !(owns_cutout && mask_is_own_cutout(mask, own_bounds, own_radii)) {
