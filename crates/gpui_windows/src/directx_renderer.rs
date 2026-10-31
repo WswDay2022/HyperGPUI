@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use hgpui::ResultExt;
 use windows::{
     Win32::{
-        Foundation::HWND,
+        Foundation::{HWND, RECT},
         Graphics::{
             Direct3D::*,
             Direct3D11::*,
@@ -34,6 +34,46 @@ fn max_blur_radius(filters: &[ScaledFilter]) -> f32 {
     filters.iter().fold(0.0, |acc, filter| match filter {
         ScaledFilter::Blur(radius) => acc.max(radius.0),
     })
+}
+
+/// The half-resolution scissor region the blur passes may write, matching the wgpu backend.
+///
+/// A separable gaussian at half resolution reads one kernel reach (3σ = 1.5× the full-res blur
+/// radius in half-res texels) beyond each pixel it computes. The composite only samples the
+/// element box (backdrop) or its 3σ dilation (content filter), so the scissor adds two reaches
+/// for content filters and one for backdrops around that sample region.
+fn blur_scissor_region(
+    bounds: Bounds<ScaledPixels>,
+    blur_radius: f32,
+    clip_rounded: bool,
+    width: u32,
+    height: u32,
+) -> Option<[u32; 4]> {
+    let half_w = (width / 2).max(1);
+    let half_h = (height / 2).max(1);
+    let kernel_reach = 3.0 * blur_radius; // full-resolution pixels
+    let composite_dilation = if clip_rounded { 0.0 } else { kernel_reach };
+    let scissor_dilation = composite_dilation + kernel_reach;
+    let x0 = (((bounds.origin.x.0 - scissor_dilation) * 0.5)
+        .floor()
+        .max(0.0) as u32)
+        .min(half_w);
+    let y0 = (((bounds.origin.y.0 - scissor_dilation) * 0.5)
+        .floor()
+        .max(0.0) as u32)
+        .min(half_h);
+    let x1 = ((((bounds.origin.x.0 + bounds.size.width.0 + scissor_dilation) * 0.5)
+        .ceil()
+        .max(0.0) as u32)
+        .min(half_w))
+    .max(x0);
+    let y1 = ((((bounds.origin.y.0 + bounds.size.height.0 + scissor_dilation) * 0.5)
+        .ceil()
+        .max(0.0) as u32)
+        .min(half_h))
+    .max(y0);
+    let region = [x0, y0, x1 - x0, y1 - y0];
+    (region[2] > 0 && region[3] > 0).then_some(region)
 }
 
 pub(crate) const DISABLE_DIRECT_COMPOSITION: &str = "GPUI_DISABLE_DIRECT_COMPOSITION";
@@ -223,6 +263,11 @@ struct DirectXGlobalElements {
     /// Clamp-addressed sampler used by the blur passes: gaussian taps may leave the texture at
     /// the window edges, and must clamp like CSS rather than wrap around to the far side.
     blur_sampler: Option<ID3D11SamplerState>,
+    /// Rasterizer state with scissor disabled, restored after the scissored blur passes.
+    rasterizer_state: Option<ID3D11RasterizerState>,
+    /// Rasterizer state with scissor enabled, used by the blur passes so they only touch the
+    /// blurred element's region instead of the whole viewport.
+    scissor_rasterizer_state: Option<ID3D11RasterizerState>,
 }
 
 struct Annotation<'a>(&'a ID3DUserDefinedAnnotation);
@@ -1151,6 +1196,9 @@ impl DirectXRenderer {
         source_srv: &Option<ID3D11ShaderResourceView>,
         params: BlurParams,
         viewport: &D3D11_VIEWPORT,
+        // `[x, y, width, height]` in target pixels. The blur passes are scissored to the blurred
+        // element's region (plus the kernel reach) instead of touching the whole viewport.
+        scissor: Option<[u32; 4]>,
         topology: D3D_PRIMITIVE_TOPOLOGY,
         vertex_count: u32,
         clear: bool,
@@ -1170,6 +1218,20 @@ impl DirectXRenderer {
             }
             ctx.OMSetRenderTargets(Some(slice::from_ref(target_rtv)), None);
             ctx.RSSetViewports(Some(slice::from_ref(viewport)));
+            if let Some([x, y, width, height]) = scissor {
+                let rect = RECT {
+                    left: x as i32,
+                    top: y as i32,
+                    right: (x + width) as i32,
+                    bottom: (y + height) as i32,
+                };
+                ctx.RSSetScissorRects(Some(slice::from_ref(&rect)));
+                if let Some(state) = self.globals.scissor_rasterizer_state.as_ref() {
+                    ctx.RSSetState(state);
+                }
+            } else if let Some(state) = self.globals.rasterizer_state.as_ref() {
+                ctx.RSSetState(state);
+            }
             ctx.IASetPrimitiveTopology(topology);
             ctx.VSSetShader(vertex, None);
             ctx.PSSetShader(fragment, None);
@@ -1233,6 +1295,15 @@ impl DirectXRenderer {
             MinDepth: 0.0,
             MaxDepth: 1.0,
         };
+        // Match the wgpu backend: the gaussian reads up to one kernel reach beyond every pixel
+        // it writes, so the scissored passes carry an extra reach of valid data around the
+        // composite region. Without this, taps near the scissor edge read stale texels from a
+        // previous frame and paint a contaminated band along the blur's border.
+        let Some(scissor) =
+            blur_scissor_region(bounds, blur_radius, clip_rounded, self.width, self.height)
+        else {
+            return Ok(());
+        };
         let (full_vp, ping_rtv, ping_srv, pong_rtv, pong_srv) = {
             let r = self.resources.as_ref().context("resources missing")?;
             (
@@ -1259,6 +1330,7 @@ impl DirectXRenderer {
                 ..Default::default()
             },
             &half_vp,
+            Some(scissor),
             D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
             3,
             true,
@@ -1277,6 +1349,7 @@ impl DirectXRenderer {
                 ..Default::default()
             },
             &half_vp,
+            Some(scissor),
             D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
             3,
             true,
@@ -1295,6 +1368,7 @@ impl DirectXRenderer {
                 ..Default::default()
             },
             &half_vp,
+            Some(scissor),
             D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
             3,
             true,
@@ -1317,6 +1391,7 @@ impl DirectXRenderer {
                 ..Default::default()
             },
             &full_vp,
+            None,
             D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP,
             4,
             false,
@@ -1366,6 +1441,7 @@ impl DirectXRenderer {
                 ..Default::default()
             },
             &full_vp,
+            None,
             D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP,
             4,
             false,
@@ -1394,6 +1470,7 @@ impl DirectXRenderer {
                 ..Default::default()
             },
             &full_vp,
+            None,
             D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
             3,
             true,
@@ -1735,6 +1812,8 @@ impl DirectXGlobalElements {
             mask_uploaded: None,
             sampler,
             blur_sampler,
+            rasterizer_state: Some(create_rasterizer_state(device, false)?),
+            scissor_rasterizer_state: Some(create_rasterizer_state(device, true)?),
         })
     }
 
@@ -2337,7 +2416,10 @@ fn set_viewport(device_context: &ID3D11DeviceContext, width: f32, height: f32) -
 }
 
 #[inline]
-fn set_rasterizer_state(device: &ID3D11Device, device_context: &ID3D11DeviceContext) -> Result<()> {
+fn create_rasterizer_state(
+    device: &ID3D11Device,
+    scissor: bool,
+) -> Result<ID3D11RasterizerState> {
     let desc = D3D11_RASTERIZER_DESC {
         FillMode: D3D11_FILL_SOLID,
         CullMode: D3D11_CULL_NONE,
@@ -2346,15 +2428,20 @@ fn set_rasterizer_state(device: &ID3D11Device, device_context: &ID3D11DeviceCont
         DepthBiasClamp: 0.0,
         SlopeScaledDepthBias: 0.0,
         DepthClipEnable: true.into(),
-        ScissorEnable: false.into(),
+        ScissorEnable: scissor.into(),
         MultisampleEnable: true.into(),
         AntialiasedLineEnable: false.into(),
     };
-    let rasterizer_state = unsafe {
+    unsafe {
         let mut state = None;
         device.CreateRasterizerState(&desc, Some(&mut state))?;
-        state.unwrap()
-    };
+        Ok(state.unwrap())
+    }
+}
+
+#[inline]
+fn set_rasterizer_state(device: &ID3D11Device, device_context: &ID3D11DeviceContext) -> Result<()> {
+    let rasterizer_state = create_rasterizer_state(device, false)?;
     unsafe { device_context.RSSetState(&rasterizer_state) };
     Ok(())
 }
@@ -2886,7 +2973,7 @@ mod tests {
     // `#[test]` attribute and blows up `#[test]` expansion with an infinite
     // recursion. Import only what this module needs, explicitly.
     use super::{
-        create_blend_state, create_blend_state_for_path_rasterization,
+        blur_scissor_region, create_blend_state, create_blend_state_for_path_rasterization,
         create_blend_state_for_path_sprite, create_blend_state_no_blend,
         create_buffer, create_buffer_view, create_buffer_view_range, corner_radii_array, create_blur_sampler,
         create_color_target, create_constant_buffer,
@@ -3564,6 +3651,35 @@ mod tests {
             context.PSSetShaderResources(3, Some(&null_srv));
         }
         Ok(())
+    }
+
+    #[test]
+    fn blur_scissor_covers_the_element_band_not_the_viewport() {
+        let titlebar = bounds(
+            point(ScaledPixels(0.0), ScaledPixels(0.0)),
+            size(ScaledPixels(1911.0), ScaledPixels(50.0)),
+        );
+        let region = blur_scissor_region(titlebar, 40.0, true, 1911, 1090)
+            .expect("the titlebar band is non-empty");
+        assert_eq!(region, [0, 0, 955, 85]);
+        let half_viewport_area = (1911u64 / 2) * (1090u64 / 2);
+        assert!(
+            u64::from(region[2]) * u64::from(region[3]) * 4 < half_viewport_area,
+            "the blur scissor must cover far less than the viewport"
+        );
+
+        // Content blur samples a region dilated by its kernel, so its scissor is taller.
+        let content_region = blur_scissor_region(titlebar, 40.0, false, 1911, 1090)
+            .expect("the dilated band is non-empty");
+        assert_eq!(content_region[2], region[2]);
+        assert!(content_region[3] > region[3]);
+
+        // A blur entirely outside the viewport has nothing to write.
+        let outside = bounds(
+            point(ScaledPixels(-1000.0), ScaledPixels(-1000.0)),
+            size(ScaledPixels(10.0), ScaledPixels(10.0)),
+        );
+        assert!(blur_scissor_region(outside, 4.0, true, 100, 100).is_none());
     }
 
     /// A blurred element must not dissolve at its own border. The downsample reflects taps that
