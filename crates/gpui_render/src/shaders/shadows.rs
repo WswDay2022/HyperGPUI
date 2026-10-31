@@ -83,6 +83,23 @@ pub mod shadow {
     }
 
     pub fn shadow_coverage(shadow: Shadow, position: Vec2f) -> f32 {
+        // A point more than 4σ inside a drop shadow's own outline is inside every Gaussian
+        // sample, so its coverage is exactly 1. Skipping the integration here removes the
+        // expensive erf/exp work for the whole interior of large shadows (the visible cost
+        // lives in the 3σ edge band).
+        if !shadow_is_inset(shadow) && shadow.blur_radius > 0.0 {
+            let margin = GAUSSIAN_CUTOFF_STANDARD_DEVIATIONS * shadow.blur_radius
+                + shadow.blur_radius;
+            if rounded_rectangle_signed_distance(
+                position,
+                shadow.bounds,
+                shadow.corner_radii,
+            ) < -margin
+            {
+                return 1.0;
+            }
+        }
+
         let mut coverage = 0.0;
         if shadow.blur_radius == 0.0 {
             coverage = antialiased_coverage(rounded_rectangle_signed_distance(
