@@ -89,11 +89,11 @@ fn vertex_output_shape(module: &naga::Module, entry_name: &str) -> (usize, u32) 
 fn ordinary_vertex_interfaces_stay_within_compact_budgets() {
     let module = naga::front::wgsl::parse_str(&base::WGSL_SOURCE.wgsl_source().unwrap()).unwrap();
     for (entry, maximum_shape) in [
-        // The local CSS-transform patch adds `local_position` + `scene_position`,
-        // so every transformed pipeline gets two extra locations.
-        ("vertex_smoothed_quad", (15, 50)),
+        // The local CSS-transform patch adds `local_position` + `scene_position` + the flat
+        // `aa` factor, so every transformed pipeline gets three extra locations.
+        ("vertex_smoothed_quad", (16, 51)),
         ("vertex_smoothed_shadow", (10, 37)),
-        ("vertex_smoothed_polychrome_sprite", (9, 24)),
+        ("vertex_smoothed_polychrome_sprite", (10, 25)),
         ("blur_composite_vertex", (2, 6)),
     ] {
         let actual_shape = vertex_output_shape(&module, entry);

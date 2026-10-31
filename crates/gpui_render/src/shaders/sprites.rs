@@ -20,7 +20,7 @@ pub mod underline {
     }
     storage!(group(1), binding(0), UNDERLINES: RuntimeArray<Underline>);
 
-    pub fn wavy_underline_coverage(underline: Underline, position: Vec2f) -> f32 {
+    pub fn wavy_underline_coverage(underline: Underline, position: Vec2f, aa: f32) -> f32 {
         let normalized_position =
             (position - underline.bounds.origin) / underline.bounds.size.y - vec2f(0.0, 0.5);
         let angular_frequency =
@@ -33,7 +33,7 @@ pub mod underline {
             / sqrt(1.0 + wave_slope * wave_slope)
             * underline.bounds.size.y;
         let stroke_distance = abs(signed_distance) - underline.thickness * 0.5;
-        antialiased_coverage_transformed(stroke_distance, underline.transformation)
+        antialiased_coverage(stroke_distance * aa)
     }
 
     #[derive(Wgsl)]
@@ -52,6 +52,9 @@ pub mod underline {
         pub local_position: Vec2f,
         #[location(5)]
         pub scene_position: Vec2f,
+        #[location(6)]
+        #[interpolate(flat)]
+        pub aa: f32,
     }
 
     #[vertex]
@@ -76,6 +79,7 @@ pub mod underline {
             ),
             local_position,
             scene_position,
+            aa: aa_scale(underline.transformation),
         }
     }
 
@@ -102,7 +106,7 @@ pub mod underline {
                 input.local_position,
                 underline.bounds,
                 zero_corners(),
-            ) * aa_scale(underline.transformation);
+            ) * input.aa;
             return blend_color(
                 input.color,
                 antialiased_coverage(max(box_distance, mask.distance)) * mask.fade,
@@ -110,7 +114,7 @@ pub mod underline {
         }
         blend_color(
             input.color,
-            wavy_underline_coverage(underline, input.local_position)
+            wavy_underline_coverage(underline, input.local_position, input.aa)
                 * antialiased_coverage(mask.distance)
                 * mask.fade,
         )
@@ -304,6 +308,9 @@ pub mod polychrome_sprite {
         pub local_position: Vec2f,
         #[location(5)]
         pub scene_position: Vec2f,
+        #[location(6)]
+        #[interpolate(flat)]
+        pub aa: f32,
     }
 
     #[vertex]
@@ -320,6 +327,7 @@ pub mod polychrome_sprite {
             clip_distances: vertex.clip_distances,
             local_position: vertex.local_position,
             scene_position: vertex.scene_position,
+            aa: aa_scale(sprite.transformation),
         }
     }
 
@@ -351,7 +359,7 @@ pub mod polychrome_sprite {
             input.local_position,
             sprite.bounds,
             sprite.corner_radii,
-        ) * aa_scale(sprite.transformation);
+        ) * input.aa;
         blend_color(
             color,
             sprite.opacity
@@ -387,6 +395,9 @@ pub mod polychrome_sprite {
         pub local_position: Vec2f,
         #[location(8)]
         pub scene_position: Vec2f,
+        #[location(9)]
+        #[interpolate(flat)]
+        pub aa: f32,
     }
 
     #[vertex]
@@ -414,6 +425,7 @@ pub mod polychrome_sprite {
             superellipse_power: prepared.superellipse_power,
             local_position: vertex.local_position,
             scene_position: vertex.scene_position,
+            aa: aa_scale(sprite.transformation),
         }
     }
 
@@ -444,7 +456,7 @@ pub mod polychrome_sprite {
                 smoothing_factors: input.smoothing_factors,
                 superellipse_power: input.superellipse_power,
             },
-        ) * aa_scale(sprite.transformation);
+        ) * input.aa;
         blend_color(
             color,
             sprite.opacity

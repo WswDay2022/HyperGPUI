@@ -343,6 +343,9 @@ mod source {
     /// Distance fields of transformed primitives are evaluated in local space; multiplying the
     /// distance by this factor turns it into device pixels. Translations yield 1, so untransformed
     /// and translated UI matches upstream's `0.5 - d` exactly.
+    ///
+    /// The factor is constant for a whole primitive, so vertex shaders compute it once and pass
+    /// it to the fragment stage as a flat varying.
     pub fn aa_scale(transformation: TransformationMatrix) -> f32 {
         let axis_x = vec2f(
             transformation.rotation_scale[0usize][0usize],
@@ -357,14 +360,6 @@ mod source {
         let c = dot(axis_y, axis_y);
         let discriminant = sqrt(max(0.25 * (a - c) * (a - c) + b * b, 0.0));
         sqrt(max(0.5 * (a + c) + discriminant, 0.0))
-    }
-
-    /// Coverage of a local-space distance field under `transformation`.
-    pub fn antialiased_coverage_transformed(
-        signed_distance: f32,
-        transformation: TransformationMatrix,
-    ) -> f32 {
-        antialiased_coverage(signed_distance * aa_scale(transformation))
     }
 
     pub fn premultiply(color: Vec4f, coverage: f32) -> Vec4f {

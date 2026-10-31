@@ -513,6 +513,8 @@ pub mod quad {
         pub fill: PreparedPaint,
         pub local_position: Vec2f,
         pub scene_position: Vec2f,
+        /// The transform's maximum singular value, computed once per vertex and passed flat.
+        pub aa: f32,
     }
 
     pub fn prepare_quad_vertex(vertex_id: u32, instance_id: u32, quad: Quad) -> QuadVertexData {
@@ -534,6 +536,7 @@ pub mod quad {
             fill: prepare_paint(Paint::new(quad.background, quad.bounds)),
             local_position,
             scene_position,
+            aa: aa_scale(quad.transformation),
         }
     }
 
@@ -568,6 +571,9 @@ pub mod quad {
         pub local_position: Vec2f,
         #[location(9)]
         pub scene_position: Vec2f,
+        #[location(10)]
+        #[interpolate(flat)]
+        pub aa: f32,
     }
 
     #[vertex]
@@ -589,6 +595,7 @@ pub mod quad {
             border_color1: vertex.border.color1,
             local_position: vertex.local_position,
             scene_position: vertex.scene_position,
+            aa: vertex.aa,
         }
     }
 
@@ -618,7 +625,7 @@ pub mod quad {
             quad.corner_radii,
             mask_is_own,
         );
-        let aa = aa_scale(quad.transformation);
+        let aa = input.aa;
 
         let fill_color = paint_color(
             Paint::new(quad.background, quad.bounds),
@@ -662,8 +669,7 @@ pub mod quad {
                 border_color.w *= dashed_border_alpha(quad, geometry);
             }
             let blended_border = over(fill_color, border_color);
-            let factor =
-                antialiased_coverage_transformed(distances.inner, quad.transformation);
+            let factor = antialiased_coverage(distances.inner * aa);
             color = mix(
                 fill_color,
                 blended_border,
@@ -722,6 +728,9 @@ pub mod quad {
         pub local_position: Vec2f,
         #[location(14)]
         pub scene_position: Vec2f,
+        #[location(15)]
+        #[interpolate(flat)]
+        pub aa: f32,
     }
 
     #[vertex]
@@ -755,6 +764,7 @@ pub mod quad {
             border_color1: vertex.border.color1,
             local_position: vertex.local_position,
             scene_position: vertex.scene_position,
+            aa: vertex.aa,
         }
     }
 
@@ -781,7 +791,7 @@ pub mod quad {
             quad.corner_radii,
             mask_is_own,
         );
-        let aa = aa_scale(quad.transformation);
+        let aa = input.aa;
 
         let fill_color = paint_color(
             Paint::new(quad.background, quad.bounds),
@@ -909,7 +919,7 @@ pub mod quad {
             }
 
             let blended_border = over(fill_color, border_color);
-            let factor = antialiased_coverage_transformed(inner, quad.transformation);
+            let factor = antialiased_coverage(inner * aa);
 
             color = mix(
                 fill_color,
