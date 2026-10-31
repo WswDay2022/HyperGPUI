@@ -897,6 +897,35 @@ mod source {
         alpha
     }
 
+    /// Whether every edge of `mask` falls on an integer device pixel.
+    ///
+    /// For an unrounded mask whose edges are pixel-aligned, every pixel centre is either half a
+    /// pixel inside (coverage saturated to 1) or outside and already discarded by the vertex
+    /// clip distances, so the SDF adds nothing. A fractional edge still needs the SDF ramp.
+    pub fn mask_bounds_are_aligned(mask: ContentMask) -> bool {
+        fract(mask.bounds.origin.x) == 0.0
+            && fract(mask.bounds.origin.y) == 0.0
+            && fract(mask.bounds.size.x) == 0.0
+            && fract(mask.bounds.size.y) == 0.0
+    }
+
+    /// Whether a fragment is far enough inside `mask` that the mask's coverage is exactly 1.
+    ///
+    /// The rounded-rectangle distance is `(distance to the inset rect) - radius`; a point at
+    /// least `radius + 1` inside every edge is at least one pixel inside the inset rect, so its
+    /// coverage is saturated and the expensive SDF cannot affect the combined `max` field.
+    pub fn mask_is_far_inside(position: Vec2f, mask: ContentMask) -> bool {
+        let radius = max(
+            max(mask.corner_radii.top_left, mask.corner_radii.top_right),
+            max(mask.corner_radii.bottom_right, mask.corner_radii.bottom_left),
+        );
+        let margin = radius + 1.0;
+        position.x > mask.bounds.origin.x + margin
+            && position.x < mask.bounds.origin.x + mask.bounds.size.x - margin
+            && position.y > mask.bounds.origin.y + margin
+            && position.y < mask.bounds.origin.y + mask.bounds.size.y - margin
+    }
+
     /// Whether `mask` is exactly the primitive's own outline.
     pub fn mask_is_own_cutout(mask: ContentMask, own_bounds: Bounds, own_radii: Corners) -> bool {
         same_origin(mask.bounds, own_bounds)
@@ -953,7 +982,14 @@ mod source {
             // the normal painter (tests / backends that do not upload the arena). Fall back to
             // the single pre-intersected mask, which is the legacy behaviour.
             fade = content_mask_fade(single_mask.bounds, single_mask.fade_out, single_mask_position);
-            if !(owns_cutout && mask_is_own_cutout(single_mask, own_bounds, own_radii)) {
+            // A pixel-aligned unrounded mask is a rectangle whose edges coincide with the
+            // vertex clip distances, so its SDF only recomputes a saturated coverage. Fractional
+            // edges still take the SDF ramp.
+            if (!Corners::is_zero(single_mask.corner_radii)
+                || !mask_bounds_are_aligned(single_mask))
+                && !(owns_cutout && mask_is_own_cutout(single_mask, own_bounds, own_radii))
+                && !mask_is_far_inside(single_mask_position, single_mask)
+            {
                 distance = rounded_rectangle_signed_distance(
                     single_mask_position,
                     single_mask.bounds,
@@ -965,7 +1001,13 @@ mod source {
             while index < count {
                 let mask = get!(CONTENT_MASKS)[(offset + index) as usize];
                 fade = fade * content_mask_fade(mask.bounds, mask.fade_out, position);
-                if !(owns_cutout && mask_is_own_cutout(mask, own_bounds, own_radii)) {
+                // Same rectangle fast path as the single-mask branch. Rounded masks that are
+                // far inside their own bounds contribute a saturated coverage, so skipping the
+                // SDF cannot change the combined `max` distance.
+                if (!Corners::is_zero(mask.corner_radii) || !mask_bounds_are_aligned(mask))
+                    && !(owns_cutout && mask_is_own_cutout(mask, own_bounds, own_radii))
+                    && !mask_is_far_inside(position, mask)
+                {
                     distance = max(
                         distance,
                         rounded_rectangle_signed_distance(position, mask.bounds, mask.corner_radii),
