@@ -3547,7 +3547,8 @@ impl Window {
             let mask = mask.intersect(&self.content_mask());
             self.content_mask_stack.push(mask);
             self.raw_content_mask_stack.push(raw_mask);
-            let chain = self.intern_current_mask_chain();
+            let snapped_mask = self.snapped_mask(&mask);
+            let chain = self.intern_current_mask_chain(Some(snapped_mask));
             self.mask_chain_stack.push(chain);
             let result = f(self);
             self.mask_chain_stack.pop();
@@ -3563,11 +3564,27 @@ impl Window {
     /// reference primitives carry. The masks are snapped/scaled exactly like
     /// [`Window::snapped_content_mask`] so the GPU chain lines up with the single mask used for
     /// culling and clip distances.
-    fn intern_current_mask_chain(&mut self) -> u32 {
-        if !Self::mask_chain_needed(&self.raw_content_mask_stack) {
+    ///
+    /// Only masks that carry information the single mask cannot represent are kept:
+    /// - unrounded, unfaded rectangles only constrain bounds, which the intersected single mask
+    ///   already holds, so they are dropped;
+    /// - a lone rounded mask is compared against the intersected mask corner by corner, and the
+    ///   chain is dropped when the CPU-side fold is provably exact.
+    fn intern_current_mask_chain(
+        &mut self,
+        single_mask: Option<ContentMask<ScaledPixels>>,
+    ) -> u32 {
+        let filtered = self.filtered_chain_masks();
+        if filtered.is_empty() {
             return 0;
         }
-        self.intern_current_mask_chain_unconditionally()
+        if filtered.len() == 1
+            && single_mask
+                .is_some_and(|single| Self::rounded_mask_is_exact(&filtered[0], &single))
+        {
+            return 0;
+        }
+        self.intern_mask_slice(&filtered)
     }
 
     /// Path vertices no longer duplicate the mask's corner radii/fades (they live in the chain),
@@ -3578,66 +3595,119 @@ impl Window {
         if current != 0 {
             return current;
         }
-        if !self
-            .raw_content_mask_stack
-            .iter()
-            .any(Self::mask_is_rounded_or_faded)
-        {
+        let filtered = self.filtered_chain_masks();
+        if filtered.is_empty() {
             return 0;
         }
-        self.intern_current_mask_chain_unconditionally()
+        self.intern_mask_slice(&filtered)
     }
 
-    fn intern_current_mask_chain_unconditionally(&mut self) -> u32 {
+    /// The raw masks that actually contribute distance/fade information: rounded or faded ones.
+    /// Unrounded, unfaded rectangles are fully represented by the intersected single mask (the
+    /// vertex clip distances enforce its bounds), so keeping them in the chain only costs work.
+    fn filtered_chain_masks(&self) -> SmallVec<[ContentMask<ScaledPixels>; 8]> {
         let scale_factor = self.scale_factor();
-        let masks: SmallVec<[ContentMask<ScaledPixels>; 8]> = self
-            .raw_content_mask_stack
+        self.raw_content_mask_stack
             .iter()
+            .filter(|mask| Self::mask_is_rounded_or_faded(mask))
             .map(|mask| ContentMask {
                 bounds: self.snap_bounds(mask.bounds),
                 corner_radii: mask.corner_radii.scale(scale_factor),
                 fade_out: mask.fade_out.scale(scale_factor),
             })
-            .collect();
-        self.next_frame.scene.intern_mask_chain(&masks)
+            .collect()
+    }
+
+    fn snapped_mask(&self, mask: &ContentMask<Pixels>) -> ContentMask<ScaledPixels> {
+        let scale_factor = self.scale_factor();
+        ContentMask {
+            bounds: self.snap_bounds(mask.bounds),
+            corner_radii: mask.corner_radii.scale(scale_factor),
+            fade_out: mask.fade_out.scale(scale_factor),
+        }
+    }
+
+    /// Whether `merged` (the CPU-side intersection of every raw mask) exactly represents the
+    /// clip region of `rounded` intersected with axis-aligned rectangles.
+    ///
+    /// `ContentMask::intersect` folds radii corner by corner. At a corner the two bounds share,
+    /// the folded radius must equal the raw one. Where they do not share a corner, the raw arc
+    /// can only intrude into `merged` if `merged` reaches into that corner's radius square; if
+    /// `merged` stays outside every such square, the fold is exact and no chain is needed.
+    /// Faded masks are deliberately excluded: `intersect` selects one fade per edge rather than
+    /// multiplying them, so a chain is the only exact representation.
+    fn rounded_mask_is_exact(
+        rounded: &ContentMask<ScaledPixels>,
+        merged: &ContentMask<ScaledPixels>,
+    ) -> bool {
+        let fade = rounded.fade_out;
+        if fade.top.0 > 0.0 || fade.right.0 > 0.0 || fade.bottom.0 > 0.0 || fade.left.0 > 0.0 {
+            return false;
+        }
+
+        let rb = rounded.bounds;
+        let mb = merged.bounds;
+        let rl = rb.origin.x.0;
+        let rt = rb.origin.y.0;
+        let rright = rl + rb.size.width.0;
+        let rbottom = rt + rb.size.height.0;
+        let ml = mb.origin.x.0;
+        let mt = mb.origin.y.0;
+        let mright = ml + mb.size.width.0;
+        let mbottom = mt + mb.size.height.0;
+
+        let rr = rounded.corner_radii;
+        let mr = merged.corner_radii;
+
+        // Top-left: the arc square is [rl, rl + r] x [rt, rt + r].
+        if ml == rl && mt == rt {
+            if mr.top_left != rr.top_left {
+                return false;
+            }
+        } else if !(ml >= rl + rr.top_left.0 || mt >= rt + rr.top_left.0) {
+            return false;
+        }
+
+        // Top-right: [rright - r, rright] x [rt, rt + r].
+        if mright == rright && mt == rt {
+            if mr.top_right != rr.top_right {
+                return false;
+            }
+        } else if !(mright <= rright - rr.top_right.0 || mt >= rt + rr.top_right.0) {
+            return false;
+        }
+
+        // Bottom-right: [rright - r, rright] x [rbottom - r, rbottom].
+        if mright == rright && mbottom == rbottom {
+            if mr.bottom_right != rr.bottom_right {
+                return false;
+            }
+        } else if !(mright <= rright - rr.bottom_right.0
+            || mbottom <= rbottom - rr.bottom_right.0)
+        {
+            return false;
+        }
+
+        // Bottom-left: [rl, rl + r] x [rbottom - r, rbottom].
+        if ml == rl && mbottom == rbottom {
+            if mr.bottom_left != rr.bottom_left {
+                return false;
+            }
+        } else if !(ml >= rl + rr.bottom_left.0 || mbottom <= rbottom - rr.bottom_left.0) {
+            return false;
+        }
+
+        true
+    }
+
+    fn intern_mask_slice(&mut self, masks: &[ContentMask<ScaledPixels>]) -> u32 {
+        self.next_frame.scene.intern_mask_chain(masks)
     }
 
     /// The clip chain for primitives painted right now (`0` when no clip scope is active).
     #[inline]
     pub(crate) fn mask_chain(&self) -> u32 {
         self.mask_chain_stack.last().copied().unwrap_or(0)
-    }
-
-    /// Chain reference that additionally clips to `extra`, a synthetic mask in scene space
-    /// (used by the border-strip optimization, whose strips are not ancestor clips).
-    pub(crate) fn mask_chain_with_extra_scaled(
-        &mut self,
-        extra: ContentMask<ScaledPixels>,
-    ) -> u32 {
-        if !Self::mask_chain_needed_scaled(&self.raw_content_mask_stack, Some(extra)) {
-            return 0;
-        }
-        let scale_factor = self.scale_factor();
-        let mut masks: SmallVec<[ContentMask<ScaledPixels>; 9]> = self
-            .raw_content_mask_stack
-            .iter()
-            .map(|mask| ContentMask {
-                bounds: self.snap_bounds(mask.bounds),
-                corner_radii: mask.corner_radii.scale(scale_factor),
-                fade_out: mask.fade_out.scale(scale_factor),
-            })
-            .collect();
-        masks.push(extra);
-        self.next_frame.scene.intern_mask_chain(&masks)
-    }
-
-    /// Whether the exact intersection of these masks needs evaluation in the shader.
-    ///
-    /// A single mask is always exact. Any number of axis-aligned rectangles also intersect to a
-    /// rectangle, so the CPU-side single mask already represents them exactly. Only a rounded or
-    /// faded mask combined with another mask loses information in `ContentMask::intersect`.
-    fn mask_chain_needed(masks: &[ContentMask<Pixels>]) -> bool {
-        masks.len() >= 2 && masks.iter().any(Self::mask_is_rounded_or_faded)
     }
 
     fn mask_is_rounded_or_faded(mask: &ContentMask<Pixels>) -> bool {
@@ -3649,24 +3719,6 @@ impl Window {
             || mask.fade_out.right.0 > 0.0
             || mask.fade_out.bottom.0 > 0.0
             || mask.fade_out.left.0 > 0.0
-    }
-
-    fn mask_chain_needed_scaled(
-        masks: &[ContentMask<Pixels>],
-        extra: Option<ContentMask<ScaledPixels>>,
-    ) -> bool {
-        let extra_needs_chain = extra.is_some_and(|mask| {
-            mask.corner_radii.top_left.0 > 0.0
-                || mask.corner_radii.top_right.0 > 0.0
-                || mask.corner_radii.bottom_right.0 > 0.0
-                || mask.corner_radii.bottom_left.0 > 0.0
-                || mask.fade_out.top.0 > 0.0
-                || mask.fade_out.right.0 > 0.0
-                || mask.fade_out.bottom.0 > 0.0
-                || mask.fade_out.left.0 > 0.0
-        });
-        masks.len() + usize::from(extra.is_some()) >= 2
-            && (extra_needs_chain || masks.iter().any(Self::mask_is_rounded_or_faded))
     }
 
     /// Replays a deferred draw under the raw clip masks captured when it was deferred. The main
@@ -3682,7 +3734,7 @@ impl Window {
         }
         let base = self.raw_content_mask_stack.len();
         self.raw_content_mask_stack.extend_from_slice(masks);
-        let chain = self.intern_current_mask_chain();
+        let chain = self.intern_current_mask_chain(None);
         self.mask_chain_stack.push(chain);
         let result = f(self);
         self.mask_chain_stack.pop();
@@ -4535,9 +4587,11 @@ impl Window {
             };
             let content_mask = quad.content_mask.intersect(&strip_mask);
             if !content_mask.bounds.is_empty() {
-                // The strip is a synthetic clip, not an ancestor mask, so the shader chain must
-                // carry it explicitly in addition to the raw ancestor stack.
-                let mask_chain = self.mask_chain_with_extra_scaled(strip_mask);
+                // The strip mask is an unrounded, unfaded rectangle, so its bounds are already
+                // enforced by `content_mask` and the vertex clip distances; the chain only needs
+                // the rounded ancestors. Re-check exactness against the *strip* mask: a strip at
+                // a rounded corner can be the case where the folded single mask loses the arc.
+                let mask_chain = self.intern_current_mask_chain(Some(content_mask));
                 self.next_frame.scene.insert_primitive(Quad {
                     content_mask,
                     mask_chain,

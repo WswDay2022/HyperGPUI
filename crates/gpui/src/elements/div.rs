@@ -4885,6 +4885,89 @@ mod tests {
         assert_eq!(start.corner_radii, end.corner_radii);
     }
 
+    #[hgpui::test]
+    fn redundant_rectangular_masks_stay_out_of_the_chain(cx: &mut TestAppContext) {
+        struct ChainProbe {
+            kind: u8,
+        }
+        impl Render for ChainProbe {
+            fn render(
+                &mut self,
+                _window: &mut Window,
+                _cx: &mut Context<Self>,
+            ) -> impl IntoElement {
+                let root = div().size(px(100.)).overflow_hidden().rounded(px(16.));
+                match self.kind {
+                    // Full-size square clip: intersects to exactly the rounded mask.
+                    0 => root
+                        .child(
+                            div()
+                                .size_full()
+                                .overflow_hidden()
+                                .child(div().size_full().background(crate::rgb(0xFF0000))),
+                        )
+                        .into_any_element(),
+                    // Square clip inset past every corner radius: exact as well.
+                    1 => root
+                        .child(
+                            div()
+                                .absolute()
+                                .left(px(20.))
+                                .top(px(20.))
+                                .w(px(60.))
+                                .h(px(60.))
+                                .overflow_hidden()
+                                .child(div().size_full().background(crate::rgb(0xFF0000))),
+                        )
+                        .into_any_element(),
+                    // The child corner reaches into the parent's radius square: the folded
+                    // mask is lossy, so the rounded parent must stay in the chain.
+                    _ => root
+                        .child(
+                            div()
+                                .absolute()
+                                .left(px(4.))
+                                .top(px(4.))
+                                .w(px(100.))
+                                .h(px(100.))
+                                .overflow_hidden()
+                                .child(div().size_full().background(crate::rgb(0xFF0000))),
+                        )
+                        .into_any_element(),
+                }
+            }
+        }
+
+        for (kind, expect_chain) in [(0u8, false), (1u8, false), (2u8, true)] {
+            let window = cx.add_window(move |_, _| ChainProbe { kind });
+            let window: AnyWindowHandle = window.into();
+            cx.update_window(window, |_, window, cx| {
+                window.draw(cx).clear(cx);
+                let scene = &window.rendered_frame.scene;
+                if expect_chain {
+                    assert!(
+                        !scene.mask_chains.is_empty(),
+                        "kind {kind}: a corner-cutting child must keep the rounded parent in the chain"
+                    );
+                    assert!(
+                        scene.quads.iter().any(|quad| quad.mask_chain != 0),
+                        "kind {kind}: the chain reference must reach the child quad"
+                    );
+                } else {
+                    assert!(
+                        scene.mask_chains.is_empty(),
+                        "kind {kind}: an exactly-folded mask must not allocate a chain"
+                    );
+                    assert!(
+                        scene.quads.iter().all(|quad| quad.mask_chain == 0),
+                        "kind {kind}: no quad should carry a chain"
+                    );
+                }
+            })
+            .unwrap();
+        }
+    }
+
     struct DragTestEmpty;
     impl Render for DragTestEmpty {
         fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
