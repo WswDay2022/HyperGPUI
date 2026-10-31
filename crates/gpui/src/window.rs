@@ -3543,21 +3543,6 @@ impl Window {
     ) -> R {
         self.invalidator.debug_assert_paint_or_prepaint();
         if let Some(mask) = mask {
-            let rounded = mask.corner_radii.top_left.0 > 0.0
-                || mask.corner_radii.top_right.0 > 0.0
-                || mask.corner_radii.bottom_right.0 > 0.0
-                || mask.corner_radii.bottom_left.0 > 0.0;
-            // The outermost rounded mask whose bounds cover (almost) the whole viewport is the
-            // window's own shape. Record it for the shaders, which evaluate its arc directly:
-            // the intersected masks below lose the arc wherever a child's corner is inset.
-            if rounded
-                && self.content_mask_stack.is_empty()
-                && mask.bounds.size.width.0 >= self.viewport_size.width.0 * 0.9
-                && mask.bounds.size.height.0 >= self.viewport_size.height.0 * 0.9
-            {
-                self.next_frame.scene.window_mask =
-                    Some(mask.scale(self.scale_factor()));
-            }
             let raw_mask = mask;
             let mask = mask.intersect(&self.content_mask());
             self.content_mask_stack.push(mask);
@@ -4217,24 +4202,6 @@ impl Window {
         corner_smoothing: f32,
         shadows: &[BoxShadow],
     ) {
-        self.paint_drop_shadows_internal(
-            bounds,
-            corner_radii,
-            corner_smoothing,
-            shadows,
-            false,
-        );
-    }
-
-    /// Paints drop shadows, optionally exempting them from the global window rounded mask.
-    pub(crate) fn paint_drop_shadows_internal(
-        &mut self,
-        bounds: Bounds<Pixels>,
-        corner_radii: Corners<Pixels>,
-        corner_smoothing: f32,
-        shadows: &[BoxShadow],
-        ignore_window_mask: bool,
-    ) {
         self.invalidator.debug_assert_paint();
 
         let scale_factor = self.scale_factor();
@@ -4259,12 +4226,6 @@ impl Window {
                 element_corner_radii,
                 inset_and_mask_chain: Shadow::pack_inset_and_mask_chain(false, mask_chain),
                 corner_smoothing,
-                flags: if ignore_window_mask {
-                    Shadow::IGNORE_WINDOW_MASK
-                } else {
-                    0
-                },
-                padding: [0; 3],
             });
         }
     }
@@ -4312,8 +4273,6 @@ impl Window {
                 element_corner_radii,
                 inset_and_mask_chain: Shadow::pack_inset_and_mask_chain(true, mask_chain),
                 corner_smoothing,
-                flags: 0,
-                padding: [0; 3],
             });
         }
     }

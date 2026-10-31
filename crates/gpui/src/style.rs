@@ -193,11 +193,6 @@ pub struct Style {
     ///
     /// Off by default. Enable with [`Styled::clip_group`].
     pub clip_group: bool,
-    /// Whether this element's own drop shadow is exempt from the window's rounded clip mask.
-    ///
-    /// Off by default. Enable with [`Styled::clip_group_ignore_shadow`] so the shadow can extend
-    /// beyond a rounded window edge.
-    pub clip_group_ignore_shadow: bool,
     /// How much space (in points) should be reserved for the scrollbars of `Overflow::Scroll` and `Overflow::Auto` nodes.
     pub scrollbar_width: AbsoluteLength,
     /// Whether both x and y axis should be scrollable at the same time.
@@ -897,13 +892,7 @@ impl Style {
 
         let transformation = self.paint_transform(bounds, window.scale_factor());
 
-        window.paint_drop_shadows_internal(
-            bounds,
-            corner_radii,
-            corner_smoothing,
-            &self.box_shadow,
-            self.clip_group_ignore_shadow,
-        );
+        window.paint_drop_shadows(bounds, corner_radii, corner_smoothing, &self.box_shadow);
 
         if let Some(ring) = self.ring.outer_quad(bounds, corner_radii, current_color) {
             window.paint_quad(
@@ -1035,7 +1024,6 @@ impl Default for Style {
             },
             overflow_fade: Edges::default(),
             clip_group: false,
-            clip_group_ignore_shadow: false,
             allow_concurrent_scroll: false,
             restrict_scroll_to_axis: false,
             smooth_scroll: None,

@@ -112,12 +112,6 @@ mod source {
         pub viewport_size: Vec2f,
         pub premultiplied_alpha: ShaderBool,
         pub padding: u32,
-        /// `x` = 1 when `window_mask` is active, 0 otherwise; the rest is padding.
-        pub window_mask_params: Vec4f,
-        /// The window's outermost rounded clip in device pixels, evaluated by every fragment
-        /// shader in addition to the primitive's own content mask. This keeps the true window
-        /// arc for descendants whose intersected mask lost it (inset titlebar buttons).
-        pub window_mask: ContentMask,
     }
 
     #[repr(C)]
@@ -652,15 +646,6 @@ mod source {
         saturate(0.5 - 0.5 * approximate_error_function(vec2f(normalized, normalized)).x)
     }
 
-    /// Coverage of the window's own rounded shape at a scene-space position. One when the
-    /// application does not give its window a rounded mask.
-    pub fn window_mask_alpha(position: Vec2f) -> f32 {
-        if get!(GLOBALS).window_mask_params.x < 0.5 {
-            return 1.0;
-        }
-        ContentMask::alpha(get!(GLOBALS).window_mask, position)
-    }
-
     pub fn blend_color(color: Vec4f, alpha_factor: f32) -> Vec4f {
         let alpha = color.w * alpha_factor;
         let multiplier = select(1.0, alpha, is_enabled(get!(GLOBALS).premultiplied_alpha));
@@ -924,7 +909,7 @@ mod source {
 
     /// Exact clip coverage at `position` for a chain of nested content masks.
     ///
-    /// Every raw ancestor mask (and the window's own shaped clip) contributes its rounded-rect
+    /// Every raw ancestor mask contributes its rounded-rect
     /// signed distance; the clip region is their intersection, so the distances combine with
     /// `max` and antialiasing is applied **once** to the combined field. This is what preserves
     /// a parent's corner arc when a child is inset from it — the CPU-side `intersect` can only
@@ -956,33 +941,8 @@ mod source {
         own_radii: Corners,
         owns_cutout: bool,
     ) -> MaskChainSample {
-        content_mask_chain_sample_with_window(
-            chain,
-            position,
-            single_mask,
-            single_mask_position,
-            own_bounds,
-            own_radii,
-            owns_cutout,
-            true,
-        )
-    }
-
-    /// Like [`content_mask_chain_sample`], but can skip the window's global rounded mask.
-    /// Used by the element's own drop shadow when it is explicitly exempt from the window clip.
-    pub fn content_mask_chain_sample_with_window(
-        chain: u32,
-        position: Vec2f,
-        single_mask: ContentMask,
-        single_mask_position: Vec2f,
-        own_bounds: Bounds,
-        own_radii: Corners,
-        owns_cutout: bool,
-        apply_window_mask: bool,
-    ) -> MaskChainSample {
         let count = chain >> 24u32;
         let offset = chain & 16777215u32;
-        let window_active = get!(GLOBALS).window_mask_params.x >= 0.5;
 
         let mut fade = 1.0;
         // `-1e30` is far inside every mask; if every mask is skipped as the primitive's own
@@ -1012,17 +972,6 @@ mod source {
                     );
                 }
                 index = index + 1u32;
-            }
-        }
-
-        if apply_window_mask && window_active {
-            let mask = get!(GLOBALS).window_mask;
-            fade = fade * content_mask_fade(mask.bounds, mask.fade_out, position);
-            if !(owns_cutout && mask_is_own_cutout(mask, own_bounds, own_radii)) {
-                distance = max(
-                    distance,
-                    rounded_rectangle_signed_distance(position, mask.bounds, mask.corner_radii),
-                );
             }
         }
 

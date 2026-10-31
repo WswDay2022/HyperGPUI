@@ -27,16 +27,12 @@ use hgpui_wgpu::wgpu;
 const SIZE: u32 = 64;
 const ROW_BYTES: u32 = SIZE * 4; // 256, already wgpu's required row alignment.
 
-/// Mirrors the WGSL `GlobalParams` (80 bytes).
+/// Mirrors the WGSL `GlobalParams` (16 bytes).
 #[repr(C)]
 struct Globals {
     viewport_size: [f32; 2],
     premultiplied_alpha: u32,
     pad: u32,
-    window_mask_params: [f32; 4],
-    window_mask_bounds: [f32; 4],
-    window_mask_radii: [f32; 4],
-    window_mask_edges: [f32; 4],
 }
 
 /// Mirrors the WGSL `GammaParams` (32 bytes).
@@ -260,7 +256,7 @@ fn wgsl_shader_modules_validate_and_render_quad() {
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(80),
+                    min_binding_size: wgpu::BufferSize::new(16),
                 },
                 count: None,
             },
@@ -347,10 +343,6 @@ fn wgsl_shader_modules_validate_and_render_quad() {
             viewport_size: [SIZE as f32, SIZE as f32],
             premultiplied_alpha: 0,
             pad: 0,
-            window_mask_params: [0.0; 4],
-            window_mask_bounds: [0.0; 4],
-            window_mask_radii: [0.0; 4],
-            window_mask_edges: [0.0; 4],
         }),
     );
     let gamma_buffer = device.create_buffer(&wgpu::BufferDescriptor {

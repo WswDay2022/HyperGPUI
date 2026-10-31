@@ -109,7 +109,7 @@ fn scene_instance_storage_sizes_are_bounded() {
     // Budgets include the local transform matrices and the upstream dash/smoothing fields.
     for (name, actual, maximum) in [
         ("Quad", std::mem::size_of::<hgpui::Quad>(), 304),
-        ("Shadow", std::mem::size_of::<hgpui::Shadow>(), 224),
+        ("Shadow", std::mem::size_of::<hgpui::Shadow>(), 208),
         (
             "PolychromeSprite",
             std::mem::size_of::<hgpui::PolychromeSprite>(),

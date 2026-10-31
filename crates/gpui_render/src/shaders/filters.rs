@@ -94,7 +94,7 @@ pub mod surface {
             locals.content_mask.corner_radii,
             false,
         );
-        color * locals.opacity * mask_coverage * window_mask_alpha(input.position.xy())
+        color * locals.opacity * mask_coverage
     }
 }
 

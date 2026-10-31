@@ -67,11 +67,6 @@ pub struct Scene {
     pub surfaces: Vec<PaintSurface>,
     pub backdrop_filters: Vec<BackdropFilter>,
     pub filter_boundaries: Vec<FilterBoundary>,
-    /// The window's outermost rounded clip, if the application gives the window a rounded
-    /// shape. Unlike per-element content masks this is evaluated directly by every fragment
-    /// shader, so descendants inset from the window corner (titlebar buttons, for example) are
-    /// still clipped by the real arc instead of the lossy intersected mask.
-    pub window_mask: Option<ContentMask<ScaledPixels>>,
     /// Every distinct chain of nested content masks used by this frame, flattened one after
     /// another. Primitives reference a `(offset, len)` span in this arena through their
     /// `mask_chain` field; fragment shaders evaluate the whole chain (`max` of the individual
@@ -100,7 +95,6 @@ impl Scene {
         self.surfaces.clear();
         self.backdrop_filters.clear();
         self.filter_boundaries.clear();
-        self.window_mask = None;
         self.mask_chains.clear();
         self.mask_chain_spans.clear();
     }
@@ -940,24 +934,13 @@ pub struct Shadow {
     pub element_bounds: Bounds<ScaledPixels>,
     pub element_corner_radii: Corners<ScaledPixels>,
     /// Bit 0: `1` for an inset shadow, `0` for a drop shadow. The remaining 31 bits carry the
-    /// packed clip-chain reference (see [`Scene::mask_chains`]).
+    /// packed clip-chain reference (see [`Scene::mask_chains`]); packing both into the existing
+    /// field keeps the shadow stride at 208 bytes instead of growing the instance by 16.
     pub inset_and_mask_chain: u32,
     pub corner_smoothing: f32,
-    /// Bit 0: `1` when this shadow must ignore the window's rounded clip mask.
-    pub flags: u32,
-    /// Pads the stride to a 16-byte multiple (224 bytes) for storage-buffer layout.
-    pub padding: [u32; 3],
 }
 
 impl Shadow {
-    /// Bit 0 of [`Shadow::flags`]: exempt this shadow from the window's global rounded mask.
-    pub const IGNORE_WINDOW_MASK: u32 = 1;
-
-    /// Whether this shadow ignores the window's rounded clip mask.
-    pub fn ignores_window_mask(&self) -> bool {
-        self.flags & Self::IGNORE_WINDOW_MASK != 0
-    }
-
     /// Packs the inset flag and clip-chain reference into one word. The chain reference has a
     /// 7-bit length, so its top bit is always zero and the shift is lossless.
     pub fn pack_inset_and_mask_chain(inset: bool, mask_chain: u32) -> u32 {

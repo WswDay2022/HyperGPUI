@@ -12,9 +12,6 @@ pub struct GlobalUniforms {
     pub viewport_size: [f32; 2],
     pub premultiplied_alpha: u32,
     pub padding: u32,
-    /// `[enabled, 0, 0, 0]`; see the shader's `window_mask_alpha`.
-    pub window_mask_params: [f32; 4],
-    pub window_mask: hgpui::ContentMask<ScaledPixels>,
 }
 
 /// Font rasterization parameters.
@@ -97,7 +94,7 @@ pub struct SurfaceUniforms {
 }
 
 const _: () = {
-    assert!(std::mem::size_of::<GlobalUniforms>() == 80);
+    assert!(std::mem::size_of::<GlobalUniforms>() == 16);
     assert!(std::mem::size_of::<FontRasterizationUniforms>() == 32);
     assert!(std::mem::size_of::<PathSprite>() == 16);
     assert!(std::mem::size_of::<PathRasterizationVertex>() == 144);

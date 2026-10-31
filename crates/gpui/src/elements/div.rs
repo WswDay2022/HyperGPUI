@@ -4924,47 +4924,6 @@ mod tests {
     }
 
     #[hgpui::test]
-    fn clip_group_ignore_shadow_marks_only_own_drop_shadows(cx: &mut TestAppContext) {
-        struct ShadowOrderView;
-        impl Render for ShadowOrderView {
-            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-                div()
-                    .size(px(100.))
-                    .shadow_lg()
-                    .overflow_hidden()
-                    .rounded(px(20.))
-                    .clip_group()
-                    .clip_group_ignore_shadow()
-                    .child(div().size_full().shadow_md())
-            }
-        }
-        let window = cx.add_window(|_, _| ShadowOrderView);
-        let window: AnyWindowHandle = window.into();
-        cx.update_window(window, |_, window, cx| {
-            window.draw(cx).clear(cx);
-            let scene = &window.rendered_frame.scene;
-            assert_eq!(
-                scene.filter_boundaries.len(),
-                2,
-                "clip_group should still emit a start/end pair"
-            );
-            // The element's own drop shadows are emitted before the group and carry the
-            // window-mask exemption; descendant shadows stay inside the group.
-            let own = &scene.shadows[..2];
-            assert!(own.iter().all(crate::Shadow::ignores_window_mask));
-            assert!(
-                scene
-                    .shadows
-                    .iter()
-                    .skip(2)
-                    .any(|shadow| !shadow.ignores_window_mask()),
-                "descendant shadows must keep the normal window mask"
-            );
-        })
-        .unwrap();
-    }
-
-    #[hgpui::test]
     fn drop_listener_alt_receives_typed_mouse_up_event(cx: &mut TestAppContext) {
         let received = Rc::new(Cell::new(None));
         let window = cx.add_window({
