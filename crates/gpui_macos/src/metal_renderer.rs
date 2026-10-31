@@ -172,6 +172,9 @@ pub(crate) struct MetalRenderer {
     /// in every shader stage (see `Scene::mask_chains`).
     mask_buffer: metal::Buffer,
     mask_capacity: usize,
+    /// Fingerprint and length of the arena currently in `mask_buffer`; `None` after a buffer
+    /// (re)allocation forces the next frame to upload.
+    mask_uploaded: Option<(u64, usize)>,
     /// Offscreen render target reused across `render_scene` calls when
     /// rendering headlessly without reading pixels back.
     #[cfg(any(test, feature = "test-support"))]
@@ -438,6 +441,7 @@ impl MetalRenderer {
             path_sample_count: PATH_SAMPLE_COUNT,
             mask_buffer,
             mask_capacity,
+            mask_uploaded: None,
             #[cfg(any(test, feature = "test-support"))]
             headless_render_target: None,
         }
@@ -445,7 +449,7 @@ impl MetalRenderer {
 
     /// Uploads the frame's content-mask chain arena (`Scene::mask_chains`) into the Metal buffer
     /// bound at `buffer(4)` by every pipeline.
-    fn upload_content_masks(&mut self, masks: &[ContentMask<ScaledPixels>]) {
+    fn upload_content_masks(&mut self, masks: &[ContentMask<ScaledPixels>], fingerprint: u64) {
         let stride = mem::size_of::<ContentMask<ScaledPixels>>();
         let required = masks.len().max(1) * stride;
         if self.mask_capacity < required {
@@ -454,6 +458,11 @@ impl MetalRenderer {
             self.mask_buffer =
                 device.new_buffer(capacity as u64, MTLResourceOptions::StorageModeShared);
             self.mask_capacity = capacity;
+            self.mask_uploaded = None;
+        }
+        let uploaded = (fingerprint, masks.len());
+        if self.mask_uploaded == Some(uploaded) {
+            return;
         }
         unsafe {
             let destination = self.mask_buffer.contents() as *mut u8;
@@ -468,6 +477,7 @@ impl MetalRenderer {
                 );
             }
         }
+        self.mask_uploaded = Some(uploaded);
     }
 
     pub fn layer(&self) -> Option<&metal::MetalLayerRef> {
@@ -986,7 +996,7 @@ impl MetalRenderer {
         texture: &metal::TextureRef,
         viewport_size: Size<DevicePixels>,
     ) -> Result<metal::CommandBuffer> {
-        self.upload_content_masks(&scene.mask_chains);
+        self.upload_content_masks(&scene.mask_chains, scene.mask_chains_fingerprint());
         // Expensive full-resolution targets are allocated on demand.
         if !scene.paths.is_empty() {
             self.ensure_path_intermediate_textures(viewport_size);

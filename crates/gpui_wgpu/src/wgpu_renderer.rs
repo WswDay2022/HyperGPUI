@@ -255,6 +255,9 @@ struct WgpuResources {
     /// shader pipeline. Grown on demand when a frame needs more chains.
     content_mask_buffer: wgpu::Buffer,
     content_mask_capacity: u64,
+    /// Fingerprint and length of the arena currently in `content_mask_buffer`; `None` after a
+    /// capacity growth forces the next frame to upload.
+    content_mask_uploaded: Option<(u64, usize)>,
     instance_buffer: wgpu::Buffer,
     path_intermediate_texture: Option<wgpu::Texture>,
     path_intermediate_view: Option<wgpu::TextureView>,
@@ -695,6 +698,7 @@ impl WgpuRenderer {
             path_globals_bind_group,
             content_mask_buffer,
             content_mask_capacity,
+            content_mask_uploaded: None,
             instance_buffer,
             // Defer intermediate texture creation to first draw call via ensure_intermediate_textures().
             // This avoids panics when the device/surface is in an invalid state during initialization.
@@ -1688,12 +1692,17 @@ impl WgpuRenderer {
             let mask_stride = std::mem::size_of::<ContentMask<ScaledPixels>>() as u64;
             let required = (scene.mask_chains.len().max(1) as u64) * mask_stride;
             self.ensure_content_mask_capacity(required);
-            if !scene.mask_chains.is_empty() {
-                let data = unsafe { Self::instance_bytes(&scene.mask_chains) };
-                let resources = self.resources();
-                resources
-                    .queue
-                    .write_buffer(&resources.content_mask_buffer, 0, data);
+            let fingerprint = scene.mask_chains_fingerprint();
+            let uploaded = (fingerprint, scene.mask_chains.len());
+            let resources = self.resources_mut();
+            if resources.content_mask_uploaded != Some(uploaded) {
+                if !scene.mask_chains.is_empty() {
+                    let data = unsafe { Self::instance_bytes(&scene.mask_chains) };
+                    resources
+                        .queue
+                        .write_buffer(&resources.content_mask_buffer, 0, data);
+                }
+                resources.content_mask_uploaded = Some(uploaded);
             }
         }
 
@@ -2837,6 +2846,7 @@ impl WgpuRenderer {
             });
         resources.content_mask_buffer = buffer;
         resources.content_mask_capacity = new_capacity;
+        resources.content_mask_uploaded = None;
         resources.globals_bind_group = globals_bind_group;
         resources.path_globals_bind_group = path_globals_bind_group;
     }

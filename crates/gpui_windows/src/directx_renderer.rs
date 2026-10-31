@@ -216,6 +216,9 @@ struct DirectXGlobalElements {
     mask_buffer: Option<ID3D11Buffer>,
     mask_view: Option<ID3D11ShaderResourceView>,
     mask_capacity: usize,
+    /// Fingerprint and length of the arena currently in `mask_buffer`. `None` after a buffer
+    /// (re)allocation so the next frame forces an upload.
+    mask_uploaded: Option<(u64, usize)>,
     sampler: Option<ID3D11SamplerState>,
     /// Clamp-addressed sampler used by the blur passes: gaussian taps may leave the texture at
     /// the window edges, and must clamp like CSS rather than wrap around to the far side.
@@ -774,6 +777,7 @@ impl DirectXRenderer {
             &devices.device,
             &devices.device_context,
             &scene.mask_chains,
+            scene.mask_chains_fingerprint(),
         )?;
 
         if !scene.shadows.is_empty() {
@@ -1728,6 +1732,7 @@ impl DirectXGlobalElements {
             mask_buffer: Some(mask_buffer),
             mask_view,
             mask_capacity,
+            mask_uploaded: None,
             sampler,
             blur_sampler,
         })
@@ -1740,6 +1745,7 @@ impl DirectXGlobalElements {
         device: &ID3D11Device,
         device_context: &ID3D11DeviceContext,
         masks: &[ContentMask<ScaledPixels>],
+        fingerprint: u64,
     ) -> Result<()> {
         let capacity = self.mask_capacity.max(1);
         if masks.len() > capacity {
@@ -1753,6 +1759,12 @@ impl DirectXGlobalElements {
             self.mask_buffer = Some(buffer);
             self.mask_view = view;
             self.mask_capacity = new_capacity;
+            self.mask_uploaded = None;
+        }
+        // The arena is rebuilt every frame but is usually byte-identical; skip the Map/copy when
+        // both its fingerprint and length match what the buffer already holds.
+        if self.mask_uploaded == Some((fingerprint, masks.len())) {
+            return Ok(());
         }
         let buffer = self.mask_buffer.as_ref().context("mask buffer missing")?;
         let mut data = masks.to_vec();
@@ -1768,7 +1780,9 @@ impl DirectXGlobalElements {
                 fade_out: Default::default(),
             });
         }
-        update_buffer(device_context, buffer, &data)
+        update_buffer(device_context, buffer, &data)?;
+        self.mask_uploaded = Some((fingerprint, masks.len()));
+        Ok(())
     }
 }
 

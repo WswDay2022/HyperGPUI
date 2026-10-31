@@ -1,6 +1,7 @@
 // todo("windows"): remove
 #![cfg_attr(windows, allow(dead_code))]
 
+use collections::{FxHashMap, FxHasher};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -77,7 +78,16 @@ pub struct Scene {
     /// `(offset, len)` of each distinct chain inside [`Scene::mask_chains`]. Only used for
     /// deduplication while painting; it is not uploaded to the GPU.
     mask_chain_spans: Vec<(usize, usize)>,
+    /// Hash of each distinct chain, mapping to its span indices. Turns the old linear dedup
+    /// scan into a hash lookup while still comparing the full slice on a hit.
+    mask_chain_index: FxHashMap<u64, SmallVec<[usize; 4]>>,
+    /// Incrementally updated fingerprint of [`Scene::mask_chains`]. Backends use it to skip
+    /// re-uploading an arena whose contents did not change since the previous frame.
+    mask_chains_fingerprint: u64,
 }
+
+/// Fingerprint of an empty mask-chain arena. `Scene` derives `Default`, so this must be zero.
+const EMPTY_MASK_CHAIN_FINGERPRINT: u64 = 0;
 
 #[expect(missing_docs)]
 impl Scene {
@@ -97,6 +107,8 @@ impl Scene {
         self.filter_boundaries.clear();
         self.mask_chains.clear();
         self.mask_chain_spans.clear();
+        self.mask_chain_index.clear();
+        self.mask_chains_fingerprint = EMPTY_MASK_CHAIN_FINGERPRINT;
     }
 
     /// Interns a chain of raw content masks and returns the reference stored on primitives.
@@ -108,15 +120,65 @@ impl Scene {
         if masks.is_empty() {
             return 0;
         }
-        for &(offset, len) in &self.mask_chain_spans {
-            if len == masks.len() && self.mask_chains[offset..offset + len] == *masks {
-                return Self::pack_mask_chain(offset, len);
+        let hash = Self::hash_mask_chain(masks);
+        if let Some(span_indices) = self.mask_chain_index.get(&hash) {
+            for &span_index in span_indices {
+                let (offset, len) = self.mask_chain_spans[span_index];
+                if len == masks.len() && self.mask_chains[offset..offset + len] == *masks {
+                    return Self::pack_mask_chain(offset, len);
+                }
             }
         }
         let offset = self.mask_chains.len();
+        let len = masks.len();
         self.mask_chains.extend_from_slice(masks);
-        self.mask_chain_spans.push((offset, masks.len()));
-        Self::pack_mask_chain(offset, masks.len())
+        self.mask_chain_spans.push((offset, len));
+        let span_index = self.mask_chain_spans.len() - 1;
+        self.mask_chain_index
+            .entry(hash)
+            .or_default()
+            .push(span_index);
+        self.mask_chains_fingerprint = self
+            .mask_chains_fingerprint
+            .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+            ^ hash.rotate_left(17)
+            ^ (len as u64).wrapping_mul(0x0000_0100_0000_01B3);
+        Self::pack_mask_chain(offset, len)
+    }
+
+    /// Fingerprint of the current mask-chain arena. Equal fingerprints (with equal lengths)
+    /// mean the bytes a backend uploaded last frame are still current.
+    pub fn mask_chains_fingerprint(&self) -> u64 {
+        self.mask_chains_fingerprint
+    }
+
+    fn hash_mask_chain(masks: &[ContentMask<ScaledPixels>]) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = FxHasher::default();
+        masks.len().hash(&mut hasher);
+        for mask in masks {
+            mask.bounds.origin.x.0.to_bits().hash(&mut hasher);
+            mask.bounds.origin.y.0.to_bits().hash(&mut hasher);
+            mask.bounds.size.width.0.to_bits().hash(&mut hasher);
+            mask.bounds.size.height.0.to_bits().hash(&mut hasher);
+            for radius in [
+                mask.corner_radii.top_left.0,
+                mask.corner_radii.top_right.0,
+                mask.corner_radii.bottom_right.0,
+                mask.corner_radii.bottom_left.0,
+            ] {
+                radius.to_bits().hash(&mut hasher);
+            }
+            for fade in [
+                mask.fade_out.top.0,
+                mask.fade_out.right.0,
+                mask.fade_out.bottom.0,
+                mask.fade_out.left.0,
+            ] {
+                fade.to_bits().hash(&mut hasher);
+            }
+        }
+        hasher.finish()
     }
 
     fn pack_mask_chain(offset: usize, len: usize) -> u32 {
@@ -1517,6 +1579,45 @@ mod tests {
             content_mask: mask(),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn mask_chain_intern_dedupes_by_content_and_tracks_fingerprint() {
+        let mut scene = Scene::default();
+        let rounded = ContentMask {
+            bounds: full_bounds(),
+            corner_radii: Corners {
+                top_left: sp(4.0),
+                top_right: sp(4.0),
+                bottom_right: sp(4.0),
+                bottom_left: sp(4.0),
+            },
+            fade_out: Default::default(),
+        };
+        let square = mask();
+
+        let first = scene.intern_mask_chain(&[rounded, square]);
+        assert_eq!(first >> 24, 2, "the reference must pack the chain length");
+        assert_eq!(first & 0x00FF_FFFF, 0, "the first chain starts at offset 0");
+        assert_eq!(scene.mask_chains.len(), 2);
+        let fingerprint = scene.mask_chains_fingerprint();
+
+        let deduped = scene.intern_mask_chain(&[rounded, square]);
+        assert_eq!(deduped, first, "identical chains must share a reference");
+        assert_eq!(scene.mask_chains.len(), 2, "dedup must not append again");
+        assert_eq!(
+            scene.mask_chains_fingerprint(),
+            fingerprint,
+            "dedup must not move the fingerprint"
+        );
+
+        let _ = scene.intern_mask_chain(&[square]);
+        assert_eq!(scene.mask_chains.len(), 3);
+        assert_ne!(scene.mask_chains_fingerprint(), fingerprint);
+
+        scene.clear();
+        assert!(scene.mask_chains.is_empty());
+        assert_eq!(scene.mask_chains_fingerprint(), 0);
     }
 
     /// A 100x100 quad whose bounds don't overlap `full_bounds()` (used to exercise the
