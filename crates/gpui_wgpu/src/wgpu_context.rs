@@ -83,101 +83,67 @@ impl WgpuContext {
         };
 
         // On non-Windows platforms, try Vulkan first, then fall back to GL.
-        // This avoids loading Mesa's GL stack unnecessarily when Vulkan works.
+        //
+        // The surface was created from `instance`, so adapter selection must go through
+        // that same instance. A surface resolves capabilities against its own instance's
+        // registry, and an adapter id from a second instance panics inside wgpu-core
+        // ("adapter[...] does not exist") — which then aborts, because window creation
+        // calls this from an `extern "system"` window procedure that cannot unwind.
+        // Filtering this instance's adapters by backend keeps the Vulkan-first order.
         #[cfg(not(target_os = "windows"))]
         {
-            // First attempt: Vulkan only
-            log::info!("Attempting GPU initialization with Vulkan backend...");
-            let vulkan_instance = Self::instance_with_backends(
-                surface.display_handle().unwrap(),
-                wgpu::Backends::VULKAN,
-            );
+            for (backend_name, backends) in [
+                ("Vulkan", wgpu::Backends::VULKAN),
+                ("GL", wgpu::Backends::GL),
+            ] {
+                log::info!("Attempting GPU initialization with the {backend_name} backend...");
 
-            match hgpui::block_on(Self::select_adapter_and_device(
-                &vulkan_instance,
-                device_id_filter,
-                surface,
-                compositor_gpu.as_ref(),
-                reject_software,
-                extra_requirements,
-            )) {
-                Ok((adapter, device, queue, dual_source_blending, color_texture_format)) => {
-                    log::info!(
-                        "Selected GPU adapter (Vulkan): {:?} ({:?})",
-                        adapter.get_info().name,
-                        adapter.get_info().backend
-                    );
-                    let device_lost = Arc::new(AtomicBool::new(false));
-                    device.set_device_lost_callback({
-                        let device_lost = Arc::clone(&device_lost);
-                        move |reason, message| {
-                            log::error!("wgpu device lost: reason={reason:?}, message={message}");
-                            if reason != wgpu::DeviceLostReason::Destroyed {
-                                device_lost.store(true, Ordering::Relaxed);
-                            }
-                        }
-                    });
-                    return Ok(Self {
-                        instance: vulkan_instance,
-                        adapter,
-                        device: Arc::new(device),
-                        queue: Arc::new(queue),
-                        dual_source_blending,
-                        color_texture_format,
-                        device_lost,
-                    });
-                }
-                Err(e) => {
-                    log::info!(
-                        "Vulkan initialization failed: {}. Falling back to GL backend...",
-                        e
-                    );
-                }
-            }
-
-            // Fallback: GL backend
-            log::info!("Attempting GPU initialization with GL backend...");
-            let gl_instance = Self::instance_with_backends(
-                surface.display_handle().unwrap(),
-                wgpu::Backends::GL,
-            );
-
-            let (adapter, device, queue, dual_source_blending, color_texture_format) =
-                hgpui::block_on(Self::select_adapter_and_device(
-                    &gl_instance,
+                match hgpui::block_on(Self::select_adapter_and_device(
+                    &instance,
                     device_id_filter,
                     surface,
                     compositor_gpu.as_ref(),
                     reject_software,
                     extra_requirements,
-                ))?;
-
-            log::info!(
-                "Selected GPU adapter (GL fallback): {:?} ({:?})",
-                adapter.get_info().name,
-                adapter.get_info().backend
-            );
-
-            let device_lost = Arc::new(AtomicBool::new(false));
-            device.set_device_lost_callback({
-                let device_lost = Arc::clone(&device_lost);
-                move |reason, message| {
-                    log::error!("wgpu device lost: reason={reason:?}, message={message}");
-                    if reason != wgpu::DeviceLostReason::Destroyed {
-                        device_lost.store(true, Ordering::Relaxed);
+                    backends,
+                )) {
+                    Ok((adapter, device, queue, dual_source_blending, color_texture_format)) => {
+                        log::info!(
+                            "Selected GPU adapter ({backend_name}): {:?} ({:?})",
+                            adapter.get_info().name,
+                            adapter.get_info().backend
+                        );
+                        let device_lost = Arc::new(AtomicBool::new(false));
+                        device.set_device_lost_callback({
+                            let device_lost = Arc::clone(&device_lost);
+                            move |reason, message| {
+                                log::error!(
+                                    "wgpu device lost: reason={reason:?}, message={message}"
+                                );
+                                if reason != wgpu::DeviceLostReason::Destroyed {
+                                    device_lost.store(true, Ordering::Relaxed);
+                                }
+                            }
+                        });
+                        return Ok(Self {
+                            instance,
+                            adapter,
+                            device: Arc::new(device),
+                            queue: Arc::new(queue),
+                            dual_source_blending,
+                            color_texture_format,
+                            device_lost,
+                        });
+                    }
+                    Err(e) => {
+                        log::info!(
+                            "{backend_name} initialization failed: {e}. Trying the next backend..."
+                        );
                     }
                 }
-            });
+            }
 
-            Ok(Self {
-                instance: gl_instance,
-                adapter,
-                device: Arc::new(device),
-                queue: Arc::new(queue),
-                dual_source_blending,
-                color_texture_format,
-                device_lost,
-            })
+            anyhow::bail!("No GPU backend could configure the display surface")
         }
 
         // On Windows, just use the provided instance (DX12)
@@ -191,6 +157,7 @@ impl WgpuContext {
                     compositor_gpu.as_ref(),
                     reject_software,
                     extra_requirements,
+                    wgpu::Backends::all(),
                 ))?;
 
             log::info!(
@@ -253,6 +220,7 @@ impl WgpuContext {
                 compositor_gpu.as_ref(),
                 reject_software,
                 extra_requirements,
+                wgpu::Backends::all(),
             ))?;
 
         let device_lost = Arc::new(AtomicBool::new(false));
@@ -343,9 +311,16 @@ impl WgpuContext {
 
         let color_atlas_texture_format = Self::select_color_texture_format(adapter)?;
 
+        let adapter_limits = adapter.limits();
+        let max_inter_stage_shader_variables = adapter_limits.max_inter_stage_shader_variables;
         let mut required_limits = wgpu::Limits::downlevel_defaults()
-            .using_resolution(adapter.limits())
-            .using_alignment(adapter.limits());
+            .using_resolution(adapter_limits.clone())
+            .using_alignment(adapter_limits);
+        // `downlevel_defaults` reserves 15 inter-stage locations, but the smoothed quad
+        // vertex shader emits 16 (CSS transforms add `local_position` + `scene_position`,
+        // plus the flat AA factor). DX12 reports 32 available; ask for what the adapter has
+        // rather than failing `create_render_pipeline` during window creation.
+        required_limits.max_inter_stage_shader_variables = max_inter_stage_shader_variables;
 
         // Merge application-requested requirements.
         if let Some(reqs) = extra_requirements {
@@ -364,6 +339,16 @@ impl WgpuContext {
             })
             .await
             .map_err(|e| anyhow::anyhow!("Failed to create wgpu device: {e}"))?;
+
+        // wgpu's default handler panics on validation errors. Window creation runs this
+        // code inside the `extern "system"` window procedure, where a panic cannot unwind
+        // and aborts the process without surfacing the error text. Log it instead;
+        // `WgpuRenderer::new_internal` installs its own handler for runtime errors once
+        // the pipelines are built.
+        device.on_uncaptured_error(Arc::new(|error| {
+            eprintln!("[hgpui_wgpu][uncaptured] {error}");
+            log::error!("[hgpui_wgpu] uncaptured wgpu error: {error}");
+        }));
 
         Ok((
             device,
@@ -424,6 +409,9 @@ impl WgpuContext {
     /// adapters may report surface compatibility via get_capabilities() but fail when actually
     /// configuring (e.g., NVIDIA reporting Vulkan Wayland support but failing because the
     /// Wayland compositor runs on the Intel GPU).
+    ///
+    /// `surface` must have been created from `instance`: wgpu resolves capabilities against
+    /// the surface's own registry, so an adapter from another instance is an invalid id.
     #[cfg(not(target_family = "wasm"))]
     async fn select_adapter_and_device(
         instance: &wgpu::Instance,
@@ -432,6 +420,9 @@ impl WgpuContext {
         compositor_gpu: Option<&CompositorGpuHint>,
         reject_software: bool,
         extra_requirements: Option<&WgpuDeviceRequirements>,
+        // Restrict selection to these backends. The adapters still come from `instance`;
+        // this only filters, so the surface and the adapter always share a registry.
+        backends: wgpu::Backends,
     ) -> anyhow::Result<(
         wgpu::Adapter,
         wgpu::Device,
@@ -439,7 +430,7 @@ impl WgpuContext {
         bool,
         TextureFormat,
     )> {
-        let mut adapters: Vec<_> = instance.enumerate_adapters(wgpu::Backends::all()).await;
+        let mut adapters: Vec<_> = instance.enumerate_adapters(backends).await;
 
         if adapters.is_empty() {
             anyhow::bail!("No GPU adapters found");

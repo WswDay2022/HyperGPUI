@@ -414,7 +414,10 @@ impl WgpuRenderer {
                 context
             }
             None => ctx_ref.insert(WgpuContext::new_with_lazy_gl(
-                WgpuContext::instance(Box::new(window.clone())),
+                // Reuse the instance the surface was created from. Creating a second
+                // instance here leaves the surface and its adapters in different
+                // registries, and `Surface::get_capabilities` panics on the adapter id.
+                instance,
                 &surface,
                 compositor_gpu,
                 false, // reject_software = false (default behavior)
@@ -949,14 +952,16 @@ impl WgpuRenderer {
             source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(base_shader_source)),
         });
 
-        let subpixel_shader_source = hgpui_render::artifacts::SUBPIXEL_WGSL;
+        // `SUBPIXEL_WGSL` is a complete module of its own. It must be compiled separately:
+        // it redeclares the shared constants and helpers that `BASE_WGSL` also declares, and
+        // its `enable dual_source_blending;` directive is only legal before the first global
+        // declaration — appending its source to the base module fails naga validation.
         let subpixel_shader_module = if dual_source_blending {
-            let combined = format!(
-                "enable dual_source_blending;\n{base_shader_source}\n{subpixel_shader_source}"
-            );
             Some(device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("gpui_subpixel_shaders"),
-                source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Owned(combined)),
+                source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(
+                    hgpui_render::artifacts::SUBPIXEL_WGSL,
+                )),
             }))
         } else {
             None

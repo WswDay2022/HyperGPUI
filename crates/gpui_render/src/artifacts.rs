@@ -1,6 +1,10 @@
 //! Shader artifacts generated at Cargo build time from the Rust-authored shader modules.
 
 pub const BASE_WGSL: &str = include_str!(concat!(env!("OUT_DIR"), "/base.wgsl"));
+/// A complete, self-contained WGSL module (its own globals, helpers and entry points) for
+/// dual-source subpixel text. Do not append it to [`BASE_WGSL`]: both modules declare the
+/// shared constants and functions, and a module's `enable` directive must precede every
+/// global declaration. Compile it as its own shader module.
 pub const SUBPIXEL_WGSL: &str = include_str!(concat!(env!("OUT_DIR"), "/subpixel.wgsl"));
 
 /// D3D11 bytecode generated from HLSL at build time.

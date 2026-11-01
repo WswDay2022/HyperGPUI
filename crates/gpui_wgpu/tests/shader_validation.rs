@@ -225,20 +225,22 @@ fn assert_red_close(px: [u8; 4], expected: u8, what: &str) {
 #[test]
 fn wgsl_shader_modules_validate_and_render_quad() {
     let base = hgpui_render::artifacts::BASE_WGSL;
+    // `WgpuRenderer::create_pipelines` compiles this as a standalone module. It is not
+    // concatenated with the base shaders: it declares its own copy of the shared helpers,
+    // and its `enable` directive must precede every global declaration.
     let subpixel = hgpui_render::artifacts::SUBPIXEL_WGSL;
 
     let Some((device, queue, has_dual_source)) = create_device() else {
         return;
     };
 
-    // 1. Both modules must pass the driver's validation. The subpixel module is compiled
-    // separately by `WgpuPipelines::new`, so validate it on its own.
+    // 1. Both production modules must pass the driver's validation.
     validate(&device, "hgpui_shaders", base);
     if has_dual_source {
         validate(&device, "hgpui_subpixel_shaders", subpixel);
     } else {
         eprintln!(
-            "[wgsl-validate] DUAL_SOURCE_BLENDING unavailable; combined subpixel module skipped"
+            "[wgsl-validate] DUAL_SOURCE_BLENDING unavailable; subpixel module skipped"
         );
     }
 

@@ -361,3 +361,19 @@ fn linear_gradients_preserve_native_dithering() {
 
     assert_ne!(first.w, second.w);
 }
+
+#[test]
+fn wgpu_subpixel_module_is_standalone() {
+    // `WgpuRenderer` compiles this artifact as its own shader module. It is a complete
+    // module: it redeclares the shared constants/helpers that `BASE_WGSL` also has, so
+    // concatenating the two is invalid (duplicate symbols, and its enable directive
+    // would follow the base module's global declarations).
+    let module = naga::front::wgsl::parse_str(crate::artifacts::SUBPIXEL_WGSL)
+        .expect("the subpixel module must parse on its own");
+    naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::all(),
+    )
+    .validate(&module)
+    .expect("the subpixel module must validate on its own");
+}
