@@ -14,7 +14,7 @@ use hgpui::{
 use itertools::Itertools;
 use parking_lot::RwLock;
 use smallvec::SmallVec;
-use std::{borrow::Cow, ops::Range, sync::Arc};
+use std::{borrow::Cow, collections::HashSet, ops::Range, sync::Arc};
 use swash::{
     scale::{Render, ScaleContext, Source, StrikeWith},
     zeno::{Format, Vector},
@@ -53,6 +53,9 @@ struct CosmicTextSystemState {
     /// Caches the `FontId`s associated with a specific family to avoid iterating the font database
     /// for every font face in a family.
     font_ids_by_family_cache: HashMap<FontKey, SmallVec<[FontId; 4]>>,
+    /// Faces loaded through `add_fonts`. These are trusted even when they only contain
+    /// symbol glyphs, unlike the system fonts screened out in `load_family`.
+    explicit_font_ids: HashSet<cosmic_text::fontdb::ID>,
     system_font_fallback: String,
 }
 
@@ -63,6 +66,19 @@ struct LoadedFont {
     /// resolved at load time so `layout_line` shares one chain across faces.
     /// `Arc` keeps clone cheap on the per-run hot path.
     user_fallback_chain: Arc<[(FontId, SharedString)]>,
+}
+
+/// Fonts without an ASCII `m` are usually broken system fonts that fontdb picked up,
+/// so they are dropped from the family to let shaping fall back. Application fonts
+/// registered through `add_fonts` are trusted: icon/symbol fonts intentionally contain
+/// no ASCII glyphs and must survive (otherwise every glyph in them disappears).
+fn should_discard_font(has_ascii_m: bool, postscript_name: &str, explicitly_loaded: bool) -> bool {
+    // HACK: To let the storybook run and render Windows caption icons. We should actually do better font fallback.
+    let allowed_bad_font_names = [
+        "SegoeFluentIcons", // NOTE: Segoe fluent icons postscript name is inconsistent
+        "Segoe Fluent Icons",
+    ];
+    !has_ascii_m && !allowed_bad_font_names.contains(&postscript_name) && !explicitly_loaded
 }
 
 impl CosmicTextSystem {
@@ -76,6 +92,7 @@ impl CosmicTextSystem {
             loaded_fonts: Vec::new(),
             font_ids_by_cosmic_id: FxHashMap::default(),
             font_ids_by_family_cache: HashMap::default(),
+            explicit_font_ids: HashSet::default(),
             system_font_fallback: system_font_fallback.to_string(),
         }))
     }
@@ -93,6 +110,7 @@ impl CosmicTextSystem {
             loaded_fonts: Vec::new(),
             font_ids_by_cosmic_id: FxHashMap::default(),
             font_ids_by_family_cache: HashMap::default(),
+            explicit_font_ids: HashSet::default(),
             system_font_fallback: system_font_fallback.to_string(),
         }))
     }
@@ -218,15 +236,18 @@ impl CosmicTextSystemState {
     fn add_fonts(&mut self, fonts: Vec<Cow<'static, [u8]>>) -> Result<()> {
         let db = self.font_system.db_mut();
         for bytes in fonts {
-            match bytes {
-                Cow::Borrowed(embedded_font) => {
-                    db.load_font_data(embedded_font.to_vec());
-                }
-                Cow::Owned(bytes) => {
-                    db.load_font_data(bytes);
-                }
-            }
+            let bytes = match bytes {
+                Cow::Borrowed(embedded_font) => embedded_font.to_vec(),
+                Cow::Owned(bytes) => bytes,
+            };
+            let source = cosmic_text::fontdb::Source::Binary(
+                Arc::new(bytes) as Arc<dyn AsRef<[u8]> + Send + Sync>
+            );
+            let ids = db.load_font_source(source);
+            self.explicit_font_ids.extend(ids);
         }
+        // A family resolved before this call cached the face list without these fonts.
+        self.font_ids_by_family_cache.clear();
         Ok(())
     }
 
@@ -291,15 +312,11 @@ impl CosmicTextSystemState {
                 .get_font(font_id, cosmic_text::Weight::NORMAL)
                 .context("Could not load font")?;
 
-            // HACK: To let the storybook run and render Windows caption icons. We should actually do better font fallback.
-            let allowed_bad_font_names = [
-                "SegoeFluentIcons", // NOTE: Segoe fluent icons postscript name is inconsistent
-                "Segoe Fluent Icons",
-            ];
-
-            if font.as_swash().charmap().map('m') == 0
-                && !allowed_bad_font_names.contains(&postscript_name.as_str())
-            {
+            if should_discard_font(
+                font.as_swash().charmap().map('m') != 0,
+                &postscript_name,
+                self.explicit_font_ids.contains(&font.id()),
+            ) {
                 self.font_system.db_mut().remove_face(font.id());
                 continue;
             };
@@ -1055,6 +1072,29 @@ mod tests {
         Ok(text_system)
     }
 
+    #[test]
+    fn explicitly_loaded_symbol_fonts_are_not_discarded() {
+        // Icon fonts contain only private-use codepoints and no ASCII 'm'; the bad-font
+        // heuristic must not remove a font the application asked for.
+        assert!(!should_discard_font(false, "FluentSystemIcons-Filled", true));
+        assert!(should_discard_font(false, "FluentSystemIcons-Filled", false));
+        assert!(!should_discard_font(true, "IBMPlexSans", false));
+        assert!(!should_discard_font(false, "Segoe Fluent Icons", false));
+    }
+
+    #[test]
+    fn add_fonts_marks_faces_as_explicit() -> Result<()> {
+        let system = CosmicTextSystem::new_without_system_fonts("IBM Plex Sans");
+        system.add_fonts(vec![Cow::Borrowed(IBM_PLEX)])?;
+
+        let state = system.0.read();
+        assert!(!state.explicit_font_ids.is_empty());
+        for id in &state.explicit_font_ids {
+            assert!(state.font_system.db().face(*id).is_some());
+        }
+        Ok(())
+    }
+
     fn layout_text(text_system: &CosmicTextSystem, text: &str) -> Result<LineLayout> {
         let font_id = text_system.font_id(&hgpui::font("IBM Plex Sans"))?;
         let runs = [FontRun {
@@ -1438,5 +1478,30 @@ mod tests {
         let covers = |_: FontId, _: char| true;
         let spans = compute_run_spans("anything", 3, 0, primary, &fb, &covers);
         assert!(spans.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod system_font_tests {
+    use super::*;
+
+    #[test]
+    fn loads_segoe_ui_from_system_fonts() {
+        let system = CosmicTextSystem::new("Segoe UI");
+        let state = system.0.read();
+        let mut families = Vec::new();
+        for face in state.font_system.db().faces() {
+            for family in &face.families {
+                if family.0 == "Segoe UI" {
+                    families.push(family.0.clone());
+                }
+            }
+        }
+        let count = state.font_system.db().faces().count();
+        assert!(count > 0, "fontdb loaded no system fonts");
+        assert!(
+            !families.is_empty(),
+            "fontdb has {count} faces but none named Segoe UI"
+        );
     }
 }
