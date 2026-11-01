@@ -12,6 +12,8 @@ use std::{
 use anyhow::{Context as _, Result, anyhow};
 use futures::channel::oneshot::{self, Receiver};
 use hgpui::{ResultExt, get_windows_system_shell, new_std_command};
+#[cfg(feature = "wgpu")]
+use hgpui_wgpu::GpuContext;
 use itertools::Itertools;
 use parking_lot::RwLock;
 use smallvec::SmallVec;
@@ -75,6 +77,10 @@ pub(crate) struct WindowsPlatformState {
     /// Shared with each window to coordinate draws across windows on the UI
     /// thread; see [`DrawCoordinator`].
     pub(crate) draw_coordinator: Rc<DrawCoordinator>,
+    /// The wgpu instance/adapter/device shared by every window. The first window
+    /// initializes it; later windows reuse the same driver objects.
+    #[cfg(feature = "wgpu")]
+    pub(crate) gpu_context: GpuContext,
     #[cfg(not(feature = "wgpu"))]
     directx_devices: RefCell<Option<DirectXDevices>>,
 }
@@ -103,6 +109,8 @@ impl WindowsPlatformState {
             current_cursor: Cell::new(current_cursor),
             cursor_visible: Arc::new(AtomicBool::new(true)),
             draw_coordinator: Rc::new(DrawCoordinator::new()),
+            #[cfg(feature = "wgpu")]
+            gpu_context: GpuContext::default(),
             #[cfg(not(feature = "wgpu"))]
             directx_devices: RefCell::new(directx_devices),
             menus: RefCell::new(Vec::new()),
@@ -259,6 +267,8 @@ impl WindowsPlatform {
             directx_devices: self.inner.state.directx_devices.borrow().clone().unwrap(),
             invalidate_devices: self.invalidate_devices.clone(),
             draw_coordinator: self.inner.state.draw_coordinator.clone(),
+            #[cfg(feature = "wgpu")]
+            gpu_context: self.inner.state.gpu_context.clone(),
         }
     }
 
@@ -1179,6 +1189,8 @@ pub(crate) struct WindowCreationInfo {
     pub(crate) invalidate_devices: Arc<AtomicBool>,
     /// Shared with [`WindowsPlatformState::draw_coordinator`] and every other window.
     pub(crate) draw_coordinator: Rc<DrawCoordinator>,
+    #[cfg(feature = "wgpu")]
+    pub(crate) gpu_context: GpuContext,
 }
 
 struct PlatformWindowCreateContext {

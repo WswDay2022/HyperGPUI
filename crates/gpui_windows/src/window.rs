@@ -33,7 +33,7 @@ use crate::*;
 use hgpui::*;
 
 #[cfg(feature = "wgpu")]
-use hgpui_wgpu::{WgpuRenderer, WgpuSurfaceConfig, wgpu};
+use hgpui_wgpu::{GpuContext, WgpuRenderer, WgpuSurfaceConfig, wgpu};
 
 pub(crate) struct WindowsWindow(pub Rc<WindowsWindowInner>);
 
@@ -125,6 +125,7 @@ impl WindowsWindowState {
         display: WindowsDisplay,
         min_size: Option<Size<Pixels>>,
         appearance: WindowAppearance,
+        #[cfg(feature = "wgpu")] gpu_context: GpuContext,
         #[cfg(not(feature = "wgpu"))] disable_direct_composition: bool,
         #[cfg(not(feature = "wgpu"))] invalidate_devices: Arc<AtomicBool>,
         draw_coordinator: Rc<DrawCoordinator>,
@@ -147,7 +148,7 @@ impl WindowsWindowState {
         let restore_from_minimized = None;
         #[cfg(feature = "wgpu")]
         let renderer = WgpuRenderer::new(
-            Rc::new(RefCell::new(None)),
+            gpu_context,
             &RawWindow { hwnd },
             WgpuSurfaceConfig {
                 size: physical_size,
@@ -282,6 +283,8 @@ impl WindowsWindowInner {
             context.display,
             context.min_size,
             context.appearance,
+            #[cfg(feature = "wgpu")]
+            context.gpu_context.clone(),
             #[cfg(not(feature = "wgpu"))]
             context.disable_direct_composition,
             #[cfg(not(feature = "wgpu"))]
@@ -431,6 +434,8 @@ struct WindowCreateContext {
     main_receiver: PriorityQueueReceiver<RunnableVariant>,
     platform_window_handle: HWND,
     appearance: WindowAppearance,
+    #[cfg(feature = "wgpu")]
+    gpu_context: GpuContext,
     #[cfg(not(feature = "wgpu"))]
     disable_direct_composition: bool,
     #[cfg(not(feature = "wgpu"))]
@@ -462,6 +467,8 @@ impl WindowsWindow {
             validation_number,
             main_receiver,
             platform_window_handle,
+            #[cfg(feature = "wgpu")]
+            gpu_context,
             disable_direct_composition,
             #[cfg(not(feature = "wgpu"))]
             directx_devices,
@@ -565,6 +572,8 @@ impl WindowsWindow {
             main_receiver,
             platform_window_handle,
             appearance,
+            #[cfg(feature = "wgpu")]
+            gpu_context,
             #[cfg(not(feature = "wgpu"))]
             disable_direct_composition,
             #[cfg(not(feature = "wgpu"))]
