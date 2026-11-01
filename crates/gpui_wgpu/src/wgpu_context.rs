@@ -36,6 +36,18 @@ pub struct WgpuDeviceRequirements {
     pub limits: wgpu::Limits,
 }
 
+/// Instance flags for the application's GPU instance.
+///
+/// `wgpu::InstanceFlags::default()` returns `debugging()` when the crate is built with
+/// `debug_assertions`, which turns on wgpu's validation layer and the D3D12 debug layer.
+/// On DX12 that costs a lot of CPU time and memory — enough to make debug builds look
+/// far slower and heavier than the DirectX backend. Use the release flags instead and
+/// let developers opt in explicitly with `WGPU_DEBUG=1` / `WGPU_VALIDATION=1`.
+#[cfg(not(target_family = "wasm"))]
+fn instance_flags() -> wgpu::InstanceFlags {
+    wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL.with_env()
+}
+
 impl WgpuContext {
     #[cfg(not(target_family = "wasm"))]
     pub fn new(
@@ -382,7 +394,7 @@ impl WgpuContext {
     ) -> wgpu::Instance {
         wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends,
-            flags: wgpu::InstanceFlags::default(),
+            flags: instance_flags(),
             backend_options: wgpu::BackendOptions::default(),
             memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
             display: Some(display),
