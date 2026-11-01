@@ -23,6 +23,7 @@ use crate::directx_renderer::shader_resources::{RawShaderBytes, ShaderModule, Sh
 use crate::*;
 use hgpui::*;
 use hgpui_render::artifacts::Dx11DrawConstants;
+use hgpui_render::blur_region::blur_scissor_region;
 
 /// The largest blur radius in a scene-space filter chain, in device pixels — used to size the
 /// blur kernel and the dilated region the blur passes are scissored to.
@@ -34,46 +35,6 @@ fn max_blur_radius(filters: &[ScaledFilter]) -> f32 {
     filters.iter().fold(0.0, |acc, filter| match filter {
         ScaledFilter::Blur(radius) => acc.max(radius.0),
     })
-}
-
-/// The half-resolution scissor region the blur passes may write, matching the wgpu backend.
-///
-/// A separable gaussian at half resolution reads one kernel reach (3σ = 1.5× the full-res blur
-/// radius in half-res texels) beyond each pixel it computes. The composite only samples the
-/// element box (backdrop) or its 3σ dilation (content filter), so the scissor adds two reaches
-/// for content filters and one for backdrops around that sample region.
-fn blur_scissor_region(
-    bounds: Bounds<ScaledPixels>,
-    blur_radius: f32,
-    clip_rounded: bool,
-    width: u32,
-    height: u32,
-) -> Option<[u32; 4]> {
-    let half_w = (width / 2).max(1);
-    let half_h = (height / 2).max(1);
-    let kernel_reach = 3.0 * blur_radius; // full-resolution pixels
-    let composite_dilation = if clip_rounded { 0.0 } else { kernel_reach };
-    let scissor_dilation = composite_dilation + kernel_reach;
-    let x0 = (((bounds.origin.x.0 - scissor_dilation) * 0.5)
-        .floor()
-        .max(0.0) as u32)
-        .min(half_w);
-    let y0 = (((bounds.origin.y.0 - scissor_dilation) * 0.5)
-        .floor()
-        .max(0.0) as u32)
-        .min(half_h);
-    let x1 = ((((bounds.origin.x.0 + bounds.size.width.0 + scissor_dilation) * 0.5)
-        .ceil()
-        .max(0.0) as u32)
-        .min(half_w))
-    .max(x0);
-    let y1 = ((((bounds.origin.y.0 + bounds.size.height.0 + scissor_dilation) * 0.5)
-        .ceil()
-        .max(0.0) as u32)
-        .min(half_h))
-    .max(y0);
-    let region = [x0, y0, x1 - x0, y1 - y0];
-    (region[2] > 0 && region[3] > 0).then_some(region)
 }
 
 pub(crate) const DISABLE_DIRECT_COMPOSITION: &str = "GPUI_DISABLE_DIRECT_COMPOSITION";
@@ -2973,7 +2934,7 @@ mod tests {
     // `#[test]` attribute and blows up `#[test]` expansion with an infinite
     // recursion. Import only what this module needs, explicitly.
     use super::{
-        blur_scissor_region, create_blend_state, create_blend_state_for_path_rasterization,
+        create_blend_state, create_blend_state_for_path_rasterization,
         create_blend_state_for_path_sprite, create_blend_state_no_blend,
         create_buffer, create_buffer_view, create_buffer_view_range, corner_radii_array, create_blur_sampler,
         create_color_target, create_constant_buffer,
@@ -3651,35 +3612,6 @@ mod tests {
             context.PSSetShaderResources(3, Some(&null_srv));
         }
         Ok(())
-    }
-
-    #[test]
-    fn blur_scissor_covers_the_element_band_not_the_viewport() {
-        let titlebar = bounds(
-            point(ScaledPixels(0.0), ScaledPixels(0.0)),
-            size(ScaledPixels(1911.0), ScaledPixels(50.0)),
-        );
-        let region = blur_scissor_region(titlebar, 40.0, true, 1911, 1090)
-            .expect("the titlebar band is non-empty");
-        assert_eq!(region, [0, 0, 955, 85]);
-        let half_viewport_area = (1911u64 / 2) * (1090u64 / 2);
-        assert!(
-            u64::from(region[2]) * u64::from(region[3]) * 4 < half_viewport_area,
-            "the blur scissor must cover far less than the viewport"
-        );
-
-        // Content blur samples a region dilated by its kernel, so its scissor is taller.
-        let content_region = blur_scissor_region(titlebar, 40.0, false, 1911, 1090)
-            .expect("the dilated band is non-empty");
-        assert_eq!(content_region[2], region[2]);
-        assert!(content_region[3] > region[3]);
-
-        // A blur entirely outside the viewport has nothing to write.
-        let outside = bounds(
-            point(ScaledPixels(-1000.0), ScaledPixels(-1000.0)),
-            size(ScaledPixels(10.0), ScaledPixels(10.0)),
-        );
-        assert!(blur_scissor_region(outside, 4.0, true, 100, 100).is_none());
     }
 
     /// A blurred element must not dissolve at its own border. The downsample reflects taps that

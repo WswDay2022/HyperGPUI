@@ -7,6 +7,7 @@ use cocoa::{
     quartzcore::AutoresizingMask,
 };
 use hgpui_render::artifacts::NATIVE_SHADERS;
+use hgpui_render::blur_region::blur_scissor_region;
 use hgpui_render::abi::{BlurUniforms as BlurUniform, FontRasterizationUniforms, GlobalUniforms, PathRasterizationVertex, SurfaceUniforms};
 use hgpui::{
     AtlasTextureId, Background, Bounds, ContentMask, Corners, DevicePixels, FilterBoundary,
@@ -1267,6 +1268,7 @@ impl MetalRenderer {
                 viewport_size,
                 BlurUniform::default(),
                 false,
+                None,
             );
         }
 
@@ -1294,6 +1296,8 @@ impl MetalRenderer {
         target_viewport: Size<DevicePixels>,
         params: BlurUniform,
         load: bool,
+        // `[x, y, width, height]` in target pixels; `None` leaves the default full scissor.
+        scissor: Option<[u32; 4]>,
     ) {
         let encoder = new_command_encoder_for_texture(
             command_buffer,
@@ -1309,6 +1313,14 @@ impl MetalRenderer {
             },
         );
         encoder.set_render_pipeline_state(pipeline);
+        if let Some([x, y, width, height]) = scissor {
+            encoder.set_scissor_rect(metal::MTLScissorRect {
+                x: x as NSUInteger,
+                y: y as NSUInteger,
+                width: width as NSUInteger,
+                height: height as NSUInteger,
+            });
+        }
         bind_global_uniforms(encoder, target_viewport, &self.mask_buffer);
         encoder.set_vertex_bytes(
             BlurInputIndex::Params as u64,
@@ -1363,6 +1375,7 @@ impl MetalRenderer {
                 ..Default::default()
             },
             true,
+            None,
         );
     }
 
@@ -1409,6 +1422,15 @@ impl MetalRenderer {
         };
         let half_w = i32::from(half.width) as f32;
         let half_h = i32::from(half.height) as f32;
+        let Some(scissor) = blur_scissor_region(
+            bounds,
+            blur_radius,
+            clip_rounded,
+            viewport_size.width.0.max(1) as u32,
+            viewport_size.height.0.max(1) as u32,
+        ) else {
+            return;
+        };
 
         // Downsample source -> ping, then separable gaussian ping -> pong -> ping.
         self.run_metal_blur_pass(
@@ -1425,6 +1447,7 @@ impl MetalRenderer {
                 ..Default::default()
             },
             false,
+            Some(scissor),
         );
         self.run_metal_blur_pass(
             command_buffer,
@@ -1440,6 +1463,7 @@ impl MetalRenderer {
                 ..Default::default()
             },
             false,
+            Some(scissor),
         );
         self.run_metal_blur_pass(
             command_buffer,
@@ -1455,6 +1479,7 @@ impl MetalRenderer {
                 ..Default::default()
             },
             false,
+            Some(scissor),
         );
 
         // Composite the blurred result into the target (preserving its contents).
@@ -1475,6 +1500,7 @@ impl MetalRenderer {
                 ..Default::default()
             },
             true,
+            None,
         );
     }
 
