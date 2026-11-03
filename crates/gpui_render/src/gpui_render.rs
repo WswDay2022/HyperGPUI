@@ -3,6 +3,7 @@
 pub mod abi;
 pub mod artifacts;
 pub mod blur_region;
+pub mod filter_matrix;
 mod instances;
 pub mod shaders;
 mod target_stack;

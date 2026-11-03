@@ -4459,7 +4459,7 @@ impl Window {
     /// `backdrop-filter` effect (frosted glass). Typically the element then paints a translucent
     /// background quad on top so its color tints the blurred backdrop.
     ///
-    /// Does nothing when `filters` produce no visible blur.
+    /// Does nothing when `filters` produce no visible effect.
     ///
     /// This method should only be called as part of the paint phase of element drawing.
     pub fn paint_backdrop_filter(
@@ -4497,7 +4497,7 @@ impl Window {
     /// composites the result back into the rounded rectangle described by `bounds` and
     /// `corner_radii` — the CSS `filter` effect (e.g. blurring an element and its children).
     ///
-    /// When `filters` produce no visible blur this simply runs `f` with no offscreen
+    /// When `filters` produce no visible effect this simply runs `f` with no offscreen
     /// indirection.
     ///
     /// This method should only be called as part of the paint phase of element drawing.

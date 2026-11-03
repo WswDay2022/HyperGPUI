@@ -74,6 +74,19 @@ pub struct BlurUniforms {
     pub tap_step: f32,
     pub clip_rounded: f32,
     pub downsample: f32,
+    /// Rows of the folded color-filter matrix, applied to straight-alpha sRGB in the composite
+    /// pass. Identity when `color_filter` is 0, in which case the shader skips it entirely.
+    pub color_matrix_row0: [f32; 4],
+    pub color_matrix_row1: [f32; 4],
+    pub color_matrix_row2: [f32; 4],
+    pub color_matrix_row3: [f32; 4],
+    /// Constant term of the color-filter transform (CSS filter offsets).
+    pub color_offset: [f32; 4],
+    /// `1.0` enables the color matrix, `0.0` leaves the sampled color untouched.
+    pub color_filter: f32,
+    pub padding3: f32,
+    pub padding4: f32,
+    pub padding5: f32,
 }
 
 /// Uniform for the surface (YUV/RGBA texture) pipeline.
@@ -98,6 +111,6 @@ const _: () = {
     assert!(std::mem::size_of::<FontRasterizationUniforms>() == 32);
     assert!(std::mem::size_of::<PathSprite>() == 16);
     assert!(std::mem::size_of::<PathRasterizationVertex>() == 144);
-    assert!(std::mem::size_of::<BlurUniforms>() == 112);
+    assert!(std::mem::size_of::<BlurUniforms>() == 208);
     assert!(std::mem::size_of::<SurfaceUniforms>() == 96);
 };

@@ -6,19 +6,11 @@ use hgpui::{
     PrimitiveBatch, Quad, ScaledFilter, ScaledPixels, Scene, Shadow, Size, SubpixelSprite,
     Underline, get_gamma_correction_ratios,
 };
+use hgpui_render::blur_region::filter_copy_region;
+use hgpui_render::filter_matrix::{
+    ColorFilterMatrix, color_filter_matrix, combined_blur_radius,
+};
 use log::warn;
-
-/// The largest blur radius in a scene-space filter chain, in device pixels — used to size the
-/// blur kernel and the dilated region the blur passes are scissored to.
-///
-/// The `match` is exhaustive on purpose: adding a [`ScaledFilter`] variant breaks it here,
-/// forcing this backend to handle (or deliberately ignore) the new filter rather than silently
-/// dropping it.
-fn max_blur_radius(filters: &[ScaledFilter]) -> f32 {
-    filters.iter().fold(0.0, |acc, filter| match filter {
-        ScaledFilter::Blur(radius) => acc.max(radius.0),
-    })
-}
 #[cfg(not(target_family = "wasm"))]
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use std::cell::RefCell;
@@ -54,6 +46,8 @@ impl From<Bounds<ScaledPixels>> for PodBounds {
 #[derive(Debug, Default, Clone, Copy)]
 pub struct FrameDrawStats {
     pub total_batches: usize,
+    /// Draw calls issued while painting the scene: primitive batches, path rasterization and
+    /// surfaces. Internal filter/blit helper passes are not included.
     pub total_draw_calls: usize,
     pub quads: usize,
     pub shadows: usize,
@@ -150,6 +144,17 @@ struct BlurParams {
     /// origin, so a stationary element blurs identically at every window size); 0.0 = 1:1 copy
     /// (the scene blit, which must not downsample). Downsample pass only.
     downsample: f32,
+    /// Folded CSS color-filter matrix, applied to straight-alpha sRGB in the composite pass.
+    color_matrix_row0: [f32; 4],
+    color_matrix_row1: [f32; 4],
+    color_matrix_row2: [f32; 4],
+    color_matrix_row3: [f32; 4],
+    color_offset: [f32; 4],
+    /// 1.0 = apply `color_matrix_*`/`color_offset`; 0.0 = leave the blur or copy untouched.
+    color_filter: f32,
+    padding3: f32,
+    padding4: f32,
+    padding5: f32,
 }
 
 #[repr(C)]
@@ -184,6 +189,68 @@ struct PathRasterizationVertex {
     mask_chain: u32,
     /// Pads the stride to 144 bytes.
     padding: [u32; 3],
+}
+
+/// Clamp a requested surface size to the device's maximum 2D texture dimension and to at least
+/// one pixel.
+///
+/// Negative `DevicePixels` occur transiently during resize; cast them to zero first, otherwise
+/// `as u32` wraps to ~4 billion and the allocation is clamped to `max_texture_size` instead of
+/// the real (tiny) size.
+fn clamp_surface_size(size: Size<DevicePixels>, max_texture_size: u32) -> (u32, u32) {
+    let width = size.width.0.max(0) as u32;
+    let height = size.height.0.max(0) as u32;
+    let clamped_width = width.min(max_texture_size);
+    let clamped_height = height.min(max_texture_size);
+    (clamped_width.max(1), clamped_height.max(1))
+}
+
+/// Logs when `clamped` means the requested size was truncated by `max_texture_size`.
+///
+/// Kept separate from [`clamp_surface_size`] so the hot resize path can warn only when the
+/// clamped configuration actually changes; a window dragged while larger than the limit would
+/// otherwise log on every resize event.
+fn warn_if_clamped(
+    size: Size<DevicePixels>,
+    max_texture_size: u32,
+    clamped_width: u32,
+    clamped_height: u32,
+) {
+    let width = size.width.0.max(0) as u32;
+    let height = size.height.0.max(0) as u32;
+    if clamped_width != width || clamped_height != height {
+        warn!(
+            "Requested surface size ({}, {}) exceeds maximum texture dimension {}. \
+             Clamping to ({}, {}). Window content may not fill the entire window.",
+            width, height, max_texture_size, clamped_width, clamped_height
+        );
+    }
+}
+
+/// Clone the items whose bounds intersect `viewport`.
+///
+/// The visible count is computed first so the list is allocated exactly once: `Filter`'s
+/// `size_hint` lower bound is 0, so collecting directly would grow through several
+/// reallocations (and pre-sizing to the full batch would over-allocate for mostly-culled
+/// batches).
+fn visible_items<T, F>(items: &[T], viewport: &Bounds<ScaledPixels>, bounds: F) -> Vec<T>
+where
+    T: Clone,
+    F: Fn(&T) -> Bounds<ScaledPixels>,
+{
+    let mut visible = Vec::with_capacity(
+        items
+            .iter()
+            .filter(|item| bounds(item).intersects(viewport))
+            .count(),
+    );
+    visible.extend(
+        items
+            .iter()
+            .filter(|item| bounds(item).intersects(viewport))
+            .cloned(),
+    );
+    visible
 }
 
 pub struct WgpuSurfaceConfig {
@@ -242,12 +309,15 @@ struct WgpuResources {
     bind_group_layouts: WgpuBindGroupLayouts,
     atlas_sampler: wgpu::Sampler,
     surface_sampler: wgpu::Sampler,
-    #[allow(dead_code)]
-    surface_uniform_buffer: wgpu::Buffer,
     /// One reused uniform buffer holding [`BlurParams`] for every blur pass in a frame, each at a
     /// distinct (alignment-strided) offset. Avoids allocating a buffer per pass; distinct offsets
     /// mean `write_buffer`'s last-write-at-submit semantics don't clobber earlier passes.
     blur_params_buffer: wgpu::Buffer,
+    /// Spill buffers for frames that need more than [`BLUR_PARAMS_SLOTS`] blur passes. Reusing a
+    /// slot would rewrite params that already-recorded (but not yet submitted) passes still read
+    /// at execution time, corrupting earlier blurs. Retained across frames and dropped with the
+    /// resources on device loss.
+    blur_params_extra: RefCell<Vec<wgpu::Buffer>>,
     globals_buffer: wgpu::Buffer,
     globals_bind_group: wgpu::BindGroup,
     path_globals_bind_group: wgpu::BindGroup,
@@ -280,6 +350,10 @@ struct WgpuResources {
     /// content blurs isolate correctly, up to [`MAX_FILTER_DEPTH`]; deeper nests render inline.
     group_textures: Vec<wgpu::Texture>,
     group_views: Vec<wgpu::TextureView>,
+    /// Full-resolution snapshot used by color-only backdrop filters, which read and write the
+    /// same target. Allocated lazily on the first such filter; blur filters use ping/pong.
+    filter_scratch_texture: Option<wgpu::Texture>,
+    filter_scratch_view: Option<wgpu::TextureView>,
 }
 
 impl WgpuResources {
@@ -296,6 +370,8 @@ impl WgpuResources {
         self.blur_pong_view = None;
         self.group_textures.clear();
         self.group_views.clear();
+        self.filter_scratch_texture = None;
+        self.filter_scratch_view = None;
     }
 }
 
@@ -304,8 +380,10 @@ impl WgpuResources {
 /// render inline (unblurred at the inner level) rather than allocating unbounded VRAM.
 const MAX_FILTER_DEPTH: usize = 2;
 
-/// Number of [`BlurParams`] slots in the shared blur-params buffer (one per blur pass per frame).
+/// Number of [`BlurParams`] slots in one blur-params buffer (one per blur pass per frame).
 /// Each frame uses 4 passes per backdrop/group plus one blit; 256 covers dozens of filters.
+/// Frames that exceed it allocate an additional spill buffer rather than overwriting live
+/// parameters (see [`WgpuRenderer::make_blur_bind_group`]).
 const BLUR_PARAMS_SLOTS: u64 = 256;
 
 pub struct WgpuRenderer {
@@ -330,6 +408,12 @@ pub struct WgpuRenderer {
     /// (in slots) handed out to blur passes. Cell so the `&self` blur helpers can advance it.
     blur_params_stride: u64,
     blur_params_slot: std::cell::Cell<u64>,
+    /// Set after the first frame that spills past [`BLUR_PARAMS_SLOTS`], so the warning is
+    /// emitted once instead of on every frame of a pathologically filter-heavy scene.
+    blur_params_overflow_warned: std::cell::Cell<bool>,
+    /// Scene draw calls recorded during the current frame. A `Cell` because the `&self` draw
+    /// helpers issue the draws; copied into `frame_stats` when the frame is submitted.
+    draw_call_count: std::cell::Cell<usize>,
     rendering_params: RenderingParameters,
     is_bgr: bool,
     dual_source_blending: bool,
@@ -515,24 +599,15 @@ impl WgpuRenderer {
         let device = Arc::clone(&context.device);
         let max_texture_size = device.limits().max_texture_dimension_2d;
 
-        let requested_width = config.size.width.0 as u32;
-        let requested_height = config.size.height.0 as u32;
-        let clamped_width = requested_width.min(max_texture_size);
-        let clamped_height = requested_height.min(max_texture_size);
-
-        if clamped_width != requested_width || clamped_height != requested_height {
-            warn!(
-                "Requested surface size ({}, {}) exceeds maximum texture dimension {}. \
-                 Clamping to ({}, {}). Window content may not fill the entire window.",
-                requested_width, requested_height, max_texture_size, clamped_width, clamped_height
-            );
-        }
+        // Shares the negative-size guard and max-texture-dimension clamp with the resize paths.
+        let (surface_width, surface_height) = clamp_surface_size(config.size, max_texture_size);
+        warn_if_clamped(config.size, max_texture_size, surface_width, surface_height);
 
         let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,
-            width: clamped_width.max(1),
-            height: clamped_height.max(1),
+            width: surface_width,
+            height: surface_height,
             present_mode: config
                 .preferred_present_mode
                 .filter(|mode| surface_caps.present_modes.contains(mode))
@@ -571,13 +646,6 @@ impl WgpuRenderer {
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
-        });
-
-        let surface_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("surface_uniform_buffer"),
-            size: std::mem::size_of::<SurfaceParams>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
         });
 
         let uniform_alignment = device.limits().min_uniform_buffer_offset_alignment as u64;
@@ -694,8 +762,8 @@ impl WgpuRenderer {
             bind_group_layouts,
             atlas_sampler,
             surface_sampler,
-            surface_uniform_buffer,
             blur_params_buffer,
+            blur_params_extra: RefCell::new(Vec::new()),
             globals_buffer,
             globals_bind_group,
             path_globals_bind_group,
@@ -717,6 +785,8 @@ impl WgpuRenderer {
             blur_pong_view: None,
             group_textures: Vec::new(),
             group_views: Vec::new(),
+            filter_scratch_texture: None,
+            filter_scratch_view: None,
         };
 
         Ok(Self {
@@ -733,6 +803,8 @@ impl WgpuRenderer {
             storage_buffer_alignment,
             blur_params_stride,
             blur_params_slot: std::cell::Cell::new(0),
+            blur_params_overflow_warned: std::cell::Cell::new(false),
+            draw_call_count: std::cell::Cell::new(0),
             rendering_params,
             is_bgr: false,
             dual_source_blending,
@@ -1305,7 +1377,35 @@ impl WgpuRenderer {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        (texture, view)
+    }
+
+    /// Full-resolution color-filter snapshot target. Only needs to be a copy destination and a
+    /// sampled texture: the composite renders into the scene target, not into the snapshot.
+    fn create_filter_scratch(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        width: u32,
+        height: u32,
+    ) -> (wgpu::Texture, wgpu::TextureView) {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("filter_scratch"),
+            size: wgpu::Extent3d {
+                width: width.max(1),
+                height: height.max(1),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -1341,23 +1441,17 @@ impl WgpuRenderer {
     }
 
     pub fn update_drawable_size(&mut self, size: Size<DevicePixels>) {
-        let width = size.width.0 as u32;
-        let height = size.height.0 as u32;
+        // Clamp first and compare the clamped size: comparing the raw window size against the
+        // already-clamped config made every resize event past `max_texture_size` look like a
+        // change, reconfiguring the surface and reallocating all intermediates every frame.
+        let (width, height) = clamp_surface_size(size, self.max_texture_size);
 
         if width != self.surface_config.width || height != self.surface_config.height {
-            let clamped_width = width.min(self.max_texture_size);
-            let clamped_height = height.min(self.max_texture_size);
-
-            if clamped_width != width || clamped_height != height {
-                warn!(
-                    "Requested surface size ({}, {}) exceeds maximum texture dimension {}. \
-                     Clamping to ({}, {}). Window content may not fill the entire window.",
-                    width, height, self.max_texture_size, clamped_width, clamped_height
-                );
-            }
-
-            self.surface_config.width = clamped_width.max(1);
-            self.surface_config.height = clamped_height.max(1);
+            // Only warn when the clamped configuration changes; otherwise every resize event of
+            // an oversized window would log the same line.
+            warn_if_clamped(size, self.max_texture_size, width, height);
+            self.surface_config.width = width;
+            self.surface_config.height = height;
             let surface_config = self.surface_config.clone();
 
             // GPU resources may not exist yet, skip rather than panicking
@@ -1462,6 +1556,20 @@ impl WgpuRenderer {
         // Content-filter group targets are allocated on demand (`ensure_group_textures`):
         // full-resolution targets for every nesting level would be a large fixed VRAM cost for
         // apps that only use backdrop filters or no filters at all.
+    }
+
+    /// Allocates the color-filter snapshot target on the first frame that needs it.
+    fn ensure_filter_scratch(&mut self) {
+        if self.resources().filter_scratch_texture.is_some() {
+            return;
+        }
+        let format = self.surface_config.format;
+        let width = self.surface_config.width;
+        let height = self.surface_config.height;
+        let resources = self.resources_mut();
+        let (texture, view) = Self::create_filter_scratch(&resources.device, format, width, height);
+        resources.filter_scratch_texture = Some(texture);
+        resources.filter_scratch_view = Some(view);
     }
 
     /// Creates content-filter group targets up to `required` nesting levels.
@@ -1629,6 +1737,13 @@ impl WgpuRenderer {
             !scene.backdrop_filters.is_empty() || !scene.filter_boundaries.is_empty();
         if use_offscreen {
             self.ensure_blur_textures();
+            // A color-only backdrop filter reads and writes the same target; snapshot it first.
+            if scene.backdrop_filters.iter().any(|filter| {
+                combined_blur_radius(&filter.filters) <= 0.0
+                    && color_filter_matrix(&filter.filters).is_some()
+            }) {
+                self.ensure_filter_scratch();
+            }
             let required_groups = scene
                 .filter_boundaries
                 .iter()
@@ -1725,8 +1840,14 @@ impl WgpuRenderer {
 
         loop {
             let mut instance_offset: u64 = 0;
-            // Reset the blur-params bump cursor each (re)render of the scene.
+            // Reset the blur-params bump cursor each (re)render of the scene. Spill buffers are
+            // retained across frames so a filter-heavy scene does not reallocate them every
+            // frame; they are still referenced only by bind groups from the current frame.
             self.blur_params_slot.set(0);
+            self.draw_call_count.set(0);
+            // An overflow restarts the whole scene; reset the per-batch counters too, otherwise
+            // the aborted attempt's counts are added again on the retry.
+            self.frame_stats = FrameDrawStats::default();
             let mut overflow = false;
 
             let mut encoder =
@@ -1736,10 +1857,10 @@ impl WgpuRenderer {
                         label: Some("main_encoder"),
                     });
 
-            // When the scene contains blur filters, render into the offscreen scene texture (so
+            // When the scene contains filters, render into the offscreen scene texture (so
             // filters can sample already-painted content mid-frame) and blit to the swapchain at
-            // the end; otherwise render straight to the swapchain. `use_offscreen` and the blur
-            // textures were computed/allocated above.
+            // the end; otherwise render straight to the swapchain. `use_offscreen` and the
+            // offscreen textures were computed/allocated above.
             let scene_color_view = if use_offscreen {
                 Some(
                     self.resources()
@@ -1757,14 +1878,34 @@ impl WgpuRenderer {
                 Some(view) => view.clone(),
                 None => frame_view.clone(),
             };
+            // The texture behind `current_target`, needed for copy-based color composites.
+            let mut current_texture = match &scene_color_view {
+                Some(_) => self
+                    .resources()
+                    .scene_color_texture
+                    .as_ref()
+                    .expect("scene_color_texture allocated by ensure_blur_textures")
+                    .clone(),
+                None => frame.texture.clone(),
+            };
             // One group texture per nesting depth; empty when not blurring.
             let group_views = if use_offscreen {
                 self.resources().group_views.clone()
             } else {
                 Vec::new()
             };
-            // (boundary, parent target to composite back into, whether this level is isolated).
-            let mut filter_stack: Vec<(FilterBoundary, wgpu::TextureView, bool)> = Vec::new();
+            let group_textures = if use_offscreen {
+                self.resources().group_textures.clone()
+            } else {
+                Vec::new()
+            };
+            // (boundary, parent target + texture to composite back into, whether isolated).
+            let mut filter_stack: Vec<(
+                FilterBoundary,
+                wgpu::TextureView,
+                wgpu::Texture,
+                bool,
+            )> = Vec::new();
 
             {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1782,13 +1923,13 @@ impl WgpuRenderer {
                     ..Default::default()
                 });
 
-                self.frame_stats.total_batches = scene.batches().count();
-
                 for batch in scene.batches() {
+                    // Counted here instead of a separate `batches().count()` pass.
+                    self.frame_stats.total_batches += 1;
                     let ok = match batch {
                         PrimitiveBatch::Quads { range, smoothed } => {
                             let quads = &scene.quads[range];
-                            let visible_quads: Vec<_> = quads.iter().filter(|q| q.bounds.intersects(&viewport_bounds)).cloned().collect();
+                            let visible_quads = visible_items(quads, &viewport_bounds, |q| q.bounds);
                             self.frame_stats.quads += visible_quads.len();
                             if !visible_quads.is_empty() {
                                 self.draw_quads(&visible_quads, smoothed, &mut instance_offset, &mut pass)
@@ -1798,7 +1939,8 @@ impl WgpuRenderer {
                         }
                         PrimitiveBatch::Shadows { range, smoothed } => {
                             let shadows = &scene.shadows[range];
-                            let visible_shadows: Vec<_> = shadows.iter().filter(|s| s.bounds.intersects(&viewport_bounds)).cloned().collect();
+                            let visible_shadows =
+                                visible_items(shadows, &viewport_bounds, |s| s.bounds);
                             self.frame_stats.shadows += visible_shadows.len();
                             if !visible_shadows.is_empty() {
                                 self.draw_shadows(&visible_shadows, smoothed, &mut instance_offset, &mut pass)
@@ -1808,7 +1950,8 @@ impl WgpuRenderer {
                         }
                         PrimitiveBatch::Paths(range) => {
                             let paths = &scene.paths[range];
-                            let visible_paths: Vec<_> = paths.iter().filter(|p| p.bounds.intersects(&viewport_bounds)).cloned().collect();
+                            let visible_paths =
+                                visible_items(paths, &viewport_bounds, |p| p.bounds);
                             self.frame_stats.paths += visible_paths.len();
                             if visible_paths.is_empty() {
                                 continue;
@@ -1816,10 +1959,12 @@ impl WgpuRenderer {
 
                             drop(pass);
 
-                            self.frame_stats.total_draw_calls += 1;
+                            // Cull the batch for real: previously `paths` was passed here and
+                            // to the sprite pass below, so off-viewport paths were still
+                            // rasterized despite `visible_paths` being computed.
                             let did_draw = self.draw_paths_to_intermediate(
                                 &mut encoder,
-                                paths,
+                                &visible_paths,
                                 &mut instance_offset,
                             );
 
@@ -1840,7 +1985,7 @@ impl WgpuRenderer {
 
                             if did_draw {
                                 self.draw_paths_from_intermediate(
-                                    paths,
+                                    &visible_paths,
                                     &mut instance_offset,
                                     &mut pass,
                                 )
@@ -1850,7 +1995,8 @@ impl WgpuRenderer {
                         }
                         PrimitiveBatch::Underlines(range) => {
                             let underlines = &scene.underlines[range];
-                            let visible_underlines: Vec<_> = underlines.iter().filter(|u| u.bounds.intersects(&viewport_bounds)).cloned().collect();
+                            let visible_underlines =
+                                visible_items(underlines, &viewport_bounds, |u| u.bounds);
                             self.frame_stats.underlines += visible_underlines.len();
                             if !visible_underlines.is_empty() {
                                 self.draw_underlines(&visible_underlines, &mut instance_offset, &mut pass)
@@ -1860,7 +2006,8 @@ impl WgpuRenderer {
                         }
                         PrimitiveBatch::MonochromeSprites { texture_id, range } => {
                             let sprites = &scene.monochrome_sprites[range];
-                            let visible_sprites: Vec<_> = sprites.iter().filter(|s| s.bounds.intersects(&viewport_bounds)).cloned().collect();
+                            let visible_sprites =
+                                visible_items(sprites, &viewport_bounds, |s| s.bounds);
                             self.frame_stats.monochrome_sprites += visible_sprites.len();
                             if !visible_sprites.is_empty() {
                                 self.draw_monochrome_sprites(&visible_sprites, texture_id, &mut instance_offset, &mut pass)
@@ -1870,7 +2017,8 @@ impl WgpuRenderer {
                         }
                         PrimitiveBatch::SubpixelSprites { texture_id, range } => {
                             let sprites = &scene.subpixel_sprites[range];
-                            let visible_sprites: Vec<_> = sprites.iter().filter(|s| s.bounds.intersects(&viewport_bounds)).cloned().collect();
+                            let visible_sprites =
+                                visible_items(sprites, &viewport_bounds, |s| s.bounds);
                             self.frame_stats.subpixel_sprites += visible_sprites.len();
                             if !visible_sprites.is_empty() {
                                 self.draw_subpixel_sprites(&visible_sprites, texture_id, &mut instance_offset, &mut pass)
@@ -1880,7 +2028,8 @@ impl WgpuRenderer {
                         }
                         PrimitiveBatch::PolychromeSprites { texture_id, range, smoothed } => {
                             let sprites = &scene.polychrome_sprites[range];
-                            let visible_sprites: Vec<_> = sprites.iter().filter(|s| s.bounds.intersects(&viewport_bounds)).cloned().collect();
+                            let visible_sprites =
+                                visible_items(sprites, &viewport_bounds, |s| s.bounds);
                             self.frame_stats.polychrome_sprites += visible_sprites.len();
                             if !visible_sprites.is_empty() {
                                 self.draw_polychrome_sprites(&visible_sprites, texture_id, smoothed, &mut instance_offset, &mut pass)
@@ -1890,7 +2039,8 @@ impl WgpuRenderer {
                         }
                         PrimitiveBatch::Surfaces(range) => {
                             let surfaces = &scene.surfaces[range];
-                            let visible_surfaces: Vec<_> = surfaces.iter().filter(|s| s.bounds.intersects(&viewport_bounds)).cloned().collect();
+                            let visible_surfaces =
+                                visible_items(surfaces, &viewport_bounds, |s| s.bounds);
                             self.frame_stats.surfaces += visible_surfaces.len();
                             if !visible_surfaces.is_empty() {
                                 self.draw_surfaces(&visible_surfaces, &mut pass)
@@ -1900,14 +2050,20 @@ impl WgpuRenderer {
                         }
                         PrimitiveBatch::BackdropFilters(range) => {
                             let filters = &scene.backdrop_filters[range];
-                            let visible_filters: Vec<_> = filters.iter().filter(|f| f.bounds.intersects(&viewport_bounds)).cloned().collect();
+                            let visible_filters =
+                                visible_items(filters, &viewport_bounds, |f| f.bounds);
                             self.frame_stats.backdrop_filters += visible_filters.len();
                             if !visible_filters.is_empty() {
                                 // Interrupt the current pass, blur the content painted so far behind
                                 // each backdrop's rounded rect, then resume drawing on top.
                                 drop(pass);
                                 for filter in &visible_filters {
-                                    self.draw_backdrop_filter(&mut encoder, filter, &current_target);
+                                    self.draw_backdrop_filter(
+                                        &mut encoder,
+                                        filter,
+                                        &current_target,
+                                        &current_texture,
+                                    );
                                 }
                                 pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                                     label: Some("main_pass_continued"),
@@ -1934,12 +2090,14 @@ impl WgpuRenderer {
                                 // pool (indexed by current isolation depth). Beyond the pool size
                                 // (MAX_FILTER_DEPTH) deeper filters render inline without isolation
                                 // rather than corrupting an outer group.
-                                let depth = filter_stack.iter().filter(|entry| entry.2).count();
+                                let depth = filter_stack.iter().filter(|entry| entry.3).count();
                                 if depth < group_views.len() {
                                     drop(pass);
                                     let parent = current_target.clone();
+                                    let parent_texture = current_texture.clone();
                                     current_target = group_views[depth].clone();
-                                    filter_stack.push((boundary, parent, true));
+                                    current_texture = group_textures[depth].clone();
+                                    filter_stack.push((boundary, parent, parent_texture, true));
                                     pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                                         label: Some("filter_group"),
                                         color_attachments: &[Some(
@@ -1959,9 +2117,16 @@ impl WgpuRenderer {
                                         ..Default::default()
                                     });
                                 } else {
-                                    filter_stack.push((boundary, current_target.clone(), false));
+                                    filter_stack.push((
+                                        boundary,
+                                        current_target.clone(),
+                                        current_texture.clone(),
+                                        false,
+                                    ));
                                 }
-                            } else if let Some((boundary, parent, isolated)) = filter_stack.pop() {
+                            } else if let Some((boundary, parent, parent_texture, isolated)) =
+                                filter_stack.pop()
+                            {
                                 if isolated {
                                     drop(pass);
                                     let corner_radii = [
@@ -1988,12 +2153,13 @@ impl WgpuRenderer {
                                             boundary.content_mask,
                                             boundary.mask_chain,
                                             corner_radii,
-                                            max_blur_radius(&boundary.filters),
+                                            &boundary.filters,
                                             boundary.opacity,
                                             false,
                                         );
                                     }
                                     current_target = parent;
+                                    current_texture = parent_texture;
                                     pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                                         label: Some("main_pass_continued"),
                                         color_attachments: &[Some(
@@ -2029,12 +2195,18 @@ impl WgpuRenderer {
                         "instance buffer size grew too large: {}",
                         self.instance_buffer_capacity
                     );
-                    frame.present();
-                    return true;
+                    // The encoder was dropped without submitting, so this frame contains no
+                    // rendered content. Presenting it would show a stale/cleared swapchain
+                    // image while reporting success (and suppressing the caller's retry).
+                    // Drop the acquired frame and report failure instead.
+                    drop(frame);
+                    return false;
                 }
                 self.grow_instance_buffer();
                 continue;
             }
+
+            self.frame_stats.total_draw_calls = self.draw_call_count.get();
 
             // Present the offscreen scene by copying it into the swapchain texture. Skipped when
             // rendering went straight to the swapchain (no filters this frame).
@@ -2145,11 +2317,20 @@ impl WgpuRenderer {
                 padding5: 0,
             };
 
-            resources.queue.write_buffer(
-                &resources.surface_uniform_buffer,
-                0,
-                bytemuck::bytes_of(&params),
-            );
+            // All `Queue::write_buffer` calls are applied before the command buffer is
+            // submitted, so the previous shared buffer (written at offset 0 for every surface)
+            // made every draw in this pass read the *last* surface's params. Allocate a tiny
+            // uniform buffer per surface instead; surfaces are rare (embedded platform views),
+            // so the per-frame allocation is negligible.
+            let uniform_buffer = resources.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("surface_uniform_buffer"),
+                size: std::mem::size_of::<SurfaceParams>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            resources
+                .queue
+                .write_buffer(&uniform_buffer, 0, bytemuck::bytes_of(&params));
 
             let bind_group = resources
                 .device
@@ -2159,7 +2340,7 @@ impl WgpuRenderer {
                     entries: &[
                         wgpu::BindGroupEntry {
                             binding: 0,
-                            resource: resources.surface_uniform_buffer.as_entire_binding(),
+                            resource: uniform_buffer.as_entire_binding(),
                         },
                         wgpu::BindGroupEntry {
                             binding: 1,
@@ -2180,6 +2361,7 @@ impl WgpuRenderer {
             pass.set_bind_group(0, &resources.globals_bind_group, &[]);
             pass.set_bind_group(1, &bind_group, &[]);
             pass.draw(0..4, 0..1);
+            self.draw_call_count.set(self.draw_call_count.get() + 1);
         }
         true
     }
@@ -2193,20 +2375,50 @@ impl WgpuRenderer {
     /// `blur_params_buffer` (no per-pass allocation) and references that slot, the source texture,
     /// and the filtering sampler. Distinct per-pass offsets keep `write_buffer`'s
     /// last-write-at-submit semantics from clobbering earlier passes within a frame.
+    ///
+    /// A frame that needs more than [`BLUR_PARAMS_SLOTS`] passes spills into an additional
+    /// buffer; reusing a slot would rewrite parameters that already-recorded passes still read
+    /// when the command buffer executes.
     fn make_blur_bind_group(
         &self,
         params: BlurParams,
         source: &wgpu::TextureView,
     ) -> wgpu::BindGroup {
         let resources = self.resources();
-        let slot = self.blur_params_slot.get() % BLUR_PARAMS_SLOTS;
-        self.blur_params_slot.set(slot + 1);
+        let pass_index = self.blur_params_slot.get();
+        self.blur_params_slot.set(pass_index + 1);
+        let buffer_index = (pass_index / BLUR_PARAMS_SLOTS) as usize;
+        let slot = pass_index % BLUR_PARAMS_SLOTS;
         let offset = slot * self.blur_params_stride;
-        resources.queue.write_buffer(
-            &resources.blur_params_buffer,
-            offset,
-            bytemuck::bytes_of(&params),
-        );
+
+        let params_buffer = if buffer_index == 0 {
+            resources.blur_params_buffer.clone()
+        } else {
+            let mut extra = resources.blur_params_extra.borrow_mut();
+            if extra.len() < buffer_index {
+                if !self.blur_params_overflow_warned.get() {
+                    warn!(
+                        "A frame uses more than {} blur-parameter slots; allocating spill \
+                         buffers so earlier passes keep their parameters.",
+                        BLUR_PARAMS_SLOTS
+                    );
+                    self.blur_params_overflow_warned.set(true);
+                }
+                while extra.len() < buffer_index {
+                    extra.push(resources.device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("blur_params_buffer_spill"),
+                        size: self.blur_params_stride * BLUR_PARAMS_SLOTS,
+                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    }));
+                }
+            }
+            extra[buffer_index - 1].clone()
+        };
+
+        resources
+            .queue
+            .write_buffer(&params_buffer, offset, bytemuck::bytes_of(&params));
         resources
             .device
             .create_bind_group(&wgpu::BindGroupDescriptor {
@@ -2216,7 +2428,7 @@ impl WgpuRenderer {
                     wgpu::BindGroupEntry {
                         binding: 0,
                         resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                            buffer: &resources.blur_params_buffer,
+                            buffer: &params_buffer,
                             offset,
                             size: NonZeroU64::new(std::mem::size_of::<BlurParams>() as u64),
                         }),
@@ -2280,6 +2492,11 @@ impl WgpuRenderer {
         corner_radii: [f32; 4],
         opacity: f32,
     ) {
+        // Deliberately a full-surface content mask with no ancestor mask chain: a clip group's
+        // subtree is rendered into `source` while the ancestor masks are still active
+        // (`with_clip_group` sets `mask_chain: 0` and leaves the group's rounded clip to this
+        // composite), so its pixels are already clipped. Re-applying the ancestor mask here
+        // would compound antialiasing at the edges.
         let full_content_mask = Bounds {
             origin: Point {
                 x: ScaledPixels(0.0),
@@ -2322,9 +2539,10 @@ impl WgpuRenderer {
         pass.draw(0..4, 0..1);
     }
 
-    /// Blur `source` (full-resolution) and composite the result into `target`, clipped to
+    /// Apply `filters` to `source` and composite the result into `target`, clipped to
     /// `bounds`/`corner_radii`/`content_mask` and modulated by `opacity`. Shared by the backdrop
-    /// and content-filter paths. Uses the half-resolution ping/pong textures as scratch.
+    /// and content-filter paths. Blur chains use the half-resolution ping/pong textures as
+    /// scratch; color-only chains composite the source directly.
     #[allow(clippy::too_many_arguments)]
     fn blur_and_composite(
         &self,
@@ -2335,14 +2553,30 @@ impl WgpuRenderer {
         content_mask: ContentMask<ScaledPixels>,
         mask_chain: u32,
         corner_radii: [f32; 4],
-        blur_radius: f32,
+        filters: &[ScaledFilter],
         opacity: f32,
         // Backdrop clips to the rounded rect; content (`filter`) bleeds past its bounds.
         clip_rounded: bool,
     ) {
+        let blur_radius = combined_blur_radius(filters);
+        let color_filter = color_filter_matrix(filters);
         // Sigma is halved because the blur runs at half resolution.
         let sigma = (blur_radius * 0.5).max(0.0);
         if sigma <= 0.0 {
+            if let Some(color_filter) = color_filter {
+                self.filter_composite(
+                    encoder,
+                    source,
+                    target,
+                    bounds,
+                    content_mask,
+                    mask_chain,
+                    corner_radii,
+                    Some(color_filter),
+                    opacity,
+                    clip_rounded,
+                );
+            }
             return;
         }
         // Span ±3σ. If that needs more than 32 taps, spread the taps apart (tap_step > 1) rather
@@ -2456,8 +2690,40 @@ impl WgpuRenderer {
         } else {
             bounds.dilate(ScaledPixels(composite_dilation))
         };
+        self.filter_composite(
+            encoder,
+            &ping,
+            target,
+            composite_bounds,
+            content_mask,
+            mask_chain,
+            corner_radii,
+            color_filter,
+            opacity,
+            clip_rounded,
+        );
+    }
+
+    /// Composite one filtered sample into `target`, applying the folded color matrix (when
+    /// present) and the content/rounded-rect coverage. Used by color-only chains and as the
+    /// final pass of blur chains.
+    #[allow(clippy::too_many_arguments)]
+    fn filter_composite(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        source: &wgpu::TextureView,
+        target: &wgpu::TextureView,
+        bounds: Bounds<ScaledPixels>,
+        content_mask: ContentMask<ScaledPixels>,
+        mask_chain: u32,
+        corner_radii: [f32; 4],
+        color_filter: Option<ColorFilterMatrix>,
+        opacity: f32,
+        clip_rounded: bool,
+    ) {
+        let matrix = color_filter.unwrap_or_default();
         let params = BlurParams {
-            bounds: composite_bounds.into(),
+            bounds: bounds.into(),
             content_mask: content_mask.bounds.into(),
             content_mask_radii: [
                 content_mask.corner_radii.top_left.0,
@@ -2469,12 +2735,18 @@ impl WgpuRenderer {
             corner_radii,
             opacity,
             clip_rounded: if clip_rounded { 1.0 } else { 0.0 },
+            color_matrix_row0: matrix.rows[0],
+            color_matrix_row1: matrix.rows[1],
+            color_matrix_row2: matrix.rows[2],
+            color_matrix_row3: matrix.rows[3],
+            color_offset: matrix.offset,
+            color_filter: if color_filter.is_some() { 1.0 } else { 0.0 },
             ..Default::default()
         };
-        let bind_group = self.make_blur_bind_group(params, &ping);
+        let bind_group = self.make_blur_bind_group(params, source);
         let resources = self.resources();
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("blur_composite"),
+            label: Some("filter_composite"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: target,
                 resolve_target: None,
@@ -2493,13 +2765,77 @@ impl WgpuRenderer {
         pass.draw(0..4, 0..1);
     }
 
-    /// Blur the scene painted so far behind `filter.bounds` and composite it back as frosted glass.
+    /// Filter the content painted so far behind `filter.bounds` and composite it back.
     fn draw_backdrop_filter(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         filter: &BackdropFilter,
         scene_color_view: &wgpu::TextureView,
+        scene_color_texture: &wgpu::Texture,
     ) {
+        let blur_radius = combined_blur_radius(&filter.filters);
+        if blur_radius <= 0.0 {
+            // Color-only backdrop: snapshot the element's box first, because the source and
+            // destination are the same render target.
+            let Some(color_filter) = color_filter_matrix(&filter.filters) else {
+                return;
+            };
+            let width = self.surface_config.width;
+            let height = self.surface_config.height;
+            let Some([x, y, copy_width, copy_height]) =
+                filter_copy_region(filter.bounds, width, height)
+            else {
+                return;
+            };
+            let (scratch_texture, scratch_view) = {
+                let resources = self.resources();
+                match (
+                    resources.filter_scratch_texture.as_ref(),
+                    resources.filter_scratch_view.as_ref(),
+                ) {
+                    (Some(texture), Some(view)) => (texture.clone(), view.clone()),
+                    _ => return,
+                }
+            };
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: scene_color_texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d { x, y, z: 0 },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture: &scratch_texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d { x, y, z: 0 },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d {
+                    width: copy_width,
+                    height: copy_height,
+                    depth_or_array_layers: 1,
+                },
+            );
+            self.filter_composite(
+                encoder,
+                &scratch_view,
+                scene_color_view,
+                filter.bounds,
+                filter.content_mask,
+                filter.mask_chain,
+                [
+                    filter.corner_radii.top_left.0,
+                    filter.corner_radii.top_right.0,
+                    filter.corner_radii.bottom_right.0,
+                    filter.corner_radii.bottom_left.0,
+                ],
+                Some(color_filter),
+                filter.opacity,
+                true,
+            );
+            return;
+        }
+
         self.blur_and_composite(
             encoder,
             scene_color_view,
@@ -2513,7 +2849,7 @@ impl WgpuRenderer {
                 filter.corner_radii.bottom_right.0,
                 filter.corner_radii.bottom_left.0,
             ],
-            max_blur_radius(&filter.filters),
+            &filter.filters,
             filter.opacity,
             true,
         );
@@ -2595,7 +2931,8 @@ impl WgpuRenderer {
         pass.set_bind_group(0, &resources.globals_bind_group, &[]);
         pass.set_bind_group(1, &bind_group, &[]);
         pass.draw(0..4, 0..instance_count);
-        // Note: draw calls counted in caller to avoid double-counting for batched draws
+        // One batched draw call regardless of instance count.
+        self.draw_call_count.set(self.draw_call_count.get() + 1);
         true
     }
 
@@ -2639,6 +2976,7 @@ impl WgpuRenderer {
         pass.set_bind_group(0, &resources.globals_bind_group, &[]);
         pass.set_bind_group(1, &bind_group, &[]);
         pass.draw(0..4, 0..instance_count);
+        self.draw_call_count.set(self.draw_call_count.get() + 1);
         true
     }
 
@@ -2762,6 +3100,7 @@ impl WgpuRenderer {
             pass.set_bind_group(0, &resources.path_globals_bind_group, &[]);
             pass.set_bind_group(1, &data_bind_group, &[]);
             pass.draw(0..vertices.len() as u32, 0..1);
+            self.draw_call_count.set(self.draw_call_count.get() + 1);
         }
 
         true
@@ -2931,8 +3270,8 @@ impl WgpuRenderer {
 
         let surface = create_surface(instance, window_handle.as_raw())?;
 
-        let width = (config.size.width.0 as u32).max(1);
-        let height = (config.size.height.0 as u32).max(1);
+        let (width, height) = clamp_surface_size(config.size, self.max_texture_size);
+        warn_if_clamped(config.size, self.max_texture_size, width, height);
 
         let alpha_mode = if config.transparent {
             self.transparent_alpha_mode
@@ -2952,6 +3291,14 @@ impl WgpuRenderer {
                 .resources
                 .as_mut()
                 .expect("GPU resources not available");
+            // The old surface may still have swapchain images in flight; wait before replacing
+            // it, matching the teardown policy in `update_drawable_size`.
+            if let Err(e) = res.device.poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            }) {
+                warn!("Failed to poll device while replacing surface: {e:?}");
+            }
             surface.configure(&res.device, &self.surface_config);
             res.surface = surface;
 

@@ -125,6 +125,18 @@ pub mod blur {
         pub tap_step: f32,
         pub clip_rounded: f32,
         pub downsample: f32,
+        /// Folded CSS color-filter matrix (grayscale/sepia/saturate/brightness/contrast/invert/
+        /// hue-rotate/opacity), applied once in the composite pass.
+        pub color_matrix_row0: Vec4f,
+        pub color_matrix_row1: Vec4f,
+        pub color_matrix_row2: Vec4f,
+        pub color_matrix_row3: Vec4f,
+        pub color_offset: Vec4f,
+        /// `1.0` enables the color matrix; `0.0` keeps the existing blur-only output untouched.
+        pub color_filter: f32,
+        pub padding3: f32,
+        pub padding4: f32,
+        pub padding5: f32,
     }
     uniform!(group(1), binding(0), BLUR_LOCALS: BlurUniforms);
     texture!(group(1), binding(1), BLUR_TEXTURE: Texture2D<f32>);
@@ -197,6 +209,39 @@ pub mod blur {
         color / max(weight_sum, 1e-5)
     }
 
+    /// Apply the folded color-filter matrix to a premultiplied sample.
+    ///
+    /// CSS color filters are defined on straight-alpha sRGB, and the scene targets store
+    /// premultiplied color, so the sample is unpremultiplied, transformed, and premultiplied
+    /// again. Fully transparent samples stay transparent: the alpha row is applied before the
+    /// re-premultiply, so offsets cannot leak color into empty pixels.
+    pub fn apply_color_filter(color: Vec4f) -> Vec4f {
+        let locals = get!(BLUR_LOCALS);
+        if locals.color_filter <= 0.5 {
+            return color;
+        }
+        let alpha = color.w;
+        let inv_alpha = select(0.0, 1.0 / alpha, alpha > 0.0);
+        let straight = vec4f(
+            color.x * inv_alpha,
+            color.y * inv_alpha,
+            color.z * inv_alpha,
+            alpha,
+        );
+        let filtered = vec4f(
+            dot(locals.color_matrix_row0, straight) + locals.color_offset.x,
+            dot(locals.color_matrix_row1, straight) + locals.color_offset.y,
+            dot(locals.color_matrix_row2, straight) + locals.color_offset.z,
+            dot(locals.color_matrix_row3, straight) + locals.color_offset.w,
+        );
+        vec4f(
+            filtered.x * filtered.w,
+            filtered.y * filtered.w,
+            filtered.z * filtered.w,
+            filtered.w,
+        )
+    }
+
     #[vertex]
     pub fn blur_composite_vertex(#[builtin(vertex_index)] vertex_id: u32) -> BlurVarying {
         let unit_vertex = rectangle_corner(vertex_id);
@@ -224,7 +269,12 @@ pub mod blur {
         // pixel on odd-sized windows, which shows up as the blurred backdrop sliding relative to
         // the sharp content painted over it.
         let uv = input.position.xy() / get!(GLOBALS).viewport_size;
-        let blurred = texture_sample_level(BLUR_TEXTURE, BLUR_SAMPLER, uv, 0.0);
+        let blurred = apply_color_filter(texture_sample_level(
+            BLUR_TEXTURE,
+            BLUR_SAMPLER,
+            uv,
+            0.0,
+        ));
 
         let corner_radii = Corners {
             top_left: get!(BLUR_LOCALS).corner_radii.x,

@@ -7,7 +7,10 @@ use cocoa::{
     quartzcore::AutoresizingMask,
 };
 use hgpui_render::artifacts::NATIVE_SHADERS;
-use hgpui_render::blur_region::blur_scissor_region;
+use hgpui_render::blur_region::{blur_scissor_region, filter_copy_region};
+use hgpui_render::filter_matrix::{
+    ColorFilterMatrix, color_filter_matrix, combined_blur_radius,
+};
 use hgpui_render::abi::{BlurUniforms as BlurUniform, FontRasterizationUniforms, GlobalUniforms, PathRasterizationVertex, SurfaceUniforms};
 use hgpui::{
     AtlasTextureId, Background, Bounds, ContentMask, Corners, DevicePixels, FilterBoundary,
@@ -15,17 +18,6 @@ use hgpui::{
     ScaledFilter, ScaledPixels, Scene, Shadow, Size, Surface, Underline, point, size,
 };
 
-/// The largest blur radius in a scene-space filter chain, in device pixels — used to size the
-/// blur kernel and the dilated region the blur passes are scissored to.
-///
-/// The `match` is exhaustive on purpose: adding a [`ScaledFilter`] variant breaks it here,
-/// forcing this backend to handle (or deliberately ignore) the new filter rather than silently
-/// dropping it.
-fn max_blur_radius(filters: &[ScaledFilter]) -> f32 {
-    filters.iter().fold(0.0, |acc, filter| match filter {
-        ScaledFilter::Blur(radius) => acc.max(radius.0),
-    })
-}
 #[cfg(any(test, feature = "test-support"))]
 use image::RgbaImage;
 
@@ -168,6 +160,9 @@ pub(crate) struct MetalRenderer {
     /// nested content blurs isolate correctly, up to [`MAX_FILTER_DEPTH`]; deeper nests render
     /// inline.
     group_textures: Vec<metal::Texture>,
+    /// Full-resolution snapshot used by color-only backdrop filters, which read and write the
+    /// same target. Allocated lazily on the first such filter; blur filters use ping/pong.
+    filter_scratch_texture: Option<metal::Texture>,
     path_sample_count: u32,
     /// Frame-wide content-mask chain arena, uploaded once per frame and bound as `buffer(4)`
     /// in every shader stage (see `Scene::mask_chains`).
@@ -295,6 +290,7 @@ impl MetalRenderer {
             "path_sprite_vertex",
             "path_sprite_fragment",
             MTLPixelFormat::BGRA8Unorm,
+            metal::MTLBlendFactor::One,
         );
         let shadows_pipeline_state = build_pipeline_state(
             &device,
@@ -384,8 +380,9 @@ impl MetalRenderer {
             "blur_fragment",
             MTLPixelFormat::BGRA8Unorm,
         );
-        // Premultiplied blend (One / OneMinusSourceAlpha) — the composite outputs a premultiplied
-        // blurred sample; straight-alpha blending would darken the faded edges.
+        // Premultiplied `over` for both color and alpha — the composite outputs a premultiplied
+        // blurred sample. Straight-alpha color blending would darken faded edges, and additive
+        // alpha would over-accumulate on layered translucent windows.
         let blur_composite_pipeline_state = build_path_sprite_pipeline_state(
             &device,
             &native_library(&device, "blur_composite"),
@@ -393,6 +390,7 @@ impl MetalRenderer {
             "blur_composite_vertex",
             "blur_composite_fragment",
             MTLPixelFormat::BGRA8Unorm,
+            metal::MTLBlendFactor::OneMinusSourceAlpha,
         );
 
         let command_queue = device.new_command_queue();
@@ -439,6 +437,7 @@ impl MetalRenderer {
             blur_ping_texture: None,
             blur_pong_texture: None,
             group_textures: Vec::new(),
+            filter_scratch_texture: None,
             path_sample_count: PATH_SAMPLE_COUNT,
             mask_buffer,
             mask_capacity,
@@ -528,6 +527,7 @@ impl MetalRenderer {
         self.blur_ping_texture = None;
         self.blur_pong_texture = None;
         self.group_textures.clear();
+        self.filter_scratch_texture = None;
     }
 
     fn new_color_texture(&self, width: u64, height: u64) -> metal::Texture {
@@ -582,6 +582,16 @@ impl MetalRenderer {
         self.scene_color_texture = Some(self.new_color_texture(full_w, full_h));
         self.blur_ping_texture = Some(self.new_color_texture(full_w / 2, full_h / 2));
         self.blur_pong_texture = Some(self.new_color_texture(full_w / 2, full_h / 2));
+    }
+
+    /// Full-resolution snapshot for color-only backdrop filters, allocated on first use.
+    fn ensure_filter_scratch(&mut self, size: Size<DevicePixels>) {
+        if self.filter_scratch_texture.is_some() || size.width.0 <= 0 || size.height.0 <= 0 {
+            return;
+        }
+        self.filter_scratch_texture = Some(
+            self.new_color_texture(size.width.0 as u64, size.height.0 as u64),
+        );
     }
 
     /// Content-filter group targets, allocated only for the nesting levels this frame uses.
@@ -1006,6 +1016,13 @@ impl MetalRenderer {
             !scene.backdrop_filters.is_empty() || !scene.filter_boundaries.is_empty();
         if use_offscreen {
             self.ensure_blur_textures(viewport_size);
+            // A color-only backdrop filter reads and writes the same target; snapshot it first.
+            if scene.backdrop_filters.iter().any(|filter| {
+                combined_blur_radius(&filter.filters) <= 0.0
+                    && color_filter_matrix(&filter.filters).is_some()
+            }) {
+                self.ensure_filter_scratch(viewport_size);
+            }
             let required_groups = scene
                 .filter_boundaries
                 .iter()
@@ -1024,13 +1041,14 @@ impl MetalRenderer {
         // Render the scene into an offscreen color texture (so filters can sample it), then
         // blit it to `texture`. Owned clones keep the textures borrowable without borrowing
         // `self` across the batch loop (which calls `&mut self` methods like `draw_surfaces`).
-        // Only route through the offscreen scene texture when the scene actually contains blur
+        // Only route through the offscreen scene texture when the scene actually contains
         // filters; otherwise render straight to `texture` exactly as before (no regression, no
         // extra blit for the common case).
         let scene_color_owned = self.scene_color_texture.clone();
         let blur_ping_owned = self.blur_ping_texture.clone();
         let blur_pong_owned = self.blur_pong_texture.clone();
         let group_owned = self.group_textures.clone();
+        let filter_scratch_owned = self.filter_scratch_texture.clone();
         let scene_color: &metal::TextureRef = if use_offscreen {
             scene_color_owned.as_deref().unwrap_or(texture)
         } else {
@@ -1137,10 +1155,42 @@ impl MetalRenderer {
                 ),
                 PrimitiveBatch::BackdropFilters(range) => {
                     command_encoder.end_encoding();
-                    if let (Some(ping), Some(pong)) =
-                        (blur_ping_owned.as_deref(), blur_pong_owned.as_deref())
-                    {
-                        for filter in &scene.backdrop_filters[range] {
+                    for filter in &scene.backdrop_filters[range] {
+                        let blur_radius = combined_blur_radius(&filter.filters);
+                        if blur_radius <= 0.0 {
+                            // Color-only backdrop: snapshot the element's box first, because
+                            // the source and destination are the same render target.
+                            let Some(color_filter) = color_filter_matrix(&filter.filters) else {
+                                continue;
+                            };
+                            let Some(scratch) = filter_scratch_owned.as_deref() else {
+                                continue;
+                            };
+                            self.metal_copy_region(
+                                command_buffer,
+                                current_target,
+                                scratch,
+                                viewport_size,
+                                filter.bounds,
+                            );
+                            self.metal_filter_composite(
+                                command_buffer,
+                                scratch,
+                                current_target,
+                                viewport_size,
+                                filter.bounds,
+                                filter.content_mask,
+                                filter.mask_chain,
+                                filter.corner_radii,
+                                Some(color_filter),
+                                filter.opacity,
+                                true,
+                            );
+                            continue;
+                        }
+                        if let (Some(ping), Some(pong)) =
+                            (blur_ping_owned.as_deref(), blur_pong_owned.as_deref())
+                        {
                             self.metal_blur_and_composite(
                                 command_buffer,
                                 current_target,
@@ -1152,7 +1202,7 @@ impl MetalRenderer {
                                 filter.content_mask,
                                 filter.mask_chain,
                                 filter.corner_radii,
-                                max_blur_radius(&filter.filters),
+                                &filter.filters,
                                 filter.opacity,
                                 true,
                             );
@@ -1221,7 +1271,7 @@ impl MetalRenderer {
                                     boundary.content_mask,
                                     boundary.mask_chain,
                                     boundary.corner_radii,
-                                    max_blur_radius(&boundary.filters),
+                                    &boundary.filters,
                                     boundary.opacity,
                                     false,
                                 );
@@ -1379,9 +1429,9 @@ impl MetalRenderer {
         );
     }
 
-    /// Blur `source` (full-resolution) using the half-res ping/pong textures and composite the
-    /// result into `target`, clipped to `bounds`/`corner_radii`/`content_mask` and modulated by
-    /// `opacity`. Shared by the backdrop and content-filter paths.
+    /// Apply `filters` to `source` (full-resolution) and composite the result into `target`,
+    /// clipped to `bounds`/`corner_radii`/`content_mask` and modulated by `opacity`. Blur chains
+    /// use the half-res ping/pong textures; color-only chains composite the source directly.
     #[allow(clippy::too_many_arguments)]
     fn metal_blur_and_composite(
         &self,
@@ -1395,14 +1445,31 @@ impl MetalRenderer {
         content_mask: ContentMask<ScaledPixels>,
         mask_chain: u32,
         corner_radii: Corners<ScaledPixels>,
-        blur_radius: f32,
+        filters: &[ScaledFilter],
         opacity: f32,
         // Backdrop clips to the rounded rect; content (`filter`) bleeds past its bounds.
         clip_rounded: bool,
     ) {
+        let blur_radius = combined_blur_radius(filters);
+        let color_filter = color_filter_matrix(filters);
         // Sigma is halved because the blur runs at half resolution.
         let sigma = (blur_radius * 0.5).max(0.0);
         if sigma <= 0.0 {
+            if color_filter.is_some() {
+                self.metal_filter_composite(
+                    command_buffer,
+                    source,
+                    target,
+                    viewport_size,
+                    bounds,
+                    content_mask,
+                    mask_chain,
+                    corner_radii,
+                    color_filter,
+                    opacity,
+                    clip_rounded,
+                );
+            }
             return;
         }
         // Span ±3σ. If that needs more than 32 taps, spread the taps apart (tap_step > 1) rather
@@ -1483,20 +1550,91 @@ impl MetalRenderer {
         );
 
         // Composite the blurred result into the target (preserving its contents).
+        self.metal_filter_composite(
+            command_buffer,
+            ping,
+            target,
+            viewport_size,
+            composite_bounds,
+            content_mask,
+            mask_chain,
+            corner_radii,
+            color_filter,
+            opacity,
+            clip_rounded,
+        );
+    }
+
+    /// Copy the filter region between two textures of the same format/size.
+    fn metal_copy_region(
+        &self,
+        command_buffer: &metal::CommandBufferRef,
+        source: &metal::TextureRef,
+        destination: &metal::TextureRef,
+        viewport_size: Size<DevicePixels>,
+        bounds: Bounds<ScaledPixels>,
+    ) {
+        let Some([x, y, width, height]) = filter_copy_region(
+            bounds,
+            viewport_size.width.0.max(1) as u32,
+            viewport_size.height.0.max(1) as u32,
+        ) else {
+            return;
+        };
+        let blit = command_buffer.new_blit_command_encoder();
+        let origin = metal::MTLOrigin {
+            x: x as u64,
+            y: y as u64,
+            z: 0,
+        };
+        let size = metal::MTLSize {
+            width: width as u64,
+            height: height as u64,
+            depth: 1,
+        };
+        blit.copy_from_texture(source, 0, 0, origin, size, destination, 0, 0, origin);
+        blit.end_encoding();
+    }
+
+    /// Composite one filtered sample into `target`, applying the folded color matrix (when
+    /// present) and the content/rounded-rect coverage. Used by color-only chains and as the
+    /// final pass of blur chains.
+    #[allow(clippy::too_many_arguments)]
+    fn metal_filter_composite(
+        &self,
+        command_buffer: &metal::CommandBufferRef,
+        source: &metal::TextureRef,
+        target: &metal::TextureRef,
+        viewport_size: Size<DevicePixels>,
+        bounds: Bounds<ScaledPixels>,
+        content_mask: ContentMask<ScaledPixels>,
+        mask_chain: u32,
+        corner_radii: Corners<ScaledPixels>,
+        color_filter: Option<ColorFilterMatrix>,
+        opacity: f32,
+        clip_rounded: bool,
+    ) {
+        let matrix = color_filter.unwrap_or_default();
         self.run_metal_blur_pass(
             command_buffer,
             &self.blur_composite_pipeline_state,
             target,
-            ping,
+            source,
             viewport_size,
             BlurUniform {
-                bounds: composite_bounds,
+                bounds,
                 content_mask: content_mask.bounds,
                 content_mask_radii: corner_radii_array(content_mask.corner_radii),
                 mask_chain,
                 corner_radii: corner_radii_array(corner_radii),
                 opacity,
                 clip_rounded: if clip_rounded { 1.0 } else { 0.0 },
+                color_matrix_row0: matrix.rows[0],
+                color_matrix_row1: matrix.rows[1],
+                color_matrix_row2: matrix.rows[2],
+                color_matrix_row3: matrix.rows[3],
+                color_offset: matrix.offset,
+                color_filter: if color_filter.is_some() { 1.0 } else { 0.0 },
                 ..Default::default()
             },
             true,
@@ -2180,6 +2318,7 @@ fn build_path_sprite_pipeline_state(
     vertex_fn_name: &str,
     fragment_fn_name: &str,
     pixel_format: metal::MTLPixelFormat,
+    destination_alpha_blend_factor: metal::MTLBlendFactor,
 ) -> metal::RenderPipelineState {
     let vertex_fn = library
         .get_function(vertex_fn_name, None)
@@ -2200,7 +2339,7 @@ fn build_path_sprite_pipeline_state(
     color_attachment.set_source_rgb_blend_factor(metal::MTLBlendFactor::One);
     color_attachment.set_source_alpha_blend_factor(metal::MTLBlendFactor::One);
     color_attachment.set_destination_rgb_blend_factor(metal::MTLBlendFactor::OneMinusSourceAlpha);
-    color_attachment.set_destination_alpha_blend_factor(metal::MTLBlendFactor::One);
+    color_attachment.set_destination_alpha_blend_factor(destination_alpha_blend_factor);
 
     device
         .new_render_pipeline_state(&descriptor)

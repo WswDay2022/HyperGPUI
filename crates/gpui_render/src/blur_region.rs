@@ -47,6 +47,29 @@ pub fn blur_scissor_region(
     (region[2] > 0 && region[3] > 0).then_some(region)
 }
 
+/// The integer region `[x, y, width, height]` a color-only filter composite covers, clamped to
+/// the viewport.
+///
+/// Backdrop color filters copy this region into a scratch texture before compositing, because
+/// the source and destination are the same render target. Copying only the element's box keeps
+/// that extra pass proportional to the filtered area instead of the whole window.
+pub fn filter_copy_region(
+    bounds: Bounds<ScaledPixels>,
+    viewport_width: u32,
+    viewport_height: u32,
+) -> Option<[u32; 4]> {
+    let x0 = (bounds.origin.x.0.floor().max(0.0) as u32).min(viewport_width);
+    let y0 = (bounds.origin.y.0.floor().max(0.0) as u32).min(viewport_height);
+    let x1 = (((bounds.origin.x.0 + bounds.size.width.0).ceil().max(0.0)) as u32)
+        .min(viewport_width)
+        .max(x0);
+    let y1 = (((bounds.origin.y.0 + bounds.size.height.0).ceil().max(0.0)) as u32)
+        .min(viewport_height)
+        .max(y0);
+    let region = [x0, y0, x1 - x0, y1 - y0];
+    (region[2] > 0 && region[3] > 0).then_some(region)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -81,5 +104,20 @@ mod tests {
             size(ScaledPixels(10.0), ScaledPixels(10.0)),
         );
         assert!(blur_scissor_region(outside, 4.0, true, 100, 100).is_none());
+    }
+
+    #[test]
+    fn filter_copy_region_clamps_to_the_viewport() {
+        let panel = bounds(
+            point(ScaledPixels(10.5), ScaledPixels(-4.0)),
+            size(ScaledPixels(100.2), ScaledPixels(40.0)),
+        );
+        assert_eq!(filter_copy_region(panel, 80, 100), Some([10, 0, 70, 36]));
+
+        let outside = bounds(
+            point(ScaledPixels(200.0), ScaledPixels(20.0)),
+            size(ScaledPixels(10.0), ScaledPixels(10.0)),
+        );
+        assert_eq!(filter_copy_region(outside, 100, 100), None);
     }
 }

@@ -58,6 +58,104 @@ pub trait Styled: Sized {
         self
     }
 
+    /// Mix this element's colors toward luminance, like CSS `filter: grayscale(<amount>)`.
+    /// `1.0` is fully gray; values are clamped to `0..=1`.
+    ///
+    /// *Appends* to the element's filter chain, like [`Styled::blur`].
+    fn grayscale(mut self, amount: f32) -> Self {
+        self.style()
+            .filter
+            .get_or_insert_with(Vec::new)
+            .push(Filter::Grayscale(amount));
+        self
+    }
+
+    /// Mix this element's colors toward sepia, like CSS `filter: sepia(<amount>)`.
+    /// `1.0` is fully sepia; values are clamped to `0..=1`.
+    ///
+    /// *Appends* to the element's filter chain, like [`Styled::blur`].
+    fn sepia(mut self, amount: f32) -> Self {
+        self.style()
+            .filter
+            .get_or_insert_with(Vec::new)
+            .push(Filter::Sepia(amount));
+        self
+    }
+
+    /// Scale this element's color saturation, like CSS `filter: saturate(<amount>)`.
+    /// `0.0` is grayscale, `1.0` is unchanged, values above `1.0` oversaturate.
+    ///
+    /// *Appends* to the element's filter chain, like [`Styled::blur`].
+    fn saturate(mut self, amount: f32) -> Self {
+        self.style()
+            .filter
+            .get_or_insert_with(Vec::new)
+            .push(Filter::Saturate(amount));
+        self
+    }
+
+    /// Scale this element's brightness, like CSS `filter: brightness(<amount>)`.
+    /// `1.0` is unchanged; negative values are clamped to `0.0`.
+    ///
+    /// *Appends* to the element's filter chain, like [`Styled::blur`].
+    fn brightness(mut self, amount: f32) -> Self {
+        self.style()
+            .filter
+            .get_or_insert_with(Vec::new)
+            .push(Filter::Brightness(amount));
+        self
+    }
+
+    /// Scale this element's contrast, like CSS `filter: contrast(<amount>)`.
+    /// `1.0` is unchanged; negative values are clamped to `0.0`.
+    ///
+    /// *Appends* to the element's filter chain, like [`Styled::blur`].
+    fn contrast(mut self, amount: f32) -> Self {
+        self.style()
+            .filter
+            .get_or_insert_with(Vec::new)
+            .push(Filter::Contrast(amount));
+        self
+    }
+
+    /// Invert this element's colors, like CSS `filter: invert(<amount>)`.
+    /// `1.0` is fully inverted; values are clamped to `0..=1`.
+    ///
+    /// *Appends* to the element's filter chain, like [`Styled::blur`].
+    fn invert(mut self, amount: f32) -> Self {
+        self.style()
+            .filter
+            .get_or_insert_with(Vec::new)
+            .push(Filter::Invert(amount));
+        self
+    }
+
+    /// Rotate this element's hue by `degrees`, like CSS `filter: hue-rotate(<angle>)`.
+    ///
+    /// *Appends* to the element's filter chain, like [`Styled::blur`].
+    fn hue_rotate(mut self, degrees: f32) -> Self {
+        self.style()
+            .filter
+            .get_or_insert_with(Vec::new)
+            .push(Filter::HueRotate(degrees));
+        self
+    }
+
+    /// Scale this element's alpha as a filter, like CSS `filter: opacity(<amount>)`.
+    /// `1.0` is unchanged; values are clamped to `0..=1`.
+    ///
+    /// This differs from [`Styled::opacity`](crate::Styled::opacity), which scales the element
+    /// and its descendants as a group without entering the filter chain.
+    ///
+    /// *Appends* to the element's filter chain, like [`Styled::blur`].
+    fn filter_opacity(mut self, amount: f32) -> Self {
+        self.style()
+            .filter
+            .get_or_insert_with(Vec::new)
+            .push(Filter::Opacity(amount));
+        self
+    }
+
     /// Set (replacing any existing) the full list of filters applied to this element's own
     /// content, like CSS `filter`. To add a single filter to the chain instead, use the
     /// convenience setters such as [`Styled::blur`].
@@ -81,6 +179,102 @@ pub trait Styled: Sized {
             .backdrop_filter
             .get_or_insert_with(Vec::new)
             .push(Filter::Blur(radius.into()));
+        self
+    }
+
+    /// Desaturate the content behind this element, like CSS
+    /// `backdrop-filter: grayscale(<amount>)`.
+    ///
+    /// *Appends* to the element's backdrop-filter chain, like [`Styled::backdrop_blur`].
+    fn backdrop_grayscale(mut self, amount: f32) -> Self {
+        self.style()
+            .backdrop_filter
+            .get_or_insert_with(Vec::new)
+            .push(Filter::Grayscale(amount));
+        self
+    }
+
+    /// Tint the content behind this element toward sepia, like CSS
+    /// `backdrop-filter: sepia(<amount>)`.
+    ///
+    /// *Appends* to the element's backdrop-filter chain, like [`Styled::backdrop_blur`].
+    fn backdrop_sepia(mut self, amount: f32) -> Self {
+        self.style()
+            .backdrop_filter
+            .get_or_insert_with(Vec::new)
+            .push(Filter::Sepia(amount));
+        self
+    }
+
+    /// Scale the saturation of the content behind this element, like CSS
+    /// `backdrop-filter: saturate(<amount>)`.
+    ///
+    /// *Appends* to the element's backdrop-filter chain, like [`Styled::backdrop_blur`].
+    fn backdrop_saturate(mut self, amount: f32) -> Self {
+        self.style()
+            .backdrop_filter
+            .get_or_insert_with(Vec::new)
+            .push(Filter::Saturate(amount));
+        self
+    }
+
+    /// Scale the brightness of the content behind this element, like CSS
+    /// `backdrop-filter: brightness(<amount>)`.
+    ///
+    /// *Appends* to the element's backdrop-filter chain, like [`Styled::backdrop_blur`].
+    fn backdrop_brightness(mut self, amount: f32) -> Self {
+        self.style()
+            .backdrop_filter
+            .get_or_insert_with(Vec::new)
+            .push(Filter::Brightness(amount));
+        self
+    }
+
+    /// Scale the contrast of the content behind this element, like CSS
+    /// `backdrop-filter: contrast(<amount>)`.
+    ///
+    /// *Appends* to the element's backdrop-filter chain, like [`Styled::backdrop_blur`].
+    fn backdrop_contrast(mut self, amount: f32) -> Self {
+        self.style()
+            .backdrop_filter
+            .get_or_insert_with(Vec::new)
+            .push(Filter::Contrast(amount));
+        self
+    }
+
+    /// Invert the content behind this element, like CSS
+    /// `backdrop-filter: invert(<amount>)`.
+    ///
+    /// *Appends* to the element's backdrop-filter chain, like [`Styled::backdrop_blur`].
+    fn backdrop_invert(mut self, amount: f32) -> Self {
+        self.style()
+            .backdrop_filter
+            .get_or_insert_with(Vec::new)
+            .push(Filter::Invert(amount));
+        self
+    }
+
+    /// Rotate the hue of the content behind this element, like CSS
+    /// `backdrop-filter: hue-rotate(<angle>)`.
+    ///
+    /// *Appends* to the element's backdrop-filter chain, like [`Styled::backdrop_blur`].
+    fn backdrop_hue_rotate(mut self, degrees: f32) -> Self {
+        self.style()
+            .backdrop_filter
+            .get_or_insert_with(Vec::new)
+            .push(Filter::HueRotate(degrees));
+        self
+    }
+
+    /// Scale the alpha of the content behind this element, like CSS
+    /// `backdrop-filter: opacity(<amount>)`.
+    ///
+    /// *Appends* to the element's backdrop-filter chain, like [`Styled::backdrop_blur`].
+    fn backdrop_filter_opacity(mut self, amount: f32) -> Self {
+        self.style()
+            .backdrop_filter
+            .get_or_insert_with(Vec::new)
+            .push(Filter::Opacity(amount));
         self
     }
 

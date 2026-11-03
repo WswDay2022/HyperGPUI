@@ -223,7 +223,7 @@ pub const SCENE_BUFFER_LAYOUTS: &[SceneBufferLayout] = &[
     layout!(PathRasterizationVertex, "PathRasterizationVertex", xy_position, curve_position, color, bounds, content_mask, mask_chain, padding),
     layout!(GlobalUniforms, "GlobalUniforms", viewport_size, premultiplied_alpha, padding),
     layout!(FontRasterizationUniforms, "FontRasterizationUniforms", gamma_ratios, grayscale_enhanced_contrast, subpixel_enhanced_contrast, uses_blue_green_red_subpixel_order, padding),
-    layout!(BlurUniforms, "BlurUniforms", bounds, content_mask, content_mask_radii, mask_chain, padding0, padding1, padding2, corner_radii, direction, sigma, opacity, tap_count, tap_step, clip_rounded, downsample),
+    layout!(BlurUniforms, "BlurUniforms", bounds, content_mask, content_mask_radii, mask_chain, padding0, padding1, padding2, corner_radii, direction, sigma, opacity, tap_count, tap_step, clip_rounded, downsample, color_matrix_row0, color_matrix_row1, color_matrix_row2, color_matrix_row3, color_offset, color_filter, padding3, padding4, padding5),
     layout!(SurfaceUniforms, "SurfaceUniforms", bounds, content_mask, color_format, opacity, padding0, padding1, padding2, padding3, padding4, padding5),
 ];
 

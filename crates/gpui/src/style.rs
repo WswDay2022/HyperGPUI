@@ -496,6 +496,31 @@ pub enum Filter {
     /// element's box mirrors its edge back in, so a blurred element keeps a crisp, opaque border
     /// instead of dissolving into whatever is behind it (CSS `filter`'s `edgeMode: none`).
     Blur(Pixels),
+    /// Mix toward luminance, where `1.0` is fully gray. Maps to CSS `grayscale(<amount>)`.
+    /// Values are clamped to `0..=1`.
+    Grayscale(f32),
+    /// Mix toward sepia, where `1.0` is fully sepia. Maps to CSS `sepia(<amount>)`.
+    /// Values are clamped to `0..=1`.
+    Sepia(f32),
+    /// Color saturation multiplier: `0.0` is grayscale, `1.0` leaves the color unchanged, and
+    /// values above `1.0` oversaturate. Maps to CSS `saturate(<amount>)`; negative values are
+    /// clamped to `0.0`.
+    Saturate(f32),
+    /// Brightness multiplier: `1.0` leaves the color unchanged. Maps to CSS
+    /// `brightness(<amount>)`; negative values are clamped to `0.0`.
+    Brightness(f32),
+    /// Contrast multiplier: `1.0` leaves the color unchanged. Maps to CSS
+    /// `contrast(<amount>)`; negative values are clamped to `0.0`.
+    Contrast(f32),
+    /// Invert the color channels, where `1.0` is fully inverted. Maps to CSS
+    /// `invert(<amount>)`. Values are clamped to `0..=1`.
+    Invert(f32),
+    /// Rotate the hue by `degrees`. Maps to CSS `hue-rotate(<angle>)`.
+    HueRotate(f32),
+    /// Scale the alpha channel, where `1.0` leaves it unchanged. Maps to CSS
+    /// `opacity(<amount>)` — unlike [`Styled::opacity`](crate::Styled::opacity), this is a
+    /// filter in the element's filter chain. Values are clamped to `0..=1`.
+    Opacity(f32),
 }
 
 impl Filter {
@@ -504,10 +529,27 @@ impl Filter {
     ///
     /// Each variant declares its own no-op case here rather than the pipeline special-casing
     /// blur — adding a filter that this returns `true` for is silently dropped before it ever
-    /// reaches the renderer.
+    /// reaches the renderer. Non-finite amounts are treated as identities rather than letting
+    /// `NaN` poison the color matrix.
     pub fn is_identity(&self) -> bool {
         match self {
             Filter::Blur(radius) => *radius <= Pixels::ZERO,
+            Filter::Grayscale(amount) => !amount.is_finite() || amount.clamp(0.0, 1.0) <= 0.0,
+            Filter::Sepia(amount) => !amount.is_finite() || amount.clamp(0.0, 1.0) <= 0.0,
+            Filter::Saturate(amount) => {
+                !amount.is_finite() || (amount.max(0.0) - 1.0).abs() <= 1e-6
+            }
+            Filter::Brightness(amount) => {
+                !amount.is_finite() || (amount.max(0.0) - 1.0).abs() <= 1e-6
+            }
+            Filter::Contrast(amount) => {
+                !amount.is_finite() || (amount.max(0.0) - 1.0).abs() <= 1e-6
+            }
+            Filter::Invert(amount) => !amount.is_finite() || amount.clamp(0.0, 1.0) <= 0.0,
+            Filter::HueRotate(degrees) => {
+                !degrees.is_finite() || degrees.rem_euclid(360.0) <= 1e-6
+            }
+            Filter::Opacity(amount) => !amount.is_finite() || amount.clamp(0.0, 1.0) >= 1.0,
         }
     }
 
@@ -516,6 +558,14 @@ impl Filter {
     pub fn scale(&self, factor: f32) -> ScaledFilter {
         match self {
             Filter::Blur(radius) => ScaledFilter::Blur(radius.scale(factor)),
+            Filter::Grayscale(amount) => ScaledFilter::Grayscale(*amount),
+            Filter::Sepia(amount) => ScaledFilter::Sepia(*amount),
+            Filter::Saturate(amount) => ScaledFilter::Saturate(*amount),
+            Filter::Brightness(amount) => ScaledFilter::Brightness(*amount),
+            Filter::Contrast(amount) => ScaledFilter::Contrast(*amount),
+            Filter::Invert(amount) => ScaledFilter::Invert(*amount),
+            Filter::HueRotate(degrees) => ScaledFilter::HueRotate(*degrees),
+            Filter::Opacity(amount) => ScaledFilter::Opacity(*amount),
         }
     }
 }
@@ -531,6 +581,22 @@ impl Filter {
 pub enum ScaledFilter {
     /// A gaussian blur with the given radius, in scaled (device) pixels.
     Blur(ScaledPixels),
+    /// See [`Filter::Grayscale`].
+    Grayscale(f32),
+    /// See [`Filter::Sepia`].
+    Sepia(f32),
+    /// See [`Filter::Saturate`].
+    Saturate(f32),
+    /// See [`Filter::Brightness`].
+    Brightness(f32),
+    /// See [`Filter::Contrast`].
+    Contrast(f32),
+    /// See [`Filter::Invert`].
+    Invert(f32),
+    /// See [`Filter::HueRotate`].
+    HueRotate(f32),
+    /// See [`Filter::Opacity`].
+    Opacity(f32),
 }
 
 /// How to handle whitespace in text

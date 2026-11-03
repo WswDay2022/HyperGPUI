@@ -236,6 +236,10 @@ name = "blur-test"
 path = "examples/learn/blur_test.rs"
 
 [[example]]
+name = "color-filters"
+path = "examples/learn/color_filters.rs"
+
+[[example]]
 name = "animated-uniform-list"
 path = "examples/learn/animated_uniform_list.rs"
 
