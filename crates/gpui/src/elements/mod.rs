@@ -14,6 +14,7 @@ mod uniform_list;
 mod animated_div;
 mod animated_list;
 mod animated_uniform_list;
+mod measurer;
 
 pub use anchored::*;
 pub use animation::*;
@@ -30,4 +31,5 @@ pub use text::*;
 pub use uniform_list::*;
 pub use animated_div::*;
 pub use animated_list::*;
+pub use measurer::*;
 pub use animated_uniform_list::*;

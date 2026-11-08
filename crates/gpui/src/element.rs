@@ -31,11 +31,7 @@
 //! elements when you need to take manual control of the layout and painting process, such as when using
 //! your own custom layout algorithm or rendering a code editor.
 
-use crate::{
-    A11ySubtreeBuilder, App, ArenaBox, AvailableSpace, Bounds, Context, DispatchNodeId, ElementId,
-    FocusHandle, InspectorElementId, LayoutId, Pixels, Point, Size, Style, Window,
-    util::FluentBuilder, window::with_element_arena,
-};
+use crate::{div, util::FluentBuilder, window::with_element_arena, A11ySubtreeBuilder, App, ArenaBox, AvailableSpace, Bounds, Context, DispatchNodeId, ElementId, FocusHandle, InspectorElementId, LayoutId, Pixels, Point, Size, Style, Window, Styled, Entity};
 use derive_more::{Deref, DerefMut};
 use std::{
     any::Any,

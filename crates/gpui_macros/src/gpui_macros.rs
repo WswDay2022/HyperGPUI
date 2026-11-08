@@ -7,6 +7,8 @@ mod derive_visual_context;
 mod property_test;
 mod derive_element_delegate;
 mod register_action;
+mod derive_safe_deserialize_json;
+mod derive_diff_serialize_json;
 mod styles;
 mod test;
 
@@ -27,6 +29,18 @@ pub fn derive_element_delegate(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(Action, attributes(action))]
 pub fn derive_action(input: TokenStream) -> TokenStream {
     derive_action::derive_action(input)
+}
+
+/// `SafeDeserializeJson` derive macro - see the trait documentation for details.
+#[proc_macro_derive(SafeDeserializeJson)]
+pub fn derive_safe_deserialize_json(input: TokenStream) -> TokenStream {
+    derive_safe_deserialize_json::derive_safe_deserialize_json(input)
+}
+
+/// `DiffSerializeJson` derive macro - see the trait documentation for details.
+#[proc_macro_derive(DiffSerializeJson)]
+pub fn derive_different_serialize_json(input: TokenStream) -> TokenStream {
+    derive_diff_serialize_json::derive_different_serialize_json(input)
 }
 
 /// This can be used to register an action with the GPUI runtime when you want to manually implement

@@ -117,8 +117,9 @@ pub use global::*;
 pub use motion::*;
 pub use collections;
 pub use smallvec;
+pub use stacksafe;
 pub use hgpui_macros::{
-    AppContext, IntoElement, Render, VisualContext, bench, property_test, register_action, test, ElementDelegate
+    AppContext, IntoElement, Render, VisualContext, bench, property_test, register_action, test, ElementDelegate, SafeDeserializeJson, DiffSerializeJson
 };
 
 /// Defines a Criterion benchmark group for benchmarks annotated with [`hgpui::bench`].

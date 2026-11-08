@@ -1,26 +1,26 @@
 [workspace]
 members = [
-  "./crates/gpui/",
-  "./crates/gpui_render/",
-  "./crates/gpui_web/",
-  "./crates/gpui_wgpu/",
-  "./crates/gpui_linux/",
-  "./crates/gpui_macos/",
-  "./crates/gpui_tokio/",
-  "./crates/gpui_macros/",
-  "./crates/gpui_windows/",
-  "./crates/gpui_platform/",
-  "./crates/gpui_shared_string/",
-  "./crates/gpui_elements/",
-  "./crates/gpui_collections/",
-  "./crates/gpui_refineable/",
-  "./crates/gpui_derive_refineable/",
-  "./crates/gpui_scheduler/",
-  "./crates/gpui_sum_tree/",
-  "./crates/gpui_media/",
-  "./crates/gpui_zed_util/",
-  "./crates/gpui_path/",
-  "./tooling/perf/",
+  "./crates/gpui",
+  "./crates/gpui_render",
+  "./crates/gpui_web",
+  "./crates/gpui_wgpu",
+  "./crates/gpui_linux",
+  "./crates/gpui_macos",
+  "./crates/gpui_tokio",
+  "./crates/gpui_macros",
+  "./crates/gpui_windows",
+  "./crates/gpui_platform",
+  "./crates/gpui_shared_string",
+  "./crates/gpui_elements",
+  "./crates/gpui_collections",
+  "./crates/gpui_refineable",
+  "./crates/gpui_derive_refineable",
+  "./crates/gpui_scheduler",
+  "./crates/gpui_sum_tree",
+  "./crates/gpui_media",
+  "./crates/gpui_zed_util",
+  "./crates/gpui_path",
+  "./tooling/perf",
 ]
 default-members = ["./crates/gpui/"]
 resolver = "3"
@@ -184,19 +184,19 @@ semver = { version = "1.0", features = ["serde"] }
 windows-core = "0.62.2"
 tokio = { version = "1" }
 
-hgpui = { path = "./crates/gpui", version = "0.2.3", package = "hgpui" }
-hgpui_render = { path = "./crates/gpui_render", version = "0.1.0", package = "hgpui_render" }
-hgpui_platform = { path = "./crates/gpui_platform", version = "0.1.0", package = "hgpui_platform" }
-hgpui_linux = { path = "./crates/gpui_linux", version = "0.1.0", package = "hgpui_linux" }
-hgpui_macos = { path = "./crates/gpui_macos", version = "0.1.0", package = "hgpui_macos" }
-hgpui_windows = { path = "./crates/gpui_windows", version = "0.1.0", package = "hgpui_windows" }
-hgpui_web = { path = "./crates/gpui_web", version = "0.1.0", package = "hgpui_web" }
+hgpui = { path = "./crates/gpui", version = "0.2.3" }
+hgpui_render = { path = "./crates/gpui_render", version = "0.1.0" }
+hgpui_platform = { path = "./crates/gpui_platform", version = "0.1.0" }
+hgpui_linux = { path = "./crates/gpui_linux", version = "0.1.0" }
+hgpui_macos = { path = "./crates/gpui_macos", version = "0.1.0" }
+hgpui_windows = { path = "./crates/gpui_windows", version = "0.1.0" }
+hgpui_web = { path = "./crates/gpui_web", version = "0.1.0" }
 
-hgpui_wgpu = { path = "./crates/gpui_wgpu", version = "0.1.0", package = "hgpui_wgpu" }
+hgpui_wgpu = { path = "./crates/gpui_wgpu", version = "0.1.0" }
 
-hgpui_macros = { path = "./crates/gpui_macros", version = "0.1.0", package = "hgpui_macros" }
-hgpui_shared_string = { path = "./crates/gpui_shared_string", version = "0.1.0", package = "hgpui_shared_string" }
-hgpui_tokio = { path = "./crates/gpui_tokio", version = "0.1.0", package = "hgpui_tokio" }
+hgpui_macros = { path = "./crates/gpui_macros", version = "0.1.0" }
+hgpui_shared_string = { path = "./crates/gpui_shared_string", version = "0.1.0" }
+hgpui_tokio = { path = "./crates/gpui_tokio", version = "0.1.0" }
 
 [workspace.dependencies.windows]
 version = "0.62.2"
