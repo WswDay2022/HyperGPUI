@@ -202,7 +202,13 @@ pub fn derive_refineable(input: TokenStream) -> TokenStream {
             let is_refineable = is_refineable_field(field);
             let is_optional = is_optional_field(field);
 
-            if is_refineable {
+            if is_refineable && is_optional {
+                // Optional nested values merge onto their default only when the
+                // refinement contains an update. Empty patches keep None.
+                quote! {
+                    #name: ::refineable::Refineable::refined(Default::default(), value.#name),
+                }
+            } else if is_refineable {
                 quote! {
                     #name: value.#name.into(),
                 }
@@ -223,8 +229,13 @@ pub fn derive_refineable(input: TokenStream) -> TokenStream {
             .iter()
             .map(|field| {
                 let name = &field.ident;
+                let present = if is_refineable_field(field) {
+                    quote! { !::refineable::IsEmpty::is_empty(&self.#name) }
+                } else {
+                    quote! { self.#name.is_some() }
+                };
                 quote! {
-                    if self.#name.is_some() {
+                    if #present {
                         debug_struct.field(stringify!(#name), &self.#name);
                     } else {
                         all_some = false;
@@ -383,6 +394,18 @@ pub fn derive_refineable(input: TokenStream) -> TokenStream {
         })
         .collect();
 
+    let refinement_present_conditions: Vec<TokenStream2> = fields
+        .iter()
+        .map(|field| {
+            let name = &field.ident;
+            if is_refineable_field(field) {
+                quote! { !::refineable::IsEmpty::is_empty(&self.#name) }
+            } else {
+                quote! { self.#name.is_some() }
+            }
+        })
+        .collect();
+
     let mut derive_stream = quote! {};
     for trait_to_derive in refinement_traits_to_derive {
         derive_stream.extend(quote! { #[derive(#trait_to_derive)] })
@@ -487,10 +510,11 @@ pub fn derive_refineable(input: TokenStream) -> TokenStream {
         impl #impl_generics #refinement_ident #ty_generics
             #where_clause
         {
-            /// Returns `true` if all fields are `Some`
+            /// Returns `true` if any field contains an update.
+            /// Empty nested patches are not updates, even when wrapped in Some.
             pub fn is_some(&self) -> bool {
                 #(
-                    if self.#field_names.is_some() {
+                    if #refinement_present_conditions {
                         return true;
                     }
                 )*
@@ -522,7 +546,9 @@ fn is_optional_field(f: &Field) -> bool {
 }
 
 fn get_wrapper_type(field: &Field, ty: &Type) -> syn::Type {
-    if is_refineable_field(field) {
+    if is_refineable_field(field) && is_optional_field(field) {
+        parse_quote!(<#ty as ::refineable::Refineable>::Refinement)
+    } else if is_refineable_field(field) {
         let struct_name = if let Type::Path(tp) = ty {
             tp.path.segments.last().unwrap().ident.clone()
         } else {

@@ -1305,13 +1305,13 @@ pub trait Styled: Sized {
 
     /// Sets both column endpoints, including mixed line/span or named placements.
     fn grid_column(mut self, placement: std::ops::Range<GridPlacement>) -> Self {
-        self.style().grid_location_mut().column = placement;
+        self.style().grid_location_mut().column = placement.into();
         self
     }
 
     /// Sets both row endpoints, including mixed line/span or named placements.
     fn grid_row(mut self, placement: std::ops::Range<GridPlacement>) -> Self {
-        self.style().grid_location_mut().row = placement;
+        self.style().grid_location_mut().row = placement.into();
         self
     }
 
@@ -1319,92 +1319,80 @@ pub trait Styled: Sized {
     fn grid_area(mut self, name: impl Into<SharedString>) -> Self {
         let name = name.into();
         let location = self.style().grid_location_mut();
-        location.column = GridPlacement::NamedLine(name.clone(), 0)..GridPlacement::NamedLine(name.clone(), 0);
-        location.row = GridPlacement::NamedLine(name.clone(), 0)..GridPlacement::NamedLine(name, 0);
+        location.column = (GridPlacement::NamedLine(name.clone(), 0)..GridPlacement::NamedLine(name.clone(), 0)).into();
+        location.row = (GridPlacement::NamedLine(name.clone(), 0)..GridPlacement::NamedLine(name, 0)).into();
         self
     }
 
-    /// Sets the column start of this element.
+    /// Sets only the column start, preserving the other endpoints in the cascade.
     fn col_start(mut self, start: i16) -> Self {
-        let grid_location = self.style().grid_location_mut();
-        grid_location.column.start = GridPlacement::Line(start);
+        self.style().grid_location_mut().column.start = Some(GridPlacement::Line(start));
         self
     }
 
-    /// Sets the column start of this element to auto.
+    /// Explicitly resets only the column start to auto.
     fn col_start_auto(mut self) -> Self {
-        let grid_location = self.style().grid_location_mut();
-        grid_location.column.start = GridPlacement::Auto;
+        self.style().grid_location_mut().column.start = Some(GridPlacement::Auto);
         self
     }
 
-    /// Sets the column end of this element.
+    /// Sets only the column end, preserving the other endpoints in the cascade.
     fn col_end(mut self, end: i16) -> Self {
-        let grid_location = self.style().grid_location_mut();
-        grid_location.column.end = GridPlacement::Line(end);
+        self.style().grid_location_mut().column.end = Some(GridPlacement::Line(end));
         self
     }
 
-    /// Sets the column end of this element to auto.
+    /// Explicitly resets only the column end to auto.
     fn col_end_auto(mut self) -> Self {
-        let grid_location = self.style().grid_location_mut();
-        grid_location.column.end = GridPlacement::Auto;
+        self.style().grid_location_mut().column.end = Some(GridPlacement::Auto);
         self
     }
 
-    /// Sets the column span of this element.
+    /// Sets both column endpoints to span, without changing row placement.
     fn col_span(mut self, span: u16) -> Self {
-        let grid_location = self.style().grid_location_mut();
-        grid_location.column = GridPlacement::Span(span)..GridPlacement::Span(span);
+        self.style().grid_location_mut().column = (GridPlacement::Span(span)..GridPlacement::Span(span)).into();
         self
     }
 
-    /// Sets the row span of this element.
+    /// Spans all explicit columns, without changing row placement.
     fn col_span_full(mut self) -> Self {
-        let grid_location = self.style().grid_location_mut();
-        grid_location.column = GridPlacement::Line(1)..GridPlacement::Line(-1);
+        self.style().grid_location_mut().column = (GridPlacement::Line(1)..GridPlacement::Line(-1)).into();
         self
     }
 
-    /// Sets the row start of this element.
+    /// Sets only the row start, preserving the other endpoints in the cascade.
     fn row_start(mut self, start: i16) -> Self {
-        let grid_location = self.style().grid_location_mut();
-        grid_location.row.start = GridPlacement::Line(start);
+        self.style().grid_location_mut().row.start = Some(GridPlacement::Line(start));
         self
     }
 
-    /// Sets the row start of this element to "auto"
+    /// Explicitly resets only the row start to auto.
     fn row_start_auto(mut self) -> Self {
-        let grid_location = self.style().grid_location_mut();
-        grid_location.row.start = GridPlacement::Auto;
+        self.style().grid_location_mut().row.start = Some(GridPlacement::Auto);
         self
     }
 
-    /// Sets the row end of this element.
+    /// Sets only the row end, preserving the other endpoints in the cascade.
     fn row_end(mut self, end: i16) -> Self {
-        let grid_location = self.style().grid_location_mut();
-        grid_location.row.end = GridPlacement::Line(end);
+        self.style().grid_location_mut().row.end = Some(GridPlacement::Line(end));
         self
     }
 
-    /// Sets the row end of this element to "auto"
+    /// Explicitly resets only the row end to auto.
     fn row_end_auto(mut self) -> Self {
-        let grid_location = self.style().grid_location_mut();
-        grid_location.row.end = GridPlacement::Auto;
+        self.style().grid_location_mut().row.end = Some(GridPlacement::Auto);
         self
     }
 
-    /// Sets the row span of this element.
+    /// Sets both row endpoints to span, without changing column placement.
     fn row_span(mut self, span: u16) -> Self {
-        let grid_location = self.style().grid_location_mut();
-        grid_location.row = GridPlacement::Span(span)..GridPlacement::Span(span);
+        self.style().grid_location_mut().row = (GridPlacement::Span(span)..GridPlacement::Span(span)).into();
         self
     }
 
-    /// Sets the row span of this element.
+    /// Spans all explicit rows, without changing column placement.
     fn row_span_full(mut self) -> Self {
-        let grid_location = self.style().grid_location_mut();
-        grid_location.row = GridPlacement::Line(1)..GridPlacement::Line(-1);
+        self.style().grid_location_mut().row = (GridPlacement::Line(1)..GridPlacement::Line(-1)).into();
         self
     }
 

@@ -376,7 +376,8 @@ pub struct Style {
     /// Named rectangular Grid areas, using one-based line coordinates.
     pub grid_template_areas: Vec<crate::GridTemplateArea>,
 
-    /// The grid location of this element
+    /// Grid placement, refined independently by axis and endpoint.
+    #[refineable]
     pub grid_location: Option<GridLocation>,
 
     /// Whether to draw a red debugging outline around this element
@@ -395,8 +396,9 @@ impl Styled for StyleRefinement {
 }
 
 impl StyleRefinement {
-    /// The grid location of this element
-    pub fn grid_location_mut(&mut self) -> &mut GridLocation {
+    /// Sparse Grid placement updates. `None` leaves an endpoint untouched;
+    /// `Some(GridPlacement::Auto)` explicitly resets that endpoint.
+    pub fn grid_location_mut(&mut self) -> &mut crate::GridLocationRefinement {
         self.grid_location.get_or_insert_default()
     }
 }

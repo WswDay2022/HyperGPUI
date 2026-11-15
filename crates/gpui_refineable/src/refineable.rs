@@ -1,4 +1,6 @@
 pub use derive_refineable::Refineable;
+mod ranges;
+pub use ranges::RangeRefinement;
 
 /// A trait for types that can be refined with partial updates.
 ///
@@ -14,7 +16,9 @@ pub use derive_refineable::Refineable;
 ///
 /// - **Refineable fields** (marked with `#[refineable]`): Become the corresponding refinement type
 ///   (e.g., `Bar` becomes `BarRefinement`, or `BarRefinement` remains `BarRefinement`)
-/// - **Optional fields** (`Option<T>`): Remain as `Option<T>`
+/// - **Optional nested fields** (`#[refineable] Option<T>`): Become `Option<T::Refinement>`;
+///   absent/empty patches are no-ops, and non-empty patches merge into `T::default()`.
+/// - **Ordinary optional fields** (`Option<T>`): Remain as `Option<T>` and replace atomically.
 /// - **Regular fields**: Become `Option<T>`
 ///
 /// ## Attributes
@@ -66,6 +70,54 @@ pub trait Refineable: Clone {
 pub trait IsEmpty {
     /// Returns `true` if applying this refinement would have no effect.
     fn is_empty(&self) -> bool;
+}
+
+/// An absent or empty nested patch does not change an optional value.
+impl<T: IsEmpty> IsEmpty for Option<T> {
+    fn is_empty(&self) -> bool {
+        self.as_ref().is_none_or(IsEmpty::is_empty)
+    }
+}
+
+/// Opt-in recursive refinement for optional structured values.
+///
+/// `None` is not a reset. A non-empty patch creates the value from its default
+/// if necessary, then applies only the fields present in that patch.
+impl<T: Refineable + Default> Refineable for Option<T> {
+    type Refinement = Option<T::Refinement>;
+
+    fn refine(&mut self, refinement: &Self::Refinement) {
+        if let Some(refinement) = refinement.as_ref().filter(|value| !value.is_empty()) {
+            self.get_or_insert_with(T::default).refine(refinement);
+        }
+    }
+
+    fn refined(mut self, refinement: Self::Refinement) -> Self {
+        self.refine(&refinement);
+        self
+    }
+
+    fn is_superset_of(&self, refinement: &Self::Refinement) -> bool {
+        match refinement.as_ref().filter(|value| !value.is_empty()) {
+            None => true,
+            Some(refinement) => self
+                .as_ref()
+                .is_some_and(|value| value.is_superset_of(refinement)),
+        }
+    }
+
+    fn subtract(&self, refinement: &Self::Refinement) -> Self::Refinement {
+        // Preserve the established left-remainder contract: an absent left
+        // value has nothing to subtract, and an empty right patch removes nothing.
+        let value = self.as_ref()?;
+        let empty = T::Refinement::default();
+        let reference = refinement
+            .as_ref()
+            .filter(|value| !value.is_empty())
+            .unwrap_or(&empty);
+        let remaining = value.subtract(reference);
+        (!remaining.is_empty()).then_some(remaining)
+    }
 }
 
 /// A cascade of refinements that can be merged in priority order.

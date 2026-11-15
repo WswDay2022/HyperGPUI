@@ -5,7 +5,7 @@
 use anyhow::{Context as _, anyhow};
 use core::fmt::Debug;
 use derive_more::{Add, AddAssign, Div, DivAssign, Mul, Neg, Sub, SubAssign};
-use refineable::Refineable;
+use refineable::{RangeRefinement, Refineable};
 use schemars::{JsonSchema, json_schema};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use std::borrow::Cow;
@@ -3871,12 +3871,25 @@ impl From<()> for Length {
 }
 
 /// A location in a grid layout.
-#[derive(Clone, PartialEq, Debug, Serialize, Deserialize, JsonSchema, Default)]
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize, JsonSchema, Default, Refineable)]
+#[refineable(Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct GridLocation {
     /// The rows this item uses within the grid.
+    #[refineable]
     pub row: Range<GridPlacement>,
     /// The columns this item uses within the grid.
+    #[refineable]
     pub column: Range<GridPlacement>,
+}
+
+/// A complete location specifies all four endpoints, including explicit Auto.
+impl From<GridLocation> for GridLocationRefinement {
+    fn from(location: GridLocation) -> Self {
+        Self {
+            row: location.row.into(),
+            column: location.column.into(),
+        }
+    }
 }
 
 /// The placement of an item within a grid layout's column or row.

@@ -74,6 +74,20 @@ let content = div().grid().grid_template_columns([
 
 旧 GridTemplate 的 JSON 对象形状仍可读取和写回，不要求迁移现有配置。新增类型保留 Serde 与 JsonSchema 能力。
 
+## Grid 定位的层叠语义
+
+定位按行起点、行终点、列起点、列终点独立细化。hover/focus 等补丁只更新明确指定的端点，不再以默认 Auto 清空其他端点。
+
+- 完整 `Style.grid_location` 仍是 `Option<GridLocation>`；`GridLocation.row/column` 仍是 `std::ops::Range<GridPlacement>`。
+- `StyleRefinement.grid_location` 使用 `Option<GridLocationRefinement>`；两个轴的补丁是 `RangeRefinement<GridPlacement>`。
+- 补丁端点 `None` 表示不修改；`Some(GridPlacement::Auto)` 表示明确重置。
+- 直接给 StyleRefinement 赋完整 GridLocation 时写 `Some(location.into())`；低层补丁端点赋值写 `Some(placement)`。
+- 旧完整定位 JSON 仍可读取，完整补丁可保持原有写回形状。新稀疏 JSON 省略未修改的轴/端点，显式 Auto 不会被省略。
+- `grid_row/grid_column`、span/full-span 更新对应轴的两个端点；`grid_area` 指定四端点。
+- 普通、未标记递归细化的 Option 字段仍是整体替换，不改变其他样式的既有规则。
+
+排查与回归记录见 `docs/grid-location-refinement-fix.md`。
+
 ## 单位与默认成本
 
 绝对轨道长度先按当前 rem 大小转成逻辑 px，再应用现有设备像素吸附；百分比与 fr 不提前求值、不进行 DPI 缩放。所有新增选项默认保持原来的 Taffy 默认行为；未启用名称时不生成名称边界数组。
@@ -99,6 +113,6 @@ cargo check --workspace --all-targets
 
 回归覆盖 Styled → StyleRefinement → Style → Taffy 的调用路径，以及轨道转换、真实布局、层叠覆盖和序列化。另有测试窗口从 Render/Div 布局到 Scene quad 的接线验证。
 
-2026-11-15 已执行：核心 411 项、组件库 142 项、渲染契约 43 项测试全部通过；Grid 专属回归共 31 项（包含在核心测试内）。`cargo check --workspace --all-targets --offline` 通过；`grid_complete` 示例在默认 Windows 后端与 `--features wgpu` 下均通过编译检查。新增文件已格式化，`git diff --check` 通过。
+2026-11-15 已执行（含定位层叠收尾）：核心 421 项、细化工具 10 项、组件库 142 项、渲染契约 43 项测试全部通过；Grid 专属回归共 41 项（包含在核心测试内）。`cargo check --workspace --all-targets --offline` 通过；`grid_complete` 示例在默认 Windows 后端与 `--features wgpu` 下均通过编译检查。新增文件已格式化，`git diff --check` 通过。
 
 本轮没有启动示例窗口做视觉验收；macOS 不在本机实机验证范围内。

@@ -11,5 +11,11 @@ name = "refineable"
 path = "src/refineable.rs"
 doctest = false
 
+[features]
+serde = ["dep:serde"]
+schemars = ["serde", "dep:schemars"]
+
 [dependencies]
 derive_refineable = { package = "hgpui_derive_refineable", version = "0.2.2", path = "../gpui_derive_refineable" }
+serde = { workspace = true, optional = true }
+schemars = { workspace = true, optional = true }

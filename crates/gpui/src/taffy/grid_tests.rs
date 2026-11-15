@@ -51,6 +51,63 @@ fn complete_grid_reaches_window_layout_and_scene(cx: &mut crate::TestAppContext)
     .unwrap();
 }
 
+#[crate::test]
+fn grid_location_refinement_focus_style_preserves_column_in_window(cx: &mut crate::TestAppContext) {
+    use crate::{
+        AppContext, Context, FocusHandle, InteractiveElement, IntoElement, ParentElement, Render,
+        Window, rgb,
+    };
+
+    struct FocusGridView {
+        focus: FocusHandle,
+    }
+    impl Render for FocusGridView {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .grid()
+                .grid_cols(3)
+                .grid_rows(2)
+                .w(px(600.))
+                .h(px(200.))
+                .child(
+                    div()
+                        .id("grid-location-focus-child")
+                        .track_focus(&self.focus)
+                        .col_start(2)
+                        .col_end(3)
+                        .row_start(1)
+                        .row_end(2)
+                        .focus(|style| style.row_start(2).row_end(3))
+                        .background(rgb(0x336699)),
+                )
+        }
+    }
+
+    let mut handles = None;
+    let window: crate::AnyWindowHandle = cx
+        .open_window(crate::size(px(640.), px(220.)), |_, cx| {
+            let focus = cx.focus_handle();
+            handles = Some((focus.clone(), cx.focus_handle()));
+            FocusGridView { focus }
+        })
+        .into();
+    let (focus, other_focus) = handles.unwrap();
+    cx.update_window(window, |_, window, cx| {
+        window.focus(&other_focus, cx);
+        window.draw(cx).clear(cx);
+        assert_eq!(window.rendered_frame.scene.quads.len(), 1);
+        let scale = window.scale_factor();
+        let before = window.rendered_frame.scene.quads[0].bounds.origin;
+        assert_eq!((before.x.0, before.y.0), (200. * scale, 0.));
+        window.focus(&focus, cx);
+        window.draw(cx).clear(cx);
+        assert_eq!(window.rendered_frame.scene.quads.len(), 1);
+        let after = window.rendered_frame.scene.quads[0].bounds.origin;
+        assert_eq!((after.x.0, after.y.0), (200. * scale, 100. * scale));
+    })
+    .unwrap();
+}
+
 fn style(mut value: impl Styled) -> Style {
     Style::default().refined(value.style().clone())
 }
@@ -81,6 +138,223 @@ fn layout(root: Style, children: Vec<Style>) -> Vec<taffy::Layout> {
         .iter()
         .map(|id| tree.layout(*id).unwrap().clone())
         .collect()
+}
+
+#[test]
+fn grid_location_refinement_minimal_row_column_cascade() {
+    let mut base = style(div().col_start(2));
+    base.refine(&div().row_start(4).style().clone());
+    assert_eq!(
+        base.grid_location.unwrap().column.start,
+        GridPlacement::Line(2)
+    );
+}
+
+#[test]
+fn grid_location_refinement_column_start_preserves_other_endpoints() {
+    let mut base = style(div().row_start(1).row_end(7).col_end(5));
+    base.refine(&div().col_start(3).style().clone());
+    let location = base.grid_location.unwrap();
+    assert_eq!(location.row, GridPlacement::Line(1)..GridPlacement::Line(7));
+    assert_eq!(
+        location.column,
+        GridPlacement::Line(3)..GridPlacement::Line(5)
+    );
+}
+
+#[test]
+fn grid_location_refinement_explicit_auto_only_resets_one_endpoint() {
+    let mut base = style(div().col_start(2).col_end(5).row_start(1).row_end(7));
+    base.refine(&div().row_end_auto().style().clone());
+    let location = base.grid_location.unwrap();
+    assert_eq!(
+        location.column,
+        GridPlacement::Line(2)..GridPlacement::Line(5)
+    );
+    assert_eq!(location.row, GridPlacement::Line(1)..GridPlacement::Auto);
+}
+
+#[test]
+fn grid_location_refinement_same_axis_end_is_preserved() {
+    let mut base = style(div().col_start(2).col_end(5).row_start(1).row_end(7));
+    base.refine(&div().row_start(4).style().clone());
+    let location = base.grid_location.unwrap();
+    assert_eq!(location.row, GridPlacement::Line(4)..GridPlacement::Line(7));
+    assert_eq!(
+        location.column,
+        GridPlacement::Line(2)..GridPlacement::Line(5)
+    );
+}
+
+#[test]
+fn grid_location_refinement_axis_shorthands_do_not_clear_the_other_axis() {
+    let mut base = style(div().col_start(2).col_end(5).row_start(1).row_end(7));
+    base.refine(&div().row_span(3).style().clone());
+    assert_eq!(
+        base.grid_location.as_ref().unwrap().column,
+        GridPlacement::Line(2)..GridPlacement::Line(5)
+    );
+    assert_eq!(
+        base.grid_location.as_ref().unwrap().row,
+        GridPlacement::Span(3)..GridPlacement::Span(3)
+    );
+    base.refine(
+        &div()
+            .grid_row(GridPlacement::Auto..GridPlacement::Auto)
+            .style()
+            .clone(),
+    );
+    assert_eq!(
+        base.grid_location.as_ref().unwrap().row,
+        GridPlacement::Auto..GridPlacement::Auto
+    );
+    assert_eq!(
+        base.grid_location.as_ref().unwrap().column,
+        GridPlacement::Line(2)..GridPlacement::Line(5)
+    );
+}
+
+#[test]
+fn grid_location_refinement_named_area_survives_single_endpoint_override() {
+    let mut base = style(div().grid_area("main"));
+    base.refine(&div().col_start(2).style().clone());
+    let location = base.grid_location.unwrap();
+    assert_eq!(
+        location.row.start,
+        GridPlacement::NamedLine("main".into(), 0)
+    );
+    assert_eq!(location.row.end, GridPlacement::NamedLine("main".into(), 0));
+    assert_eq!(location.column.start, GridPlacement::Line(2));
+    assert_eq!(
+        location.column.end,
+        GridPlacement::NamedLine("main".into(), 0)
+    );
+}
+
+#[test]
+fn grid_location_refinement_empty_patch_is_a_true_noop() {
+    use crate::IsEmpty;
+    let empty = StyleRefinement {
+        grid_location: Some(Default::default()),
+        ..Default::default()
+    };
+    assert!(empty.is_empty());
+    assert!(!empty.is_some());
+    assert!(!format!("{empty:?}").contains("grid_location"));
+    assert!(
+        Style::default()
+            .refined(empty.clone())
+            .grid_location
+            .is_none()
+    );
+    let from: Style = empty.clone().into();
+    assert!(from.grid_location.is_none());
+    let populated = style(div().col_start(2));
+    assert_eq!(
+        populated.clone().refined(empty).grid_location,
+        populated.grid_location
+    );
+}
+
+#[test]
+fn grid_location_refinement_cascade_superset_and_subtract_are_endpoint_wise() {
+    use crate::{Cascade, IsEmpty};
+    let base = div()
+        .col_start(2)
+        .col_end(5)
+        .row_start(1)
+        .row_end(7)
+        .style()
+        .clone();
+    let desired = div()
+        .col_start(3)
+        .col_end(5)
+        .row_start(1)
+        .row_end(7)
+        .style()
+        .clone();
+    assert!(!base.is_superset_of(&desired));
+    let difference = base.subtract(&desired);
+    let patch = difference.grid_location.as_ref().unwrap();
+    assert!(patch.row.is_empty());
+    // subtract is the left remainder, not a patch toward the right-hand value.
+    assert_eq!(patch.column.start, Some(GridPlacement::Line(2)));
+    assert_eq!(patch.column.end, None);
+    let result = base.refined(desired.clone());
+    assert!(result.is_superset_of(&desired));
+    assert!(result.subtract(&desired).is_empty());
+    assert_eq!(
+        Style::default()
+            .refined(result)
+            .grid_location
+            .unwrap()
+            .column,
+        GridPlacement::Line(3)..GridPlacement::Line(5)
+    );
+
+    let mut cascade = Cascade::<Style>::default();
+    *cascade.base() = div().col_start(2).col_end(5).row_end(7).style().clone();
+    let slot = cascade.reserve();
+    cascade.set(slot, Some(div().row_start(4).style().clone()));
+    let location = Style::from_cascade(&cascade).grid_location.unwrap();
+    assert_eq!(
+        location.column,
+        GridPlacement::Line(2)..GridPlacement::Line(5)
+    );
+    assert_eq!(location.row, GridPlacement::Line(4)..GridPlacement::Line(7));
+}
+
+#[test]
+fn grid_location_refinement_legacy_json_and_sparse_auto_round_trip() {
+    let legacy: StyleRefinement = serde_json::from_value(serde_json::json!({
+        "grid_location": {
+            "row": { "start": { "Line": 1 }, "end": { "Line": 7 } },
+            "column": { "start": { "Line": 2 }, "end": { "Line": 5 } }
+        }
+    }))
+    .unwrap();
+    let mut result = Style::default().refined(legacy.clone());
+    assert_eq!(
+        result.grid_location.as_ref().unwrap().row,
+        GridPlacement::Line(1)..GridPlacement::Line(7)
+    );
+    assert_eq!(
+        result.grid_location.as_ref().unwrap().column,
+        GridPlacement::Line(2)..GridPlacement::Line(5)
+    );
+    assert_eq!(
+        serde_json::to_value(&legacy).unwrap()["grid_location"],
+        serde_json::json!({
+            "row": { "start": { "Line": 1 }, "end": { "Line": 7 } },
+            "column": { "start": { "Line": 2 }, "end": { "Line": 5 } }
+        })
+    );
+    let partial = div().row_end_auto().style().clone();
+    let json = serde_json::to_value(&partial).unwrap();
+    assert_eq!(
+        json,
+        serde_json::json!({ "grid_location": { "row": { "end": "Auto" } } })
+    );
+    let decoded: StyleRefinement = serde_json::from_value(json).unwrap();
+    result.refine(&decoded);
+    assert_eq!(
+        result.grid_location.as_ref().unwrap().row,
+        GridPlacement::Line(1)..GridPlacement::Auto
+    );
+    assert_eq!(
+        result.grid_location.as_ref().unwrap().column,
+        GridPlacement::Line(2)..GridPlacement::Line(5)
+    );
+    let complete: crate::GridLocation = serde_json::from_value(serde_json::json!({
+        "row": { "start": "Auto", "end": "Auto" },
+        "column": { "start": "Auto", "end": "Auto" }
+    }))
+    .unwrap();
+    result.refine(&StyleRefinement {
+        grid_location: Some(complete.into()),
+        ..Default::default()
+    });
+    assert_eq!(result.grid_location, Some(crate::GridLocation::default()));
 }
 
 #[test]
