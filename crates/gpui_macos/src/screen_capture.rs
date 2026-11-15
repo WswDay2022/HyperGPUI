@@ -26,7 +26,7 @@ use objc::{
     runtime::{Class, Object, Sel},
     sel, sel_impl,
 };
-use std::{cell::RefCell, ffi::c_void, mem, ptr, rc::Rc};
+use std::{cell::RefCell, ffi::c_void, ptr, rc::Rc};
 
 use crate::NSStringExt;
 
@@ -45,6 +45,7 @@ pub struct MacScreenCaptureStream {
 static mut DELEGATE_CLASS: *const Class = ptr::null();
 static mut OUTPUT_CLASS: *const Class = ptr::null();
 const FRAME_CALLBACK_IVAR: &str = "frame_callback";
+type FrameCallback = Box<dyn Fn(ScreenCaptureFrame) + Send>;
 
 #[allow(non_upper_case_globals)]
 const SCStreamOutputTypeScreen: NSInteger = 0;
@@ -309,6 +310,10 @@ unsafe fn build_classes() {
                 as extern "C" fn(&Object, Sel, id, id, NSInteger),
         );
         decl.add_ivar::<*mut c_void>(FRAME_CALLBACK_IVAR);
+        decl.add_method(
+            sel!(dealloc),
+            dealloc_output as extern "C" fn(&mut Object, Sel),
+        );
 
         OUTPUT_CLASS = decl.register();
     }
@@ -319,6 +324,103 @@ extern "C" fn output_video_effect_did_start_for_stream(_this: &Object, _: Sel, _
 extern "C" fn output_video_effect_did_stop_for_stream(_this: &Object, _: Sel, _stream: id) {}
 
 extern "C" fn stream_did_stop_with_error(_this: &Object, _: Sel, _stream: id, _error: id) {}
+
+extern "C" fn dealloc_output(this: &mut Object, _: Sel) {
+    unsafe {
+        let callback = *this.get_ivar::<*mut c_void>(FRAME_CALLBACK_IVAR);
+        // Take ownership only at final ObjC destruction, not on a stream's release path.
+        // Clear the ivar first so teardown cannot take the same Rust allocation twice.
+        this.set_ivar(FRAME_CALLBACK_IVAR, ptr::null_mut::<c_void>());
+        if !callback.is_null() {
+            drop(Box::from_raw(callback as *mut FrameCallback));
+        }
+        let _: () = msg_send![super(this, class!(NSObject)), dealloc];
+    }
+}
+
+// SAFETY: The caller must keep the output alive for the entire callback borrow.
+unsafe fn borrow_frame_callback(this: &Object) -> Option<&FrameCallback> {
+    unsafe { (*this.get_ivar::<*mut c_void>(FRAME_CALLBACK_IVAR) as *const FrameCallback).as_ref() }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{FRAME_CALLBACK_IVAR, OUTPUT_CLASS};
+    use hgpui::ScreenCaptureFrame;
+    use objc::{msg_send, sel, sel_impl};
+    use std::{
+        ffi::c_void,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
+
+    struct DropCounter(Arc<AtomicUsize>);
+
+    impl Drop for DropCounter {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn output_release_drops_callback_environment_once() {
+        let drops = Arc::new(AtomicUsize::new(0));
+        let capture = DropCounter(drops.clone());
+        let callback: Box<dyn Fn(ScreenCaptureFrame) + Send> = Box::new(move |_frame| {
+            let _capture = &capture;
+        });
+
+        unsafe {
+            let output: *mut objc::runtime::Object = msg_send![OUTPUT_CLASS, new];
+            (*output).set_ivar(
+                FRAME_CALLBACK_IVAR,
+                Box::into_raw(Box::new(callback)) as *mut c_void,
+            );
+            assert_eq!(drops.load(Ordering::SeqCst), 0);
+            let _: () = msg_send![output, release];
+            assert_eq!(drops.load(Ordering::SeqCst), 1);
+        }
+    }
+
+    #[test]
+    fn borrowing_callback_does_not_release_its_environment() {
+        let drops = Arc::new(AtomicUsize::new(0));
+        let capture = DropCounter(drops.clone());
+        let callback: Box<dyn Fn(ScreenCaptureFrame) + Send> = Box::new(move |_frame| {
+            let _capture = &capture;
+        });
+
+        unsafe {
+            let output: *mut objc::runtime::Object = msg_send![OUTPUT_CLASS, new];
+            (*output).set_ivar(
+                FRAME_CALLBACK_IVAR,
+                Box::into_raw(Box::new(callback)) as *mut c_void,
+            );
+            let _: *mut objc::runtime::Object = msg_send![output, retain];
+            for _ in 0..3 {
+                assert!(super::borrow_frame_callback(&*output).is_some());
+                assert_eq!(drops.load(Ordering::SeqCst), 0);
+            }
+            // Releasing the stream's ownership must not invalidate another owner's callback.
+            let _: () = msg_send![output, release];
+            assert!(super::borrow_frame_callback(&*output).is_some());
+            assert_eq!(drops.load(Ordering::SeqCst), 0);
+            let _: () = msg_send![output, release];
+            assert_eq!(drops.load(Ordering::SeqCst), 1);
+        }
+    }
+
+    #[test]
+    fn output_without_callback_can_be_released() {
+        unsafe {
+            let output: *mut objc::runtime::Object = msg_send![OUTPUT_CLASS, new];
+            assert!(super::borrow_frame_callback(&*output).is_none());
+            let _: () = msg_send![output, release];
+        }
+    }
+}
 
 extern "C" fn stream_did_output_sample_buffer_of_type(
     this: &Object,
@@ -335,10 +437,17 @@ extern "C" fn stream_did_output_sample_buffer_of_type(
         let sample_buffer = sample_buffer as CMSampleBufferRef;
         let sample_buffer = CMSampleBuffer::wrap_under_get_rule(sample_buffer);
         if let Some(buffer) = sample_buffer.image_buffer() {
-            let callback: Box<Box<dyn Fn(ScreenCaptureFrame)>> =
-                Box::from_raw(*this.get_ivar::<*mut c_void>(FRAME_CALLBACK_IVAR) as *mut _);
-            callback(ScreenCaptureFrame(buffer));
-            mem::forget(callback);
+            // Keep the output alive even if the user callback closes the stream reentrantly.
+            let _: id = msg_send![this, retain];
+            if let Some(callback) = borrow_frame_callback(this) {
+                callback(ScreenCaptureFrame(buffer));
+            }
+            let _: () = msg_send![this, release];
+            // Previously each frame pretended to own the callback allocation:
+            // let callback: Box<Box<dyn Fn(ScreenCaptureFrame)>> =
+            //     Box::from_raw(*this.get_ivar::<*mut c_void>(FRAME_CALLBACK_IVAR) as *mut _);
+            // callback(ScreenCaptureFrame(buffer));
+            // mem::forget(callback);
         }
     }
 }
