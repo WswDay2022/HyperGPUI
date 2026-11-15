@@ -11,7 +11,7 @@ use windows::Win32::Graphics::{
 
 use hgpui::{
     AtlasKey, AtlasTextureId, AtlasTextureKind, AtlasTextureList, AtlasTile, Bounds, DevicePixels,
-    PlatformAtlas, Point, Size,
+    PlatformAtlas, Point, Size, atlas_page_size,
 };
 
 pub(crate) struct DirectXAtlas(Mutex<DirectXAtlasState>);
@@ -131,6 +131,8 @@ impl DirectXAtlasState {
         size: Size<DevicePixels>,
         texture_kind: AtlasTextureKind,
     ) -> Option<AtlasTile> {
+        // D3D11's dimension limit: reject the original demand before scanning or creating pages.
+        let page_size = atlas_page_size(size, 16384)?;
         {
             let textures = match texture_kind {
                 AtlasTextureKind::Monochrome => &mut self.monochrome_textures,
@@ -147,26 +149,19 @@ impl DirectXAtlasState {
             }
         }
 
-        let texture = self.push_texture(size, texture_kind)?;
-        texture.allocate(size)
+        // Previously: self.push_texture(size, texture_kind)?.allocate(size)
+        // The old path published an empty page before knowing whether the first tile fitted.
+        self.allocate_new_texture(size, page_size, texture_kind)
     }
 
-    fn push_texture(
+    fn allocate_new_texture(
         &mut self,
-        min_size: Size<DevicePixels>,
+        tile_size: Size<DevicePixels>,
+        size: Size<DevicePixels>,
         kind: AtlasTextureKind,
-    ) -> Option<&mut DirectXAtlasTexture> {
-        const DEFAULT_ATLAS_SIZE: Size<DevicePixels> = Size {
-            width: DevicePixels(1024),
-            height: DevicePixels(1024),
-        };
-        // Max texture size for DirectX. See:
-        // https://learn.microsoft.com/en-us/windows/win32/direct3d11/overviews-direct3d-11-resources-limits
-        const MAX_ATLAS_SIZE: Size<DevicePixels> = Size {
-            width: DevicePixels(16384),
-            height: DevicePixels(16384),
-        };
-        let size = min_size.min(&MAX_ATLAS_SIZE).max(&DEFAULT_ATLAS_SIZE);
+    ) -> Option<AtlasTile> {
+        // Previously: min_size.min(&MAX_ATLAS_SIZE).max(&DEFAULT_ATLAS_SIZE)
+        // `size` is now validated by atlas_page_size without shrinking the tile demand.
         let pixel_format;
         let bind_flag;
         let bytes_per_pixel;
@@ -217,7 +212,7 @@ impl DirectXAtlasState {
             AtlasTextureKind::Polychrome => &mut self.polychrome_textures,
             AtlasTextureKind::Subpixel => &mut self.subpixel_textures,
         };
-        let index = texture_list.free_list.pop();
+        // Previously: free_list.pop() preceded CreateShaderResourceView, losing a slot on failure.
         let view = unsafe {
             let mut view = None;
             self.device
@@ -225,24 +220,21 @@ impl DirectXAtlasState {
                 .ok()?;
             [view]
         };
-        let atlas_texture = DirectXAtlasTexture {
-            id: AtlasTextureId {
-                index: index.unwrap_or(texture_list.textures.len()) as u32,
-                kind,
-            },
-            bytes_per_pixel,
-            allocator: etagere::BucketedAtlasAllocator::new(device_size_to_etagere(size)),
-            texture,
-            view,
-            live_atlas_keys: 0,
-        };
-        if let Some(ix) = index {
-            texture_list.textures[ix] = Some(atlas_texture);
-            texture_list.textures.get_mut(ix).unwrap().as_mut()
-        } else {
-            texture_list.textures.push(Some(atlas_texture));
-            texture_list.textures.last_mut().unwrap().as_mut()
-        }
+        texture_list.try_insert_with(|index| {
+            let mut atlas_texture = DirectXAtlasTexture {
+                id: AtlasTextureId {
+                    index: index as u32,
+                    kind,
+                },
+                bytes_per_pixel,
+                allocator: etagere::BucketedAtlasAllocator::new(device_size_to_etagere(size)),
+                texture,
+                view,
+                live_atlas_keys: 0,
+            };
+            let tile = atlas_texture.allocate(tile_size)?;
+            Some((atlas_texture, tile))
+        })
     }
 
     fn texture(&self, id: AtlasTextureId) -> &DirectXAtlasTexture {
@@ -341,8 +333,12 @@ fn etagere_point_to_device(value: etagere::Point) -> Point<DevicePixels> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use hgpui::{ImageId, RenderImageParams};
+    // Previously: use super::*; Explicit imports keep hgpui's test macro out of scope.
+    use super::{DirectXAtlas, ID3D11Device, ID3D11DeviceContext};
+    use hgpui::{
+        AtlasKey, AtlasTextureKind, AtlasTile, DevicePixels, ImageId, PlatformAtlas,
+        RenderImageParams, Size,
+    };
     use std::borrow::Cow;
     use windows::Win32::{
         Foundation::HMODULE,
@@ -387,6 +383,96 @@ mod tests {
             })
             .expect("allocation should succeed")
             .expect("callback returns Some")
+    }
+
+    #[test]
+    fn atlas_rejects_empty_tiles_without_publishing_pages() {
+        let atlas = create_atlas().expect("WARP device should be available");
+        let keeper = make_image_key(1);
+        let tile = insert_tile(
+            &atlas,
+            &keeper,
+            Size {
+                width: DevicePixels(1),
+                height: DevicePixels(1),
+            },
+        );
+        atlas.remove(&keeper);
+
+        for (width, height) in [(0, 1), (1, 0), (-1, 1), (1, -1), (16385, 1), (1, 16385)] {
+            let result = atlas.get_or_insert_with(&make_image_key(2), &mut || {
+                Ok(Some((
+                    Size {
+                        width: DevicePixels(width),
+                        height: DevicePixels(height),
+                    },
+                    Cow::Borrowed(&[]),
+                )))
+            });
+            assert!(result.is_err());
+            let state = atlas.0.lock();
+            assert_eq!(state.polychrome_textures.textures.len(), 1);
+            assert!(state.polychrome_textures.textures[0].is_none());
+            assert_eq!(state.polychrome_textures.free_list, vec![0]);
+            assert!(state.tiles_by_key.is_empty());
+        }
+
+        let next = insert_tile(
+            &atlas,
+            &make_image_key(3),
+            Size {
+                width: DevicePixels(1),
+                height: DevicePixels(1),
+            },
+        );
+        assert_eq!(next.texture_id, tile.texture_id);
+    }
+
+    #[test]
+    fn atlas_failed_first_allocation_preserves_new_and_reused_slots() {
+        let atlas = create_atlas().expect("WARP device should be available");
+        for reuse_slot in [false, true] {
+            if reuse_slot {
+                let key = make_image_key(1);
+                insert_tile(
+                    &atlas,
+                    &key,
+                    Size {
+                        width: DevicePixels(1),
+                        height: DevicePixels(1),
+                    },
+                );
+                atlas.remove(&key);
+            }
+            let mut state = atlas.0.lock();
+            for _ in 0..3 {
+                // Force a first-allocation failure on a small real GPU page.
+                assert!(
+                    state
+                        .allocate_new_texture(
+                            Size {
+                                width: DevicePixels(1025),
+                                height: DevicePixels(1)
+                            },
+                            Size {
+                                width: DevicePixels(1024),
+                                height: DevicePixels(1024)
+                            },
+                            AtlasTextureKind::Polychrome,
+                        )
+                        .is_none()
+                );
+                assert_eq!(
+                    state.polychrome_textures.textures.len(),
+                    usize::from(reuse_slot)
+                );
+                assert!(state.polychrome_textures.iter_mut().next().is_none());
+                assert_eq!(
+                    state.polychrome_textures.free_list,
+                    if reuse_slot { vec![0] } else { vec![] }
+                );
+            }
+        }
     }
 
     #[test]

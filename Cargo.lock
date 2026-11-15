@@ -2876,6 +2876,8 @@ name = "hgpui_refineable"
 version = "0.2.2"
 dependencies = [
  "hgpui_derive_refineable",
+ "schemars",
+ "serde",
 ]
 
 [[package]]

@@ -1405,6 +1405,134 @@ pub trait PlatformAtlas {
     }
 }
 
+#[cfg(test)]
+mod atlas_tests {
+    use super::{AtlasTextureList, DevicePixels, Size, atlas_page_size};
+    use std::{cell::Cell, rc::Rc};
+
+    fn dimensions(width: i32, height: i32) -> Size<DevicePixels> {
+        Size {
+            width: DevicePixels(width),
+            height: DevicePixels(height),
+        }
+    }
+
+    #[test]
+    fn atlas_page_size_rejects_invalid_or_oversized_tiles() {
+        for limit in [512, 2048, 16384] {
+            for (width, height) in [
+                (0, 1),
+                (1, 0),
+                (-1, 1),
+                (1, -1),
+                (limit + 1, 1),
+                (1, limit + 1),
+                (i32::MAX, 1),
+            ] {
+                assert_eq!(
+                    atlas_page_size(dimensions(width, height), limit as u32),
+                    None
+                );
+            }
+        }
+        assert_eq!(atlas_page_size(dimensions(1, 1), 0), None);
+    }
+
+    #[test]
+    fn atlas_page_size_preserves_tiles_and_respects_small_device_limits() {
+        assert_eq!(
+            atlas_page_size(dimensions(1, 1), 16384),
+            Some(dimensions(1024, 1024))
+        );
+        assert_eq!(
+            atlas_page_size(dimensions(1500, 32), 2048),
+            Some(dimensions(1500, 1024))
+        );
+        assert_eq!(
+            atlas_page_size(dimensions(32, 1500), 2048),
+            Some(dimensions(1024, 1500))
+        );
+        assert_eq!(
+            atlas_page_size(dimensions(16384, 1), 16384),
+            Some(dimensions(16384, 1024))
+        );
+        assert_eq!(
+            atlas_page_size(dimensions(1, 1), 512),
+            Some(dimensions(512, 512))
+        );
+    }
+
+    struct TestTexture(Rc<Cell<usize>>);
+
+    impl Drop for TestTexture {
+        fn drop(&mut self) {
+            self.0.set(self.0.get() - 1);
+        }
+    }
+
+    #[test]
+    fn atlas_failed_first_allocation_drops_resource_and_preserves_slots() {
+        for reuse_slot in [false, true] {
+            let mut textures = AtlasTextureList::default();
+            if reuse_slot {
+                textures.textures.push(None);
+                textures.free_list.push(0);
+            }
+            let live_resources = Rc::new(Cell::new(0));
+            for _ in 0..3 {
+                let result = textures.try_insert_with(|_| {
+                    live_resources.set(live_resources.get() + 1);
+                    let texture = TestTexture(live_resources.clone());
+                    let mut allocator = etagere::BucketedAtlasAllocator::new(etagere::size2(1, 1));
+                    // Real allocator rejects the first tile, with no large GPU allocation.
+                    let allocation = allocator.allocate(etagere::size2(2, 1))?;
+                    Some((texture, allocation.id))
+                });
+                assert!(result.is_none());
+                assert_eq!(live_resources.get(), 0);
+                assert_eq!(textures.textures.len(), usize::from(reuse_slot));
+                assert!(textures.iter_mut().next().is_none());
+                assert_eq!(
+                    textures.free_list,
+                    if reuse_slot { vec![0] } else { vec![] }
+                );
+            }
+            let index = textures.try_insert_with(|index| {
+                live_resources.set(live_resources.get() + 1);
+                Some((TestTexture(live_resources.clone()), index))
+            });
+            assert_eq!(index, Some(0));
+            assert_eq!(textures.textures.len(), 1);
+            assert!(textures.free_list.is_empty());
+            assert_eq!(live_resources.get(), 1);
+            drop(textures);
+            assert_eq!(live_resources.get(), 0);
+        }
+    }
+}
+
+/// Validates the original tile demand before choosing a backend-limited atlas page size.
+/// Only the default page size may shrink to the device limit; the tile never does.
+#[doc(hidden)]
+pub fn atlas_page_size(
+    tile_size: Size<DevicePixels>,
+    max_dimension: u32,
+) -> Option<Size<DevicePixels>> {
+    let max_dimension = i32::try_from(max_dimension).ok()?;
+    if tile_size.width.0 <= 0
+        || tile_size.height.0 <= 0
+        || tile_size.width.0 > max_dimension
+        || tile_size.height.0 > max_dimension
+    {
+        return None;
+    }
+    let default_dimension = 1024.min(max_dimension);
+    Some(Size {
+        width: DevicePixels(tile_size.width.0.max(default_dimension)),
+        height: DevicePixels(tile_size.height.0.max(default_dimension)),
+    })
+}
+
 #[doc(hidden)]
 pub struct AtlasTextureList<T> {
     pub textures: Vec<Option<T>>,
@@ -1429,6 +1557,26 @@ impl<T> ops::Index<usize> for AtlasTextureList<T> {
 }
 
 impl<T> AtlasTextureList<T> {
+    /// Publishes a new texture only after its creation and first tile allocation succeed.
+    /// On failure, the closure's temporary resource is dropped and both lists stay untouched.
+    pub fn try_insert_with<R>(
+        &mut self,
+        create: impl FnOnce(usize) -> Option<(T, R)>,
+    ) -> Option<R> {
+        let index = self
+            .free_list
+            .last()
+            .copied()
+            .unwrap_or(self.textures.len());
+        let (texture, result) = create(index)?;
+        if let Some(index) = self.free_list.pop() {
+            self.textures[index] = Some(texture);
+        } else {
+            self.textures.push(Some(texture));
+        }
+        Some(result)
+    }
+
     #[allow(unused)]
     pub fn drain(&mut self) -> std::vec::Drain<'_, Option<T>> {
         self.free_list.clear();

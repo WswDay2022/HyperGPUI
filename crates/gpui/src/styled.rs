@@ -322,6 +322,56 @@ pub trait Styled: Sized {
         self
     }
 
+    /// Sets border space reserved by layout, including percentage widths.
+    /// This does not paint a stroke. Pass `LayoutBorder::Paint` to restore the
+    /// existing painted-border metrics in a later style refinement.
+    fn layout_border(mut self, border: impl Into<crate::LayoutBorder>) -> Self {
+        self.style().layout_border = Some(border.into());
+        self
+    }
+
+    /// Selects whether authored sizes include border and padding.
+    fn box_sizing(mut self, sizing: crate::BoxSizing) -> Self {
+        self.style().box_sizing = Some(sizing);
+        self
+    }
+
+    /// Selects LTR/RTL layout without changing text shaping or motion direction.
+    fn layout_direction(mut self, direction: crate::LayoutDirection) -> Self {
+        self.style().layout_direction = Some(direction);
+        self
+    }
+
+    /// Marks a replaced layout item such as an image.
+    fn item_is_replaced(mut self, replaced: bool) -> Self {
+        self.style().item_is_replaced = Some(replaced);
+        self
+    }
+
+    /// Marks a table-like block child for Taffy's existing sizing rules.
+    fn item_is_table(mut self, table: bool) -> Self {
+        self.style().item_is_table = Some(table);
+        self
+    }
+
+    /// Floats this child in block layout.
+    fn float(mut self, side: crate::FloatSide) -> Self {
+        self.style().float = Some(side);
+        self
+    }
+
+    /// Clears preceding floats in block layout.
+    fn clear(mut self, sides: crate::ClearFloats) -> Self {
+        self.style().clear = Some(sides);
+        self
+    }
+
+    /// Configures Taffy's legacy alignment of block child boxes, not glyphs.
+    fn block_text_align(mut self, alignment: crate::BlockTextAlign) -> Self {
+        self.style().block_text_align = Some(alignment);
+        self
+    }
+
     /// Sets the display type of the element to `grid`.
     /// [Docs](https://tailwindcss.com/docs/display)
     fn grid(mut self) -> Self {
@@ -664,6 +714,35 @@ pub trait Styled: Sized {
     fn self_stretch(mut self) -> Self {
         self.style().align_self = Some(AlignSelf::Stretch);
         self
+    }
+
+    /// Sets block-axis alignment of children (cross-axis alignment for Flex).
+    fn align_items(mut self, alignment: AlignItems) -> Self {
+        self.style().align_items = Some(alignment);
+        self
+    }
+
+    /// Sets inline-axis alignment of children within Grid cells.
+    fn justify_items(mut self, alignment: crate::JustifyItems) -> Self {
+        self.style().justify_items = Some(alignment);
+        self
+    }
+
+    /// Sets this Grid item's inline-axis alignment within its cell.
+    fn justify_self(mut self, alignment: crate::JustifySelf) -> Self {
+        self.style().justify_self = Some(alignment);
+        self
+    }
+
+    /// Sets block-axis distribution of the complete track set.
+    fn align_content(mut self, alignment: AlignContent) -> Self {
+        self.style().align_content = Some(alignment);
+        self
+    }
+
+    /// Sets inline-axis distribution of the complete track set.
+    fn justify_content(self, alignment: JustifyContent) -> Self {
+        self.justify(alignment)
     }
 
     /// [Docs](https://tailwindcss.com/docs/justify-content)
@@ -1136,7 +1215,7 @@ pub trait Styled: Sized {
         self.style().grid_cols = Some(GridTemplate {
             repeat: cols,
             min_size: GridTemplateMinSize::Zero,
-        });
+        }.into());
         self
     }
 
@@ -1146,7 +1225,7 @@ pub trait Styled: Sized {
         self.style().grid_cols = Some(GridTemplate {
             repeat: cols,
             min_size: GridTemplateMinSize::MinContent,
-        });
+        }.into());
         self
     }
 
@@ -1155,7 +1234,7 @@ pub trait Styled: Sized {
         self.style().grid_cols = Some(GridTemplate {
             repeat: cols,
             min_size: GridTemplateMinSize::MaxContent,
-        });
+        }.into());
         self
     }
 
@@ -1164,7 +1243,7 @@ pub trait Styled: Sized {
         self.style().grid_rows = Some(GridTemplate {
             repeat: rows,
             min_size: GridTemplateMinSize::Zero,
-        });
+        }.into());
         self
     }
 
@@ -1174,7 +1253,7 @@ pub trait Styled: Sized {
         self.style().grid_rows = Some(GridTemplate {
             repeat: rows,
             min_size: GridTemplateMinSize::MinContent,
-        });
+        }.into());
         self
     }
 
@@ -1183,91 +1262,142 @@ pub trait Styled: Sized {
         self.style().grid_rows = Some(GridTemplate {
             repeat: rows,
             min_size: GridTemplateMinSize::MaxContent,
-        });
+        }.into());
         self
     }
 
-    /// Sets the column start of this element.
+    /// Sets the complete column template. Replaces previous column definitions,
+    /// including those set by `grid_cols`, in call/cascade order.
+    fn grid_template_columns(mut self, template: impl Into<crate::GridTemplateDefinition>) -> Self {
+        self.style().grid_cols = Some(template.into());
+        self
+    }
+
+    /// Sets the complete column template, using GPUI's `cols` short spelling.
+    fn grid_template_cols(self, template: impl Into<crate::GridTemplateDefinition>) -> Self {
+        self.grid_template_columns(template)
+    }
+
+    /// Sets the complete row template. An empty template clears explicit rows.
+    fn grid_template_rows(mut self, template: impl Into<crate::GridTemplateDefinition>) -> Self {
+        self.style().grid_rows = Some(template.into());
+        self
+    }
+
+    /// Sets the cyclic sizes of implicitly created rows. Empty means auto.
+    fn grid_auto_rows<T: Into<crate::GridTrackSizingFunction>>(mut self, tracks: impl IntoIterator<Item = T>) -> Self {
+        self.style().grid_auto_rows = Some(tracks.into_iter().map(Into::into).collect());
+        self
+    }
+
+    /// Sets the cyclic sizes of implicitly created columns. Empty means auto.
+    fn grid_auto_columns<T: Into<crate::GridTrackSizingFunction>>(mut self, tracks: impl IntoIterator<Item = T>) -> Self {
+        self.style().grid_auto_columns = Some(tracks.into_iter().map(Into::into).collect());
+        self
+    }
+
+    /// Selects row/column automatic placement, with optional dense hole filling.
+    fn grid_auto_flow(mut self, flow: crate::GridAutoFlow) -> Self {
+        self.style().grid_auto_flow = Some(flow);
+        self
+    }
+
+    /// Replaces the named rectangular areas. Coordinates are one-based line indices.
+    fn grid_template_areas(mut self, areas: impl IntoIterator<Item = crate::GridTemplateArea>) -> Self {
+        self.style().grid_template_areas = Some(areas.into_iter().collect());
+        self
+    }
+
+    /// Sets both column endpoints, including mixed line/span or named placements.
+    fn grid_column(mut self, placement: std::ops::Range<GridPlacement>) -> Self {
+        self.style().grid_location_mut().column = placement.into();
+        self
+    }
+
+    /// Sets both row endpoints, including mixed line/span or named placements.
+    fn grid_row(mut self, placement: std::ops::Range<GridPlacement>) -> Self {
+        self.style().grid_location_mut().row = placement.into();
+        self
+    }
+
+    /// Places this item in a named area defined by its Grid container.
+    fn grid_area(mut self, name: impl Into<SharedString>) -> Self {
+        let name = name.into();
+        let location = self.style().grid_location_mut();
+        location.column = (GridPlacement::NamedLine(name.clone(), 0)..GridPlacement::NamedLine(name.clone(), 0)).into();
+        location.row = (GridPlacement::NamedLine(name.clone(), 0)..GridPlacement::NamedLine(name, 0)).into();
+        self
+    }
+
+    /// Sets only the column start, preserving the other endpoints in the cascade.
     fn col_start(mut self, start: i16) -> Self {
-        let grid_location = self.style().grid_location_mut();
-        grid_location.column.start = GridPlacement::Line(start);
+        self.style().grid_location_mut().column.start = Some(GridPlacement::Line(start));
         self
     }
 
-    /// Sets the column start of this element to auto.
+    /// Explicitly resets only the column start to auto.
     fn col_start_auto(mut self) -> Self {
-        let grid_location = self.style().grid_location_mut();
-        grid_location.column.start = GridPlacement::Auto;
+        self.style().grid_location_mut().column.start = Some(GridPlacement::Auto);
         self
     }
 
-    /// Sets the column end of this element.
+    /// Sets only the column end, preserving the other endpoints in the cascade.
     fn col_end(mut self, end: i16) -> Self {
-        let grid_location = self.style().grid_location_mut();
-        grid_location.column.end = GridPlacement::Line(end);
+        self.style().grid_location_mut().column.end = Some(GridPlacement::Line(end));
         self
     }
 
-    /// Sets the column end of this element to auto.
+    /// Explicitly resets only the column end to auto.
     fn col_end_auto(mut self) -> Self {
-        let grid_location = self.style().grid_location_mut();
-        grid_location.column.end = GridPlacement::Auto;
+        self.style().grid_location_mut().column.end = Some(GridPlacement::Auto);
         self
     }
 
-    /// Sets the column span of this element.
+    /// Sets both column endpoints to span, without changing row placement.
     fn col_span(mut self, span: u16) -> Self {
-        let grid_location = self.style().grid_location_mut();
-        grid_location.column = GridPlacement::Span(span)..GridPlacement::Span(span);
+        self.style().grid_location_mut().column = (GridPlacement::Span(span)..GridPlacement::Span(span)).into();
         self
     }
 
-    /// Sets the row span of this element.
+    /// Spans all explicit columns, without changing row placement.
     fn col_span_full(mut self) -> Self {
-        let grid_location = self.style().grid_location_mut();
-        grid_location.column = GridPlacement::Line(1)..GridPlacement::Line(-1);
+        self.style().grid_location_mut().column = (GridPlacement::Line(1)..GridPlacement::Line(-1)).into();
         self
     }
 
-    /// Sets the row start of this element.
+    /// Sets only the row start, preserving the other endpoints in the cascade.
     fn row_start(mut self, start: i16) -> Self {
-        let grid_location = self.style().grid_location_mut();
-        grid_location.row.start = GridPlacement::Line(start);
+        self.style().grid_location_mut().row.start = Some(GridPlacement::Line(start));
         self
     }
 
-    /// Sets the row start of this element to "auto"
+    /// Explicitly resets only the row start to auto.
     fn row_start_auto(mut self) -> Self {
-        let grid_location = self.style().grid_location_mut();
-        grid_location.row.start = GridPlacement::Auto;
+        self.style().grid_location_mut().row.start = Some(GridPlacement::Auto);
         self
     }
 
-    /// Sets the row end of this element.
+    /// Sets only the row end, preserving the other endpoints in the cascade.
     fn row_end(mut self, end: i16) -> Self {
-        let grid_location = self.style().grid_location_mut();
-        grid_location.row.end = GridPlacement::Line(end);
+        self.style().grid_location_mut().row.end = Some(GridPlacement::Line(end));
         self
     }
 
-    /// Sets the row end of this element to "auto"
+    /// Explicitly resets only the row end to auto.
     fn row_end_auto(mut self) -> Self {
-        let grid_location = self.style().grid_location_mut();
-        grid_location.row.end = GridPlacement::Auto;
+        self.style().grid_location_mut().row.end = Some(GridPlacement::Auto);
         self
     }
 
-    /// Sets the row span of this element.
+    /// Sets both row endpoints to span, without changing column placement.
     fn row_span(mut self, span: u16) -> Self {
-        let grid_location = self.style().grid_location_mut();
-        grid_location.row = GridPlacement::Span(span)..GridPlacement::Span(span);
+        self.style().grid_location_mut().row = (GridPlacement::Span(span)..GridPlacement::Span(span)).into();
         self
     }
 
-    /// Sets the row span of this element.
+    /// Spans all explicit rows, without changing column placement.
     fn row_span_full(mut self) -> Self {
-        let grid_location = self.style().grid_location_mut();
-        grid_location.row = GridPlacement::Line(1)..GridPlacement::Line(-1);
+        self.style().grid_location_mut().row = (GridPlacement::Line(1)..GridPlacement::Line(-1)).into();
         self
     }
 

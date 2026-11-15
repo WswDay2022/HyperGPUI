@@ -5,7 +5,7 @@
 use anyhow::{Context as _, anyhow};
 use core::fmt::Debug;
 use derive_more::{Add, AddAssign, Div, DivAssign, Mul, Neg, Sub, SubAssign};
-use refineable::Refineable;
+use refineable::{RangeRefinement, Refineable};
 use schemars::{JsonSchema, json_schema};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use std::borrow::Cow;
@@ -3871,21 +3871,38 @@ impl From<()> for Length {
 }
 
 /// A location in a grid layout.
-#[derive(Clone, PartialEq, Debug, Serialize, Deserialize, JsonSchema, Default)]
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize, JsonSchema, Default, Refineable)]
+#[refineable(Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct GridLocation {
     /// The rows this item uses within the grid.
+    #[refineable]
     pub row: Range<GridPlacement>,
     /// The columns this item uses within the grid.
+    #[refineable]
     pub column: Range<GridPlacement>,
 }
 
+/// A complete location specifies all four endpoints, including explicit Auto.
+impl From<GridLocation> for GridLocationRefinement {
+    fn from(location: GridLocation) -> Self {
+        Self {
+            row: location.row.into(),
+            column: location.column.into(),
+        }
+    }
+}
+
 /// The placement of an item within a grid layout's column or row.
-#[derive(Clone, Copy, PartialEq, Debug, Serialize, Deserialize, JsonSchema, Default)]
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize, JsonSchema, Default)]
 pub enum GridPlacement {
     /// The grid line index to place this item.
     Line(i16),
     /// The number of grid lines to span.
     Span(u16),
+    /// A named line and its occurrence (negative occurrences count from the end).
+    NamedLine(crate::SharedString, i16),
+    /// Span to the requested occurrence of a named line.
+    NamedSpan(crate::SharedString, u16),
     /// Automatically determine the placement, equivalent to Span(1)
     #[default]
     Auto,
@@ -3896,6 +3913,8 @@ impl From<GridPlacement> for taffy::GridPlacement {
         match placement {
             GridPlacement::Line(index) => taffy::GridPlacement::from_line_index(index),
             GridPlacement::Span(span) => taffy::GridPlacement::from_span(span),
+            GridPlacement::NamedLine(name, occurrence) => taffy::GridPlacement::NamedLine(name.to_string(), occurrence),
+            GridPlacement::NamedSpan(name, span) => taffy::GridPlacement::NamedSpan(name.to_string(), span),
             GridPlacement::Auto => taffy::GridPlacement::Auto,
         }
     }

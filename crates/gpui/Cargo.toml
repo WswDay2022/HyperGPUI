@@ -76,7 +76,7 @@ profiling.workspace = true
 rand.workspace = true
 raw-window-handle.workspace = true
 regex.workspace = true
-refineable.workspace = true
+refineable = { workspace = true, features = ["serde", "schemars"] }
 scheduler.workspace = true
 resvg = { version = "0.48.1", default-features = false, features = [
   "text",

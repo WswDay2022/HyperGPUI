@@ -1,14 +1,13 @@
 use crate::{size, util::{
     ceil_to_device_pixel, round_half_toward_zero, round_stroke_to_device_pixel,
     round_to_device_pixel,
-}, AbsoluteLength, App, Bounds, DefiniteLength, Edges, ElementId, GridTemplate, Length, Pixels, Point, Size, Style, Window};
+}, AbsoluteLength, App, Bounds, DefiniteLength, Edges, ElementId, Length, Pixels, Point, Size, Style, Window};
 use collections::{FxHashMap, FxHashSet};
 use stacksafe::{StackSafe, stacksafe};
 use std::{fmt::Debug, ops::Range};
 use taffy::{
     TaffyTree, TraversePartialTree as _,
     geometry::{Point as TaffyPoint, Rect as TaffyRect, Size as TaffySize},
-    prelude::{max_content, min_content},
     style::AvailableSpace as TaffyAvailableSpace,
     tree::NodeId,
 };
@@ -446,50 +445,29 @@ trait ToTaffy<Output> {
 
 impl ToTaffy<taffy::style::Style> for Style {
     fn to_taffy(&self, rem_size: Pixels, scale_factor: f32) -> taffy::style::Style {
-        use taffy::style_helpers::{fr, length, minmax, repeat};
-
         fn to_grid_line(
             placement: &Range<crate::GridPlacement>,
         ) -> taffy::Line<taffy::GridPlacement> {
             taffy::Line {
-                start: placement.start.into(),
-                end: placement.end.into(),
+                start: placement.start.clone().into(),
+                end: placement.end.clone().into(),
             }
         }
 
-        fn to_grid_repeat<T: taffy::style::CheapCloneStr>(
-            unit: &Option<GridTemplate>,
-        ) -> Vec<taffy::GridTemplateComponent<T>> {
-            unit.map(|template| {
-                match template.min_size {
-                    // grid-template-*: repeat(<number>, minmax(0, 1fr));
-                    crate::GridTemplateMinSize::Zero => {
-                        vec![repeat(
-                            template.repeat,
-                            vec![minmax(length(0.0_f32), fr(1.0_f32))],
-                        )]
-                    }
-                    // grid-template-*: repeat(<number>, minmax(min-content, 1fr));
-                    crate::GridTemplateMinSize::MinContent => {
-                        vec![repeat(
-                            template.repeat,
-                            vec![minmax(min_content(), fr(1.0_f32))],
-                        )]
-                    }
-                    // grid-template-*: repeat(<number>, minmax(0, max-content))
-                    crate::GridTemplateMinSize::MaxContent => {
-                        vec![repeat(
-                            template.repeat,
-                            vec![minmax(length(0.0_f32), max_content())],
-                        )]
-                    }
-                }
-            })
-            .unwrap_or_default()
-        }
+        let (grid_template_rows, grid_template_row_names) = self.grid_rows.as_ref()
+            .map(|template| template.to_taffy(rem_size, scale_factor)).unwrap_or_default();
+        let (grid_template_columns, grid_template_column_names) = self.grid_cols.as_ref()
+            .map(|template| template.to_taffy(rem_size, scale_factor)).unwrap_or_default();
 
         taffy::style::Style {
             display: self.display.into(),
+            box_sizing: self.box_sizing.into(),
+            direction: self.layout_direction.into(),
+            item_is_replaced: self.item_is_replaced,
+            item_is_table: self.item_is_table,
+            float: self.float.into(),
+            clear: self.clear.into(),
+            text_align: self.block_text_align.into(),
             overflow: self.overflow.into(),
             scrollbar_width: self.scrollbar_width.to_taffy(rem_size, scale_factor),
             position: self.position.into(),
@@ -500,9 +478,19 @@ impl ToTaffy<taffy::style::Style> for Style {
             aspect_ratio: self.aspect_ratio,
             margin: self.margin.to_taffy(rem_size, scale_factor),
             padding: self.padding.to_taffy(rem_size, scale_factor),
-            border: border_widths_to_taffy(&self.border_widths, rem_size, scale_factor),
+            border: match &self.layout_border {
+                crate::LayoutBorder::Paint => border_widths_to_taffy(&self.border_widths, rem_size, scale_factor),
+                crate::LayoutBorder::Widths { top, right, bottom, left } => TaffyRect {
+                    top: top.to_taffy(rem_size, scale_factor),
+                    right: right.to_taffy(rem_size, scale_factor),
+                    bottom: bottom.to_taffy(rem_size, scale_factor),
+                    left: left.to_taffy(rem_size, scale_factor),
+                },
+            },
             align_items: self.align_items.map(|x| x.into()),
             align_self: self.align_self.map(|x| x.into()),
+            justify_items: self.justify_items.map(|x| x.into()),
+            justify_self: self.justify_self.map(|x| x.into()),
             align_content: self.align_content.map(|x| x.into()),
             justify_content: self.justify_content.map(|x| x.into()),
             gap: self.gap.to_taffy(rem_size, scale_factor),
@@ -511,8 +499,14 @@ impl ToTaffy<taffy::style::Style> for Style {
             flex_basis: self.flex_basis.to_taffy(rem_size, scale_factor),
             flex_grow: self.flex_grow,
             flex_shrink: self.flex_shrink,
-            grid_template_rows: to_grid_repeat(&self.grid_rows),
-            grid_template_columns: to_grid_repeat(&self.grid_cols),
+            grid_template_rows,
+            grid_template_columns,
+            grid_template_row_names,
+            grid_template_column_names,
+            grid_auto_rows: self.grid_auto_rows.iter().map(|track| track.to_taffy(rem_size, scale_factor)).collect(),
+            grid_auto_columns: self.grid_auto_columns.iter().map(|track| track.to_taffy(rem_size, scale_factor)).collect(),
+            grid_auto_flow: self.grid_auto_flow.into(),
+            grid_template_areas: self.grid_template_areas.iter().map(|area| area.to_taffy()).collect(),
             grid_row: self
                 .grid_location
                 .as_ref()
@@ -751,6 +745,10 @@ impl From<Size<Pixels>> for Size<AvailableSpace> {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "taffy/grid_tests.rs"]
+mod grid_tests;
 
 #[cfg(test)]
 mod tests {

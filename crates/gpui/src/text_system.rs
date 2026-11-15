@@ -314,6 +314,10 @@ impl TextSystem {
             .or_default();
         let wrapper = wrappers
             .pop()
+            .map(|mut wrapper| {
+                wrapper.attach_text_system(self.clone());
+                wrapper
+            })
             .unwrap_or_else(|| LineWrapper::new(font_id, font_size, self.clone()));
 
         LineWrapperHandle {
@@ -889,6 +893,9 @@ impl Drop for LineWrapperHandle {
         let mut state = self.text_system.wrapper_pool.lock();
         let mut wrapper = self.wrapper.take().unwrap();
         wrapper.set_letter_spacing(None);
+        // The handle still owns the TextSystem until after this lock is released.
+        // Return only cached widths to the pool, not an Arc back to the pool owner.
+        wrapper.detach_text_system();
         state
             .get_mut(&FontIdWithSize {
                 font_id: wrapper.font_id,
