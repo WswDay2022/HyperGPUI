@@ -202,16 +202,13 @@ impl BlurResources {
 
 struct DirectXRenderPipelines {
     shadow_pipeline: PipelineState<Shadow>,
-    smoothed_shadow_pipeline: PipelineState<Shadow>,
     quad_pipeline: PipelineState<Quad>,
-    smoothed_quad_pipeline: PipelineState<Quad>,
     path_rasterization_pipeline: PipelineState<PathRasterizationSprite>,
     path_sprite_pipeline: PipelineState<PathSprite>,
     underline_pipeline: PipelineState<Underline>,
     mono_sprites: PipelineState<MonochromeSprite>,
     subpixel_sprites: PipelineState<SubpixelSprite>,
     poly_sprites: PipelineState<PolychromeSprite>,
-    smoothed_poly_sprites: PipelineState<PolychromeSprite>,
     // Blur (backdrop-filter / filter). These don't use the generic PipelineState since they
     // sample a texture rather than read a structured instance buffer; their parameters live in
     // a dedicated constant buffer at register b1.
@@ -894,55 +891,7 @@ impl DirectXRenderer {
             scene.mask_chains_fingerprint(),
         )?;
 
-        if !scene.shadows.is_empty() {
-            self.pipelines.shadow_pipeline.update_buffer(
-                &devices.device,
-                &devices.device_context,
-                &scene.shadows,
-            )?;
-        }
-
-        if !scene.quads.is_empty() {
-            self.pipelines.quad_pipeline.update_buffer(
-                &devices.device,
-                &devices.device_context,
-                &scene.quads,
-            )?;
-        }
-
-        if !scene.underlines.is_empty() {
-            self.pipelines.underline_pipeline.update_buffer(
-                &devices.device,
-                &devices.device_context,
-                &scene.underlines,
-            )?;
-        }
-
-        if !scene.monochrome_sprites.is_empty() {
-            self.pipelines.mono_sprites.update_buffer(
-                &devices.device,
-                &devices.device_context,
-                &scene.monochrome_sprites,
-            )?;
-        }
-
-        if !scene.subpixel_sprites.is_empty() {
-            self.pipelines.subpixel_sprites.update_buffer(
-                &devices.device,
-                &devices.device_context,
-                &scene.subpixel_sprites,
-            )?;
-        }
-
-        if !scene.polychrome_sprites.is_empty() {
-            self.pipelines.poly_sprites.update_buffer(
-                &devices.device,
-                &devices.device_context,
-                &scene.polychrome_sprites,
-            )?;
-        }
-
-        Ok(())
+        self.pipelines.upload_instances(&devices.device, &devices.device_context, scene)
     }
 
     fn draw_shadows(&mut self, start: usize, len: usize, smoothed: bool) -> Result<()> {
@@ -950,25 +899,10 @@ impl DirectXRenderer {
             return Ok(());
         }
         let devices = self.devices.as_ref().context("devices missing")?;
-        let pipeline = if smoothed {
-            &self.pipelines.smoothed_shadow_pipeline
-        } else {
-            &self.pipelines.shadow_pipeline
-        };
-        pipeline.draw_range(
-            &devices.device,
-            &devices.device_context,
-            slice::from_ref(
-                &self
-                    .resources
-                    .as_ref()
-                    .context("resources missing")?
-                    .viewport,
-            ),
-            &self.globals.constant_buffers(None),
-            4,
-            start as u32,
-            len as u32,
+        self.pipelines.draw_shadows_range(
+            &devices.device, &devices.device_context,
+            slice::from_ref(&self.resources.as_ref().context("resources missing")?.viewport),
+            &self.globals.constant_buffers(None), start as u32, len as u32, smoothed,
         )
     }
 
@@ -977,25 +911,10 @@ impl DirectXRenderer {
             return Ok(());
         }
         let devices = self.devices.as_ref().context("devices missing")?;
-        let pipeline = if smoothed {
-            &self.pipelines.smoothed_quad_pipeline
-        } else {
-            &self.pipelines.quad_pipeline
-        };
-        pipeline.draw_range(
-            &devices.device,
-            &devices.device_context,
-            slice::from_ref(
-                &self
-                    .resources
-                    .as_ref()
-                    .context("resources missing")?
-                    .viewport,
-            ),
-            &self.globals.constant_buffers(None),
-            4,
-            start as u32,
-            len as u32,
+        self.pipelines.draw_quads_range(
+            &devices.device, &devices.device_context,
+            slice::from_ref(&self.resources.as_ref().context("resources missing")?.viewport),
+            &self.globals.constant_buffers(None), start as u32, len as u32, smoothed,
         )
     }
 
@@ -1229,20 +1148,10 @@ impl DirectXRenderer {
         let devices = self.devices.as_ref().context("devices missing")?;
         let resources = self.resources.as_ref().context("resources missing")?;
         let texture_view = self.atlas.get_texture_view(texture_id);
-        let pipeline = if smoothed {
-            &self.pipelines.smoothed_poly_sprites
-        } else {
-            &self.pipelines.poly_sprites
-        };
-        pipeline.draw_range_with_texture(
-            &devices.device,
-            &devices.device_context,
-            &texture_view,
-            slice::from_ref(&resources.viewport),
-            &self.globals.constant_buffers(None),
-            slice::from_ref(&self.globals.sampler),
-            start as u32,
-            len as u32,
+        self.pipelines.draw_poly_range(
+            &devices.device, &devices.device_context, &texture_view,
+            slice::from_ref(&resources.viewport), &self.globals.constant_buffers(None),
+            slice::from_ref(&self.globals.sampler), start as u32, len as u32, smoothed,
         )
     }
 
@@ -1807,6 +1716,33 @@ impl DirectXResources {
 }
 
 impl DirectXRenderPipelines {
+    /// Uploads the actual per-kind scene buffers. Shared by renderer and WARP regressions.
+    fn upload_instances(&mut self, device: &ID3D11Device, context: &ID3D11DeviceContext, scene: &Scene) -> Result<()> {
+        if !scene.shadows.is_empty() { self.shadow_pipeline.update_buffer(device, context, &scene.shadows)?; }
+        if !scene.quads.is_empty() { self.quad_pipeline.update_buffer(device, context, &scene.quads)?; }
+        if !scene.underlines.is_empty() { self.underline_pipeline.update_buffer(device, context, &scene.underlines)?; }
+        if !scene.monochrome_sprites.is_empty() { self.mono_sprites.update_buffer(device, context, &scene.monochrome_sprites)?; }
+        if !scene.subpixel_sprites.is_empty() { self.subpixel_sprites.update_buffer(device, context, &scene.subpixel_sprites)?; }
+        if !scene.polychrome_sprites.is_empty() { self.poly_sprites.update_buffer(device, context, &scene.polychrome_sprites)?; }
+        Ok(())
+    }
+
+    fn draw_quads_range(&self, device: &ID3D11Device, context: &ID3D11DeviceContext,
+        viewport: &[D3D11_VIEWPORT], globals: &[Option<ID3D11Buffer>], start: u32, len: u32, smoothed: bool) -> Result<()> {
+        self.quad_pipeline.draw_range_variant(device, context, viewport, globals, 4, start, len, smoothed)
+    }
+
+    fn draw_shadows_range(&self, device: &ID3D11Device, context: &ID3D11DeviceContext,
+        viewport: &[D3D11_VIEWPORT], globals: &[Option<ID3D11Buffer>], start: u32, len: u32, smoothed: bool) -> Result<()> {
+        self.shadow_pipeline.draw_range_variant(device, context, viewport, globals, 4, start, len, smoothed)
+    }
+
+    fn draw_poly_range(&self, device: &ID3D11Device, context: &ID3D11DeviceContext,
+        texture: &[Option<ID3D11ShaderResourceView>], viewport: &[D3D11_VIEWPORT], globals: &[Option<ID3D11Buffer>],
+        sampler: &[Option<ID3D11SamplerState>], start: u32, len: u32, smoothed: bool) -> Result<()> {
+        self.poly_sprites.draw_range_with_texture_variant(device, context, texture, viewport, globals, sampler, start, len, smoothed)
+    }
+
     pub fn new(device: &ID3D11Device) -> Result<Self> {
         let shadow_pipeline = PipelineState::new(
             device,
@@ -1814,28 +1750,14 @@ impl DirectXRenderPipelines {
             ShaderModule::Shadow,
             4,
             create_blend_state(device)?,
-        )?;
-        let smoothed_shadow_pipeline = PipelineState::new(
-            device,
-            "smoothed_shadow_pipeline",
-            ShaderModule::SmoothedShadow,
-            4,
-            create_blend_state(device)?,
-        )?;
+        )?.with_smoothed(device, ShaderModule::SmoothedShadow)?;
         let quad_pipeline = PipelineState::new(
             device,
             "quad_pipeline",
             ShaderModule::Quad,
             64,
             create_blend_state(device)?,
-        )?;
-        let smoothed_quad_pipeline = PipelineState::new(
-            device,
-            "smoothed_quad_pipeline",
-            ShaderModule::SmoothedQuad,
-            64,
-            create_blend_state(device)?,
-        )?;
+        )?.with_smoothed(device, ShaderModule::SmoothedQuad)?;
         let path_rasterization_pipeline = PipelineState::new(
             device,
             "path_rasterization_pipeline",
@@ -1877,14 +1799,7 @@ impl DirectXRenderPipelines {
             ShaderModule::PolychromeSprite,
             16,
             create_blend_state(device)?,
-        )?;
-        let smoothed_poly_sprites = PipelineState::new(
-            device,
-            "smoothed_polychrome_sprite_pipeline",
-            ShaderModule::SmoothedPolychromeSprite,
-            16,
-            create_blend_state(device)?,
-        )?;
+        )?.with_smoothed(device, ShaderModule::SmoothedPolychromeSprite)?;
 
         let blur_downsample_vertex = create_vertex_shader(
             device,
@@ -1919,16 +1834,13 @@ impl DirectXRenderPipelines {
 
         Ok(Self {
             shadow_pipeline,
-            smoothed_shadow_pipeline,
             quad_pipeline,
-            smoothed_quad_pipeline,
             path_rasterization_pipeline,
             path_sprite_pipeline,
             underline_pipeline,
             mono_sprites,
             subpixel_sprites,
             poly_sprites,
-            smoothed_poly_sprites,
             blur_downsample_vertex,
             blur_downsample_fragment,
             blur_vertex,
@@ -2204,6 +2116,12 @@ impl Default for BlurParams {
     }
 }
 
+/// A shader-only variant. It owns no instance buffer or SRV.
+struct ShaderStages {
+    vertex: ID3D11VertexShader,
+    fragment: ID3D11PixelShader,
+}
+
 struct PipelineState<T> {
     label: &'static str,
     vertex: ID3D11VertexShader,
@@ -2212,6 +2130,8 @@ struct PipelineState<T> {
     buffer_size: usize,
     view: Option<ID3D11ShaderResourceView>,
     blend_state: ID3D11BlendState,
+    /// Smoothing changes shaders only; all ranges read this pipeline's current buffer.
+    smoothed: Option<ShaderStages>,
     _marker: std::marker::PhantomData<T>,
 }
 
@@ -2242,8 +2162,27 @@ impl<T> PipelineState<T> {
             buffer_size,
             view,
             blend_state,
+            smoothed: None,
             _marker: std::marker::PhantomData,
         })
+    }
+
+    fn with_smoothed(mut self, device: &ID3D11Device, module: ShaderModule) -> Result<Self> {
+        // Previously the smoothed pipeline allocated a second, never-uploaded instance buffer.
+        // Keep only its shader stages; the ordinary pipeline owns and grows the one buffer.
+        let vertex = create_vertex_shader(device, RawShaderBytes::new(module, ShaderTarget::Vertex)?.as_bytes())?;
+        let fragment = create_fragment_shader(device, RawShaderBytes::new(module, ShaderTarget::Fragment)?.as_bytes())?;
+        self.smoothed = Some(ShaderStages { vertex, fragment });
+        Ok(self)
+    }
+
+    fn shader_stages(&self, smoothed: bool) -> Result<(&ID3D11VertexShader, &ID3D11PixelShader)> {
+        if smoothed {
+            let stages = self.smoothed.as_ref().context("smoothing shader stages missing")?;
+            Ok((&stages.vertex, &stages.fragment))
+        } else {
+            Ok((&self.vertex, &self.fragment))
+        }
     }
 
     fn update_buffer(
@@ -2333,6 +2272,21 @@ impl<T> PipelineState<T> {
         first_instance: u32,
         instance_count: u32,
     ) -> Result<()> {
+        self.draw_range_variant(device, device_context, viewport, global_params, vertex_count, first_instance, instance_count, false)
+    }
+
+    fn draw_range_variant(
+        &self,
+        device: &ID3D11Device,
+        device_context: &ID3D11DeviceContext,
+        viewport: &[D3D11_VIEWPORT],
+        global_params: &[Option<ID3D11Buffer>],
+        vertex_count: u32,
+        first_instance: u32,
+        instance_count: u32,
+        smoothed: bool,
+    ) -> Result<()> {
+        let (vertex, fragment) = self.shader_stages(smoothed)?;
         let stride = std::mem::size_of::<T>() as u32;
         let view = create_buffer_view_range(
             device,
@@ -2351,8 +2305,8 @@ impl<T> PipelineState<T> {
             slice::from_ref(&view),
             D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP,
             viewport,
-            &self.vertex,
-            &self.fragment,
+            vertex,
+            fragment,
             global_params,
             &self.blend_state,
         );
@@ -2373,6 +2327,22 @@ impl<T> PipelineState<T> {
         first_instance: u32,
         instance_count: u32,
     ) -> Result<()> {
+        self.draw_range_with_texture_variant(device, device_context, texture, viewport, global_params, sampler, first_instance, instance_count, false)
+    }
+
+    fn draw_range_with_texture_variant(
+        &self,
+        device: &ID3D11Device,
+        device_context: &ID3D11DeviceContext,
+        texture: &[Option<ID3D11ShaderResourceView>],
+        viewport: &[D3D11_VIEWPORT],
+        global_params: &[Option<ID3D11Buffer>],
+        sampler: &[Option<ID3D11SamplerState>],
+        first_instance: u32,
+        instance_count: u32,
+        smoothed: bool,
+    ) -> Result<()> {
+        let (vertex, fragment) = self.shader_stages(smoothed)?;
         let stride = std::mem::size_of::<T>() as u32;
         let view = create_buffer_view_range(
             device,
@@ -2391,8 +2361,8 @@ impl<T> PipelineState<T> {
             slice::from_ref(&view),
             D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP,
             viewport,
-            &self.vertex,
-            &self.fragment,
+            vertex,
+            fragment,
             global_params,
             &self.blend_state,
         );
@@ -3259,7 +3229,7 @@ mod tests {
         create_fragment_shader, create_vertex_shader, set_pipeline_state, update_buffer,
         BlurParams, BlurResources,
         FontRasterizationUniforms, GlobalUniforms, PathRasterizationSprite,
-        PipelineState,
+        DirectXRenderPipelines, PipelineState,
         RawShaderBytes, ShaderTarget, RENDER_TARGET_FORMAT,
     };
     use crate::directx_renderer::shader_resources::ShaderModule;
@@ -6400,6 +6370,75 @@ mod tests {
         // "horizontal", taking dash_velocity to infinity and the period to NaN.
         let px = read_pixel(&context, &target.texture, &target.staging, 18, 20)?;
         assert_red_close(px, 255, "zero-width dashed side sliver");
+        Ok(())
+    }
+
+    fn integration_smoothed_quad() -> Quad {
+        Quad {
+            bounds: bounds(point(ScaledPixels(16.), ScaledPixels(16.)), size(ScaledPixels(32.), ScaledPixels(32.))),
+            content_mask: viewport_mask(),
+            background: Background::from(rgba(0xff0000ff)),
+            corner_radii: Corners { top_left: ScaledPixels(12.), top_right: ScaledPixels(12.), bottom_right: ScaledPixels(12.), bottom_left: ScaledPixels(12.) },
+            corner_smoothing: 1.,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn smoothed_scene_upload_reaches_the_selected_pipeline() -> Result<()> {
+        let (device, context) = create_warp_device().expect("WARP is required for the smoothing integration regression");
+        let globals = install_globals(&device, &context)?;
+        let (texture, rtv, staging) = make_render_target(&device)?;
+        let mut pipelines = DirectXRenderPipelines::new(&device)?;
+        let mut scene = hgpui::Scene::default();
+        scene.quads.push(integration_smoothed_quad());
+        pipelines.upload_instances(&device, &context, &scene)?;
+        unsafe {
+            context.ClearRenderTargetView(&rtv, &[0., 0., 0., 1.]);
+            context.OMSetRenderTargets(Some(slice::from_ref(&Some(rtv.clone()))), None);
+        }
+        pipelines.draw_quads_range(&device, &context, &[test_viewport()], &globals, 0, 1, true)?;
+        let pixel = read_pixel(&context, &texture, &staging, 32, 32)?;
+        assert!(pixel[2] > 240 && pixel[1] < 8, "production smoothing must read the uploaded red quad, got {pixel:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn smoothed_scene_upload_uses_full_frame_offsets_after_growth() -> Result<()> {
+        let (device, context) = create_warp_device().expect("WARP is required for the smoothing integration regression");
+        let globals = install_globals(&device, &context)?;
+        let (texture, rtv, staging) = make_render_target(&device)?;
+        let mut pipelines = DirectXRenderPipelines::new(&device)?;
+        let mut scene = hgpui::Scene::default();
+        scene.quads.resize(65, Quad::default());
+        scene.quads[64] = integration_smoothed_quad();
+        let quad = scene.quads[64];
+        scene.shadows.resize(5, Shadow {
+            order: 0, bounds: quad.bounds, element_bounds: quad.bounds,
+            corner_radii: quad.corner_radii, element_corner_radii: quad.corner_radii,
+            content_mask: viewport_mask(), color: red().into(), blur_radius: ScaledPixels(4.),
+            inset_and_mask_chain: 0, corner_smoothing: 1.,
+        });
+        scene.polychrome_sprites.resize(17, PolychromeSprite {
+            order: 0, grayscale: false.into(), opacity: 1., corner_smoothing: 1.,
+            bounds: quad.bounds, content_mask: viewport_mask(), corner_radii: quad.corner_radii,
+            tile: AtlasTile { texture_id: AtlasTextureId { index: 0, kind: AtlasTextureKind::Polychrome },
+                tile_id: TileId(0), padding: 0,
+                bounds: bounds(point(DevicePixels(0), DevicePixels(0)), size(DevicePixels(1), DevicePixels(1))), },
+            transformation: TransformationMatrix::unit(), mask_chain: 0, padding1: 0,
+        });
+        let white = create_rgba_texture(&device, 1, 1, &[255; 4])?;
+        let sampler = create_blur_sampler(&device)?;
+        pipelines.upload_instances(&device, &context, &scene)?;
+        unsafe {
+            context.ClearRenderTargetView(&rtv, &[0., 0., 0., 1.]);
+            context.OMSetRenderTargets(Some(slice::from_ref(&Some(rtv.clone()))), None);
+        }
+        pipelines.draw_quads_range(&device, &context, &[test_viewport()], &globals, 64, 1, true)?;
+        let pixel = read_pixel(&context, &texture, &staging, 32, 32)?;
+        assert!(pixel[2] > 240, "grown smoothing path must read the last quad, got {pixel:?}");
+        pipelines.draw_shadows_range(&device, &context, &[test_viewport()], &globals, 4, 1, true)?;
+        pipelines.draw_poly_range(&device, &context, &[Some(white)], &[test_viewport()], &globals, &[sampler], 16, 1, true)?;
         Ok(())
     }
 
