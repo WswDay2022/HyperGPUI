@@ -322,6 +322,56 @@ pub trait Styled: Sized {
         self
     }
 
+    /// Sets border space reserved by layout, including percentage widths.
+    /// This does not paint a stroke. Pass `LayoutBorder::Paint` to restore the
+    /// existing painted-border metrics in a later style refinement.
+    fn layout_border(mut self, border: impl Into<crate::LayoutBorder>) -> Self {
+        self.style().layout_border = Some(border.into());
+        self
+    }
+
+    /// Selects whether authored sizes include border and padding.
+    fn box_sizing(mut self, sizing: crate::BoxSizing) -> Self {
+        self.style().box_sizing = Some(sizing);
+        self
+    }
+
+    /// Selects LTR/RTL layout without changing text shaping or motion direction.
+    fn layout_direction(mut self, direction: crate::LayoutDirection) -> Self {
+        self.style().layout_direction = Some(direction);
+        self
+    }
+
+    /// Marks a replaced layout item such as an image.
+    fn item_is_replaced(mut self, replaced: bool) -> Self {
+        self.style().item_is_replaced = Some(replaced);
+        self
+    }
+
+    /// Marks a table-like block child for Taffy's existing sizing rules.
+    fn item_is_table(mut self, table: bool) -> Self {
+        self.style().item_is_table = Some(table);
+        self
+    }
+
+    /// Floats this child in block layout.
+    fn float(mut self, side: crate::FloatSide) -> Self {
+        self.style().float = Some(side);
+        self
+    }
+
+    /// Clears preceding floats in block layout.
+    fn clear(mut self, sides: crate::ClearFloats) -> Self {
+        self.style().clear = Some(sides);
+        self
+    }
+
+    /// Configures Taffy's legacy alignment of block child boxes, not glyphs.
+    fn block_text_align(mut self, alignment: crate::BlockTextAlign) -> Self {
+        self.style().block_text_align = Some(alignment);
+        self
+    }
+
     /// Sets the display type of the element to `grid`.
     /// [Docs](https://tailwindcss.com/docs/display)
     fn grid(mut self) -> Self {
@@ -664,6 +714,35 @@ pub trait Styled: Sized {
     fn self_stretch(mut self) -> Self {
         self.style().align_self = Some(AlignSelf::Stretch);
         self
+    }
+
+    /// Sets block-axis alignment of children (cross-axis alignment for Flex).
+    fn align_items(mut self, alignment: AlignItems) -> Self {
+        self.style().align_items = Some(alignment);
+        self
+    }
+
+    /// Sets inline-axis alignment of children within Grid cells.
+    fn justify_items(mut self, alignment: crate::JustifyItems) -> Self {
+        self.style().justify_items = Some(alignment);
+        self
+    }
+
+    /// Sets this Grid item's inline-axis alignment within its cell.
+    fn justify_self(mut self, alignment: crate::JustifySelf) -> Self {
+        self.style().justify_self = Some(alignment);
+        self
+    }
+
+    /// Sets block-axis distribution of the complete track set.
+    fn align_content(mut self, alignment: AlignContent) -> Self {
+        self.style().align_content = Some(alignment);
+        self
+    }
+
+    /// Sets inline-axis distribution of the complete track set.
+    fn justify_content(self, alignment: JustifyContent) -> Self {
+        self.justify(alignment)
     }
 
     /// [Docs](https://tailwindcss.com/docs/justify-content)
@@ -1136,7 +1215,7 @@ pub trait Styled: Sized {
         self.style().grid_cols = Some(GridTemplate {
             repeat: cols,
             min_size: GridTemplateMinSize::Zero,
-        });
+        }.into());
         self
     }
 
@@ -1146,7 +1225,7 @@ pub trait Styled: Sized {
         self.style().grid_cols = Some(GridTemplate {
             repeat: cols,
             min_size: GridTemplateMinSize::MinContent,
-        });
+        }.into());
         self
     }
 
@@ -1155,7 +1234,7 @@ pub trait Styled: Sized {
         self.style().grid_cols = Some(GridTemplate {
             repeat: cols,
             min_size: GridTemplateMinSize::MaxContent,
-        });
+        }.into());
         self
     }
 
@@ -1164,7 +1243,7 @@ pub trait Styled: Sized {
         self.style().grid_rows = Some(GridTemplate {
             repeat: rows,
             min_size: GridTemplateMinSize::Zero,
-        });
+        }.into());
         self
     }
 
@@ -1174,7 +1253,7 @@ pub trait Styled: Sized {
         self.style().grid_rows = Some(GridTemplate {
             repeat: rows,
             min_size: GridTemplateMinSize::MinContent,
-        });
+        }.into());
         self
     }
 
@@ -1183,7 +1262,65 @@ pub trait Styled: Sized {
         self.style().grid_rows = Some(GridTemplate {
             repeat: rows,
             min_size: GridTemplateMinSize::MaxContent,
-        });
+        }.into());
+        self
+    }
+
+    /// Sets the complete column template. Replaces previous column definitions,
+    /// including those set by `grid_cols`, in call/cascade order.
+    fn grid_template_columns(mut self, template: impl Into<crate::GridTemplateDefinition>) -> Self {
+        self.style().grid_cols = Some(template.into());
+        self
+    }
+
+    /// Sets the complete row template. An empty template clears explicit rows.
+    fn grid_template_rows(mut self, template: impl Into<crate::GridTemplateDefinition>) -> Self {
+        self.style().grid_rows = Some(template.into());
+        self
+    }
+
+    /// Sets the cyclic sizes of implicitly created rows. Empty means auto.
+    fn grid_auto_rows(mut self, tracks: impl IntoIterator<Item = crate::GridTrackSizingFunction>) -> Self {
+        self.style().grid_auto_rows = Some(tracks.into_iter().collect());
+        self
+    }
+
+    /// Sets the cyclic sizes of implicitly created columns. Empty means auto.
+    fn grid_auto_columns(mut self, tracks: impl IntoIterator<Item = crate::GridTrackSizingFunction>) -> Self {
+        self.style().grid_auto_columns = Some(tracks.into_iter().collect());
+        self
+    }
+
+    /// Selects row/column automatic placement, with optional dense hole filling.
+    fn grid_auto_flow(mut self, flow: crate::GridAutoFlow) -> Self {
+        self.style().grid_auto_flow = Some(flow);
+        self
+    }
+
+    /// Replaces the named rectangular areas. Coordinates are one-based line indices.
+    fn grid_template_areas(mut self, areas: impl IntoIterator<Item = crate::GridTemplateArea>) -> Self {
+        self.style().grid_template_areas = Some(areas.into_iter().collect());
+        self
+    }
+
+    /// Sets both column endpoints, including mixed line/span or named placements.
+    fn grid_column(mut self, placement: std::ops::Range<GridPlacement>) -> Self {
+        self.style().grid_location_mut().column = placement;
+        self
+    }
+
+    /// Sets both row endpoints, including mixed line/span or named placements.
+    fn grid_row(mut self, placement: std::ops::Range<GridPlacement>) -> Self {
+        self.style().grid_location_mut().row = placement;
+        self
+    }
+
+    /// Places this item in a named area defined by its Grid container.
+    fn grid_area(mut self, name: impl Into<SharedString>) -> Self {
+        let name = name.into();
+        let location = self.style().grid_location_mut();
+        location.column = GridPlacement::NamedLine(name.clone(), 0)..GridPlacement::NamedLine(name.clone(), 0);
+        location.row = GridPlacement::NamedLine(name.clone(), 0)..GridPlacement::NamedLine(name, 0);
         self
     }
 

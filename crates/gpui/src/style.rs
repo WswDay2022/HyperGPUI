@@ -177,6 +177,20 @@ pub struct GridTemplate {
 pub struct Style {
     /// What layout strategy should be used?
     pub display: Display,
+    /// Whether width/height refer to the border box or content box.
+    pub box_sizing: crate::BoxSizing,
+    /// Layout direction, independent of animation direction and text shaping.
+    pub layout_direction: crate::LayoutDirection,
+    /// Marks a replaced item for Taffy's intrinsic size compression rules.
+    pub item_is_replaced: bool,
+    /// Marks a block child as a table for Taffy's block sizing rules.
+    pub item_is_table: bool,
+    /// Floating of a child in block layout.
+    pub float: crate::FloatSide,
+    /// Which preceding block floats this child clears.
+    pub clear: crate::ClearFloats,
+    /// Legacy block-child alignment (not Hgpui glyph alignment).
+    pub block_text_align: crate::BlockTextAlign,
 
     /// Should the element be painted on screen?
     pub visibility: Visibility,
@@ -259,12 +273,18 @@ pub struct Style {
     /// How large should the border be on each side?
     #[refineable]
     pub border_widths: Edges<AbsoluteLength>,
+    /// Optional layout-only border metrics; painted stroke widths stay unchanged.
+    pub layout_border: crate::LayoutBorder,
 
     // Alignment properties
     /// How this node's children aligned in the cross/block axis?
     pub align_items: Option<AlignItems>,
     /// How this node should be aligned in the cross/block axis. Falls back to the parents [`AlignItems`] if not set
     pub align_self: Option<AlignSelf>,
+    /// How Grid children are aligned within their cells in the inline axis.
+    pub justify_items: Option<JustifyItems>,
+    /// Inline-axis alignment of this Grid item, overriding its container.
+    pub justify_self: Option<JustifySelf>,
     /// How should content contained within this item be aligned in the cross/block axis
     pub align_content: Option<AlignContent>,
     /// How should contained within this item be aligned in the main/inline axis
@@ -341,11 +361,20 @@ pub struct Style {
 
     /// The grid columns of this element
     /// Roughly equivalent to the Tailwind `grid-cols-<number>`
-    pub grid_cols: Option<GridTemplate>,
+    pub grid_cols: Option<crate::GridTemplateDefinition>,
 
     /// The row span of this element
     /// Equivalent to the Tailwind `grid-rows-<number>`
-    pub grid_rows: Option<GridTemplate>,
+    pub grid_rows: Option<crate::GridTemplateDefinition>,
+
+    /// Sizes of implicitly created rows, cycling through this list.
+    pub grid_auto_rows: Vec<crate::GridTrackSizingFunction>,
+    /// Sizes of implicitly created columns, cycling through this list.
+    pub grid_auto_columns: Vec<crate::GridTrackSizingFunction>,
+    /// Direction and density of automatic Grid placement.
+    pub grid_auto_flow: crate::GridAutoFlow,
+    /// Named rectangular Grid areas, using one-based line coordinates.
+    pub grid_template_areas: Vec<crate::GridTemplateArea>,
 
     /// The grid location of this element
     pub grid_location: Option<GridLocation>,
@@ -1084,6 +1113,13 @@ impl Default for Style {
     fn default() -> Self {
         Style {
             display: Display::Block,
+            box_sizing: crate::BoxSizing::default(),
+            layout_direction: crate::LayoutDirection::default(),
+            item_is_replaced: false,
+            item_is_table: false,
+            float: crate::FloatSide::default(),
+            clear: crate::ClearFloats::default(),
+            block_text_align: crate::BlockTextAlign::default(),
             visibility: Visibility::Visible,
             overflow: Point {
                 x: Overflow::Visible,
@@ -1100,6 +1136,7 @@ impl Default for Style {
             margin: Edges::<Length>::zero(),
             padding: Edges::<DefiniteLength>::zero(),
             border_widths: Edges::<AbsoluteLength>::zero(),
+            layout_border: crate::LayoutBorder::default(),
             size: Size::auto(),
             min_size: Size::auto(),
             max_size: Size::auto(),
@@ -1108,6 +1145,8 @@ impl Default for Style {
             // Alignment
             align_items: None,
             align_self: None,
+            justify_items: None,
+            justify_self: None,
             align_content: None,
             justify_content: None,
             // Flexbox
@@ -1134,6 +1173,10 @@ impl Default for Style {
             opacity: None,
             grid_rows: None,
             grid_cols: None,
+            grid_auto_rows: Vec::new(),
+            grid_auto_columns: Vec::new(),
+            grid_auto_flow: crate::GridAutoFlow::default(),
+            grid_template_areas: Vec::new(),
             grid_location: None,
 
             #[cfg(debug_assertions)]
@@ -1364,6 +1407,16 @@ pub enum AlignItems {
     Baseline,
     /// Stretch to fill the container
     Stretch,
+    /// Start alignment with overflow-safe fallback.
+    SafeStart,
+    /// End alignment with overflow-safe fallback.
+    SafeEnd,
+    /// Flex-start alignment with overflow-safe fallback.
+    SafeFlexStart,
+    /// Flex-end alignment with overflow-safe fallback.
+    SafeFlexEnd,
+    /// Center alignment that falls back to start when the item overflows.
+    SafeCenter,
 }
 /// Used to control how child nodes are aligned.
 /// Does not apply to Flexbox, and will be ignored if specified on a flex container
@@ -1421,6 +1474,16 @@ pub enum AlignContent {
     /// The gap between the first and last items is exactly HALF the gap between items.
     /// The gaps are distributed evenly in proportion to these ratios.
     SpaceAround,
+    /// Start alignment with overflow-safe fallback.
+    SafeStart,
+    /// End alignment with overflow-safe fallback.
+    SafeEnd,
+    /// Flex-start alignment with overflow-safe fallback.
+    SafeFlexStart,
+    /// Flex-end alignment with overflow-safe fallback.
+    SafeFlexEnd,
+    /// Center alignment with overflow-safe fallback.
+    SafeCenter,
 }
 
 /// Sets the distribution of space between and around content items
@@ -1563,6 +1626,11 @@ impl From<AlignItems> for taffy::style::AlignItems {
             AlignItems::Center => Self::CENTER,
             AlignItems::Baseline => Self::BASELINE,
             AlignItems::Stretch => Self::STRETCH,
+            AlignItems::SafeStart => Self::SAFE_START,
+            AlignItems::SafeEnd => Self::SAFE_END,
+            AlignItems::SafeFlexStart => Self::SAFE_FLEX_START,
+            AlignItems::SafeFlexEnd => Self::SAFE_FLEX_END,
+            AlignItems::SafeCenter => Self::SAFE_CENTER,
         }
     }
 }
@@ -1579,6 +1647,11 @@ impl From<AlignContent> for taffy::style::AlignContent {
             AlignContent::SpaceBetween => Self::SPACE_BETWEEN,
             AlignContent::SpaceEvenly => Self::SPACE_EVENLY,
             AlignContent::SpaceAround => Self::SPACE_AROUND,
+            AlignContent::SafeStart => Self::SAFE_START,
+            AlignContent::SafeEnd => Self::SAFE_END,
+            AlignContent::SafeFlexStart => Self::SAFE_FLEX_START,
+            AlignContent::SafeFlexEnd => Self::SAFE_FLEX_END,
+            AlignContent::SafeCenter => Self::SAFE_CENTER,
         }
     }
 }
