@@ -4,7 +4,7 @@ use derive_more::{Deref, DerefMut};
 use etagere::BucketedAtlasAllocator;
 use hgpui::{
     AtlasKey, AtlasTextureId, AtlasTextureKind, AtlasTextureList, AtlasTile, Bounds, DevicePixels,
-    PlatformAtlas, Point, Size,
+    PlatformAtlas, Point, Size, atlas_page_size,
 };
 use metal::Device;
 use parking_lot::Mutex;
@@ -98,6 +98,8 @@ impl MetalAtlasState {
         size: Size<DevicePixels>,
         texture_kind: AtlasTextureKind,
     ) -> Option<AtlasTile> {
+        // Modern Metal devices support at most 16384 in either texture dimension.
+        let page_size = atlas_page_size(size, 16384)?;
         {
             let textures = match texture_kind {
                 AtlasTextureKind::Monochrome => &mut self.monochrome_textures,
@@ -114,25 +116,19 @@ impl MetalAtlasState {
             }
         }
 
-        let texture = self.push_texture(size, texture_kind);
-        texture.allocate(size)
+        // Previously: self.push_texture(size, texture_kind).allocate(size)
+        // The old path published an empty page before knowing whether the first tile fitted.
+        self.allocate_new_texture(size, page_size, texture_kind)
     }
 
-    fn push_texture(
+    fn allocate_new_texture(
         &mut self,
-        min_size: Size<DevicePixels>,
+        tile_size: Size<DevicePixels>,
+        size: Size<DevicePixels>,
         kind: AtlasTextureKind,
-    ) -> &mut MetalAtlasTexture {
-        const DEFAULT_ATLAS_SIZE: Size<DevicePixels> = Size {
-            width: DevicePixels(1024),
-            height: DevicePixels(1024),
-        };
-        // Max texture size on all modern Apple GPUs. Anything bigger than that crashes in validateWithDevice.
-        const MAX_ATLAS_SIZE: Size<DevicePixels> = Size {
-            width: DevicePixels(16384),
-            height: DevicePixels(16384),
-        };
-        let size = min_size.min(&MAX_ATLAS_SIZE).max(&DEFAULT_ATLAS_SIZE);
+    ) -> Option<AtlasTile> {
+        // Previously: min_size.min(&MAX_ATLAS_SIZE).max(&DEFAULT_ATLAS_SIZE)
+        // `size` is now validated by atlas_page_size without shrinking the tile demand.
         let texture_descriptor = metal::TextureDescriptor::new();
         texture_descriptor.set_width(size.width.into());
         texture_descriptor.set_height(size.height.into());
@@ -166,28 +162,19 @@ impl MetalAtlasState {
             AtlasTextureKind::Subpixel => unreachable!(),
         };
 
-        let index = texture_list.free_list.pop();
-
-        let atlas_texture = MetalAtlasTexture {
-            id: AtlasTextureId {
-                index: index.unwrap_or(texture_list.textures.len()) as u32,
-                kind,
-            },
-            allocator: etagere::BucketedAtlasAllocator::new(size_to_etagere(size)),
-            metal_texture: AssertSend(metal_texture),
-            live_atlas_keys: 0,
-        };
-
-        if let Some(ix) = index {
-            texture_list.textures[ix] = Some(atlas_texture);
-            texture_list.textures.get_mut(ix)
-        } else {
-            texture_list.textures.push(Some(atlas_texture));
-            texture_list.textures.last_mut()
-        }
-        .unwrap()
-        .as_mut()
-        .unwrap()
+        texture_list.try_insert_with(|index| {
+            let mut atlas_texture = MetalAtlasTexture {
+                id: AtlasTextureId {
+                    index: index as u32,
+                    kind,
+                },
+                allocator: etagere::BucketedAtlasAllocator::new(size_to_etagere(size)),
+                metal_texture: AssertSend(metal_texture),
+                live_atlas_keys: 0,
+            };
+            let tile = atlas_texture.allocate(tile_size)?;
+            Some((atlas_texture, tile))
+        })
     }
 
     fn texture(&self, id: AtlasTextureId) -> &MetalAtlasTexture {
@@ -274,8 +261,9 @@ unsafe impl<T> Send for AssertSend<T> {}
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use hgpui::PlatformAtlas;
+    // Previously: use super::*; Explicit imports keep hgpui's test macro out of scope.
+    use super::MetalAtlas;
+    use hgpui::{AtlasKey, AtlasTextureKind, AtlasTile, DevicePixels, PlatformAtlas, Size};
     use std::borrow::Cow;
 
     fn create_atlas() -> Option<MetalAtlas> {
@@ -298,6 +286,86 @@ mod tests {
             })
             .expect("allocation should succeed")
             .expect("callback returns Some")
+    }
+
+    #[test]
+    fn atlas_rejects_empty_tiles_without_publishing_pages() {
+        let atlas = create_atlas().expect("Metal device should be available");
+        let key = make_image_key(1, 0);
+        let small = Size {
+            width: DevicePixels(1),
+            height: DevicePixels(1),
+        };
+        let tile = insert_tile(&atlas, &key, small);
+        atlas.remove(&key);
+
+        for (width, height) in [(0, 1), (1, 0), (-1, 1), (1, -1), (16385, 1), (1, 16385)] {
+            let result = atlas.get_or_insert_with(&key, &mut || {
+                Ok(Some((
+                    Size {
+                        width: DevicePixels(width),
+                        height: DevicePixels(height),
+                    },
+                    Cow::Borrowed(&[]),
+                )))
+            });
+            assert!(result.is_err());
+            let state = atlas.0.lock();
+            assert_eq!(state.polychrome_textures.textures.len(), 1);
+            assert!(state.polychrome_textures.textures[0].is_none());
+            assert_eq!(state.polychrome_textures.free_list, vec![0]);
+            assert!(state.tiles_by_key.is_empty());
+        }
+
+        let next = insert_tile(&atlas, &key, small);
+        assert_eq!(next.texture_id, tile.texture_id);
+    }
+
+    #[test]
+    fn atlas_failed_first_allocation_preserves_new_and_reused_slots() {
+        let atlas = create_atlas().expect("Metal device should be available");
+        for reuse_slot in [false, true] {
+            if reuse_slot {
+                let key = make_image_key(1, 0);
+                insert_tile(
+                    &atlas,
+                    &key,
+                    Size {
+                        width: DevicePixels(1),
+                        height: DevicePixels(1),
+                    },
+                );
+                atlas.remove(&key);
+            }
+            let mut state = atlas.0.lock();
+            for _ in 0..3 {
+                // Force a first-allocation failure on a small real GPU page.
+                assert!(
+                    state
+                        .allocate_new_texture(
+                            Size {
+                                width: DevicePixels(1025),
+                                height: DevicePixels(1)
+                            },
+                            Size {
+                                width: DevicePixels(1024),
+                                height: DevicePixels(1024)
+                            },
+                            AtlasTextureKind::Polychrome,
+                        )
+                        .is_none()
+                );
+                assert_eq!(
+                    state.polychrome_textures.textures.len(),
+                    usize::from(reuse_slot)
+                );
+                assert!(state.polychrome_textures.iter_mut().next().is_none());
+                assert_eq!(
+                    state.polychrome_textures.free_list,
+                    if reuse_slot { vec![0] } else { vec![] }
+                );
+            }
+        }
     }
 
     #[test]

@@ -3,7 +3,7 @@ use collections::FxHashMap;
 use etagere::{BucketedAtlasAllocator, size2};
 use hgpui::{
     AtlasKey, AtlasTextureId, AtlasTextureKind, AtlasTextureList, AtlasTile, Bounds, DevicePixels,
-    PlatformAtlas, Point, Size,
+    PlatformAtlas, Point, Size, atlas_page_size,
 };
 use parking_lot::Mutex;
 use std::{borrow::Cow, ops, sync::Arc};
@@ -162,6 +162,8 @@ impl WgpuAtlasState {
         size: Size<DevicePixels>,
         texture_kind: AtlasTextureKind,
     ) -> Option<AtlasTile> {
+        // Use the current device's limit, including after device recovery.
+        let page_size = atlas_page_size(size, self.max_texture_size)?;
         {
             let textures = &mut self.storage[texture_kind];
 
@@ -174,26 +176,19 @@ impl WgpuAtlasState {
             }
         }
 
-        let texture = self.push_texture(size, texture_kind);
-        texture.allocate(size)
+        // Previously: self.push_texture(size, texture_kind).allocate(size)
+        // The old path published an empty page before knowing whether the first tile fitted.
+        self.allocate_new_texture(size, page_size, texture_kind)
     }
 
-    fn push_texture(
+    fn allocate_new_texture(
         &mut self,
-        min_size: Size<DevicePixels>,
+        tile_size: Size<DevicePixels>,
+        size: Size<DevicePixels>,
         kind: AtlasTextureKind,
-    ) -> &mut WgpuAtlasTexture {
-        const DEFAULT_ATLAS_SIZE: Size<DevicePixels> = Size {
-            width: DevicePixels(1024),
-            height: DevicePixels(1024),
-        };
-        let max_texture_size = self.max_texture_size as i32;
-        let max_atlas_size = Size {
-            width: DevicePixels(max_texture_size),
-            height: DevicePixels(max_texture_size),
-        };
-
-        let size = min_size.min(&max_atlas_size).max(&DEFAULT_ATLAS_SIZE);
+    ) -> Option<AtlasTile> {
+        // Previously: min_size.min(&max_atlas_size).max(&DEFAULT_ATLAS_SIZE)
+        // Only the default page size may shrink to the device limit, never the tile.
         let format = match kind {
             AtlasTextureKind::Monochrome => wgpu::TextureFormat::R8Unorm,
             AtlasTextureKind::Subpixel | AtlasTextureKind::Polychrome => self.color_texture_format,
@@ -217,35 +212,21 @@ impl WgpuAtlasState {
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         let texture_list = &mut self.storage[kind];
-        let index = texture_list.free_list.pop();
-
-        let atlas_texture = WgpuAtlasTexture {
-            id: AtlasTextureId {
-                index: index.unwrap_or(texture_list.textures.len()) as u32,
-                kind,
-            },
-            allocator: BucketedAtlasAllocator::new(device_size_to_etagere(size)),
-            format,
-            texture,
-            view,
-            live_atlas_keys: 0,
-        };
-
-        if let Some(ix) = index {
-            texture_list.textures[ix] = Some(atlas_texture);
-            texture_list
-                .textures
-                .get_mut(ix)
-                .and_then(|t| t.as_mut())
-                .expect("texture must exist")
-        } else {
-            texture_list.textures.push(Some(atlas_texture));
-            texture_list
-                .textures
-                .last_mut()
-                .and_then(|t| t.as_mut())
-                .expect("texture must exist")
-        }
+        texture_list.try_insert_with(|index| {
+            let mut atlas_texture = WgpuAtlasTexture {
+                id: AtlasTextureId {
+                    index: index as u32,
+                    kind,
+                },
+                allocator: BucketedAtlasAllocator::new(device_size_to_etagere(size)),
+                format,
+                texture,
+                view,
+                live_atlas_keys: 0,
+            };
+            let tile = atlas_texture.allocate(tile_size)?;
+            Some((atlas_texture, tile))
+        })
     }
 
     fn upload_texture(&mut self, id: AtlasTextureId, bounds: Bounds<DevicePixels>, bytes: &[u8]) {
@@ -401,9 +382,13 @@ fn swizzle_upload_data(bytes: &[u8], format: wgpu::TextureFormat) -> Vec<u8> {
 
 #[cfg(all(test, not(target_family = "wasm")))]
 mod tests {
-    use super::*;
+    // Previously: use super::*; Explicit imports keep hgpui's test macro out of scope.
+    use super::{WgpuAtlas, swizzle_upload_data};
     use hgpui::block_on;
-    use hgpui::{ImageId, RenderImageParams};
+    use hgpui::{
+        AtlasKey, AtlasTextureKind, DevicePixels, ImageId, PlatformAtlas, RenderImageParams, Size,
+    };
+    use std::borrow::Cow;
     use std::sync::Arc;
 
     fn test_device_and_queue() -> anyhow::Result<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> {
@@ -438,6 +423,124 @@ mod tests {
                 .map_err(|error| anyhow::anyhow!("failed to request device: {error}"))?;
             Ok((Arc::new(device), Arc::new(queue)))
         })
+    }
+
+    #[test]
+    fn atlas_rejects_empty_tiles_without_publishing_pages() -> anyhow::Result<()> {
+        let (device, queue) = test_device_and_queue()?;
+        let atlas = WgpuAtlas::new(device, queue, wgpu::TextureFormat::Bgra8Unorm);
+        let key = AtlasKey::Image(RenderImageParams {
+            image_id: ImageId(1),
+            frame_index: 0,
+        });
+        let small = Size {
+            width: DevicePixels(1),
+            height: DevicePixels(1),
+        };
+        let tile = atlas
+            .get_or_insert_with(&key, &mut || {
+                Ok(Some((small, Cow::Borrowed(&[0, 0, 0, 255]))))
+            })?
+            .expect("tile should be created");
+        atlas.remove(&key);
+
+        let oversized = atlas.0.lock().max_texture_size as i32 + 1;
+        for (width, height) in [
+            (0, 1),
+            (1, 0),
+            (-1, 1),
+            (1, -1),
+            (oversized, 1),
+            (1, oversized),
+        ] {
+            let result = atlas.get_or_insert_with(&key, &mut || {
+                Ok(Some((
+                    Size {
+                        width: DevicePixels(width),
+                        height: DevicePixels(height),
+                    },
+                    Cow::Borrowed(&[]),
+                )))
+            });
+            assert!(result.is_err());
+            let state = atlas.0.lock();
+            assert_eq!(state.storage.polychrome_textures.textures.len(), 1);
+            assert!(state.storage.polychrome_textures.textures[0].is_none());
+            assert_eq!(state.storage.polychrome_textures.free_list, vec![0]);
+            assert!(state.tiles_by_key.is_empty());
+            assert!(state.pending_uploads.is_empty());
+        }
+
+        let next = atlas
+            .get_or_insert_with(&key, &mut || {
+                Ok(Some((small, Cow::Borrowed(&[0, 0, 0, 255]))))
+            })?
+            .expect("tile should be created");
+        assert_eq!(next.texture_id, tile.texture_id);
+        Ok(())
+    }
+
+    #[test]
+    fn atlas_failed_first_allocation_preserves_new_and_reused_slots() -> anyhow::Result<()> {
+        let (device, queue) = test_device_and_queue()?;
+        let atlas = WgpuAtlas::new(device, queue, wgpu::TextureFormat::Bgra8Unorm);
+        for reuse_slot in [false, true] {
+            if reuse_slot {
+                let key = AtlasKey::Image(RenderImageParams {
+                    image_id: ImageId(1),
+                    frame_index: 0,
+                });
+                atlas
+                    .get_or_insert_with(&key, &mut || {
+                        Ok(Some((
+                            Size {
+                                width: DevicePixels(1),
+                                height: DevicePixels(1),
+                            },
+                            Cow::Borrowed(&[0, 0, 0, 255]),
+                        )))
+                    })?
+                    .expect("tile should be created");
+                atlas.remove(&key);
+            }
+            let mut state = atlas.0.lock();
+            for _ in 0..3 {
+                // Force a first-allocation failure on a small real GPU page.
+                assert!(
+                    state
+                        .allocate_new_texture(
+                            Size {
+                                width: DevicePixels(1025),
+                                height: DevicePixels(1)
+                            },
+                            Size {
+                                width: DevicePixels(1024),
+                                height: DevicePixels(1024)
+                            },
+                            AtlasTextureKind::Polychrome,
+                        )
+                        .is_none()
+                );
+                assert_eq!(
+                    state.storage.polychrome_textures.textures.len(),
+                    usize::from(reuse_slot)
+                );
+                assert!(
+                    state
+                        .storage
+                        .polychrome_textures
+                        .iter_mut()
+                        .next()
+                        .is_none()
+                );
+                assert_eq!(
+                    state.storage.polychrome_textures.free_list,
+                    if reuse_slot { vec![0] } else { vec![] }
+                );
+                assert!(state.pending_uploads.is_empty());
+            }
+        }
+        Ok(())
     }
 
     #[test]
