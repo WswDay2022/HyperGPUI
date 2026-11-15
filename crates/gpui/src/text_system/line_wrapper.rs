@@ -15,7 +15,9 @@ pub enum TruncateFrom {
 
 /// The GPUI line wrapper, used to wrap lines of text to a given width.
 pub struct LineWrapper {
-    text_system: Arc<TextSystem>,
+    // Previously Arc<TextSystem>: idle pooled wrappers kept their owner alive.
+    // Only an active wrapper lease may hold this strong reference.
+    text_system: Option<Arc<TextSystem>>,
     pub(crate) font_id: FontId,
     pub(crate) font_size: Pixels,
     letter_spacing: Option<Pixels>,
@@ -29,13 +31,22 @@ impl LineWrapper {
 
     pub(crate) fn new(font_id: FontId, font_size: Pixels, text_system: Arc<TextSystem>) -> Self {
         Self {
-            text_system,
+            text_system: Some(text_system),
             font_id,
             font_size,
             letter_spacing: None,
             cached_ascii_char_widths: [None; 128],
             cached_other_char_widths: HashMap::default(),
         }
+    }
+
+    pub(crate) fn attach_text_system(&mut self, text_system: Arc<TextSystem>) {
+        debug_assert!(self.text_system.is_none(), "pooled wrapper must be detached");
+        self.text_system = Some(text_system);
+    }
+
+    pub(crate) fn detach_text_system(&mut self) {
+        self.text_system = None;
     }
 
     pub(crate) fn set_letter_spacing(&mut self, letter_spacing: Option<Pixels>) {
@@ -524,6 +535,8 @@ impl LineWrapper {
             } else {
                 let width = self
                     .text_system
+                    .as_ref()
+                    .expect("only active line wrappers can measure text")
                     .layout_width(self.font_id, self.font_size, c);
                 self.cached_ascii_char_widths[c as usize] = Some(width);
                 width
@@ -533,6 +546,8 @@ impl LineWrapper {
         } else {
             let width = self
                 .text_system
+                .as_ref()
+                .expect("only active line wrappers can measure text")
                 .layout_width(self.font_id, self.font_size, c);
             self.cached_other_char_widths.insert(c, width);
             width
@@ -750,6 +765,47 @@ mod tests {
         let cx = TestAppContext::build(dispatcher, None);
         let id = cx.text_system().resolve_font(&font(".ZedMono"));
         LineWrapper::new(id, px(16.), cx.text_system().clone())
+    }
+
+    fn fresh_text_system() -> Arc<TextSystem> {
+        let cx = TestAppContext::build(TestDispatcher::new(0), None);
+        Arc::new(TextSystem::new(cx.text_system().platform_text_system_for_tests()))
+    }
+
+    #[test]
+    fn line_wrapper_pool_does_not_keep_text_system_alive() {
+        let system = fresh_text_system();
+        let weak = Arc::downgrade(&system);
+        drop(system.line_wrapper(font(".ZedMono"), px(16.)));
+        drop(system);
+        assert!(weak.upgrade().is_none(), "a returned wrapper must not own its pool's TextSystem");
+    }
+
+    #[test]
+    fn line_wrapper_handle_keeps_parent_alive_only_until_drop() {
+        let system = fresh_text_system();
+        let weak = Arc::downgrade(&system);
+        let mut wrapper = system.line_wrapper(font(".ZedMono"), px(16.));
+        drop(system);
+        assert!(weak.upgrade().is_some(), "the active lease must keep its owner alive");
+        assert!(wrapper.width_for_text("alive") > px(0.));
+        drop(wrapper);
+        assert!(weak.upgrade().is_none(), "dropping the last lease must release the TextSystem");
+    }
+
+    #[test]
+    fn line_wrapper_pool_preserves_cache_without_a_parent_arc() {
+        let system = fresh_text_system();
+        let mut wrapper = system.line_wrapper(font(".ZedMono"), px(16.));
+        let width = wrapper.width_for_text("ABC");
+        let cached = wrapper.cached_ascii_char_widths;
+        drop(wrapper);
+        assert_eq!(Arc::strong_count(&system), 1, "the pool must not retain an owning parent reference");
+        let mut reused = system.line_wrapper(font(".ZedMono"), px(16.));
+        assert_eq!(reused.cached_ascii_char_widths, cached);
+        assert_eq!(reused.width_for_text("ABC"), width);
+        drop(reused);
+        assert_eq!(Arc::strong_count(&system), 1);
     }
 
     fn generate_test_runs(input_run_len: &[usize]) -> Vec<TextRun> {
