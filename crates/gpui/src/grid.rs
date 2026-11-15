@@ -1,7 +1,8 @@
 //! Hgpui-owned grid track definitions and their device-pixel-aware Taffy conversion.
 
 use crate::{
-    AbsoluteLength, DefiniteLength, GridTemplate, GridTemplateMinSize, Pixels, SharedString,
+    AbsoluteLength, DefiniteLength, GridTemplate, GridTemplateMinSize, Pixels, Relative, Rems,
+    SharedString,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -146,9 +147,136 @@ pub enum GridTemplateComponent {
     Repeat(GridTemplateRepetition),
 }
 
+/// Creates an automatic Grid track for fluent configuration.
+///
+/// ```
+/// use hgpui::{div, px, repeat, track, Styled};
+/// let grid = div().grid()
+///     .grid_template_rows(repeat(3, [track().size(px(40.))]))
+///     .grid_template_cols([track().size(px(120.)), track().fr(1.)]);
+/// ```
+pub fn track() -> GridTemplateComponent {
+    GridTemplateComponent::Single(GridTrackSizingFunction::auto())
+}
+
+/// Repeats a sequence of tracks in an explicit Grid template.
+///
+/// Accepts integer counts, `GridRepetitionCount::AutoFill`, or `AutoFit`.
+/// The result can be passed directly to a template setter or mixed with
+/// `track()` values in an array. Nested repeats are not supported by Taffy
+/// and are rejected rather than silently discarded.
+pub fn repeat<T: Into<GridTrackSizingFunction>>(
+    count: impl Into<GridRepetitionCount>,
+    tracks: impl IntoIterator<Item = T>,
+) -> GridTemplateComponent {
+    GridTemplateComponent::Repeat(GridTemplateRepetition::new(
+        count,
+        tracks
+            .into_iter()
+            .map(Into::into)
+            .collect::<Vec<GridTrackSizingFunction>>(),
+    ))
+}
+
+impl GridTemplateComponent {
+    /// Selects a fixed single track size in px, rem, or percent.
+    pub fn size(self, length: impl Into<DefiniteLength>) -> Self {
+        Self::Single(GridTrackSizingFunction::length(length))
+    }
+
+    /// Alias for `size`.
+    pub fn length(self, length: impl Into<DefiniteLength>) -> Self {
+        self.size(length)
+    }
+
+    /// Selects `minmax(auto, fraction fr)`.
+    pub fn fr(self, fraction: f32) -> Self {
+        Self::Single(GridTrackSizingFunction::fr(fraction))
+    }
+
+    /// Selects `minmax(0, fraction fr)`, matching the old equal-track helpers.
+    pub fn flex(self, fraction: f32) -> Self {
+        Self::Single(GridTrackSizingFunction::flex(fraction))
+    }
+
+    /// Selects an automatic single track.
+    pub fn auto(self) -> Self {
+        Self::Single(GridTrackSizingFunction::auto())
+    }
+
+    /// Selects a min-content single track.
+    pub fn min_content(self) -> Self {
+        Self::Single(GridTrackSizingFunction::min_content())
+    }
+
+    /// Selects a max-content single track.
+    pub fn max_content(self) -> Self {
+        Self::Single(GridTrackSizingFunction::max_content())
+    }
+
+    /// Selects a fit-content single track.
+    pub fn fit_content(self, limit: impl Into<DefiniteLength>) -> Self {
+        Self::Single(GridTrackSizingFunction::fit_content(limit))
+    }
+
+    /// Selects a single track with explicit bounds.
+    /// Bounds accept px/rem/percent, sizing-function variants, or single tracks.
+    /// For example: `track().minmax(px(120.), track().fr(1.))`.
+    pub fn minmax(
+        self,
+        min: impl Into<GridMinTrackSizingFunction>,
+        max: impl Into<GridMaxTrackSizingFunction>,
+    ) -> Self {
+        Self::Single(GridTrackSizingFunction::minmax(min.into(), max.into()))
+    }
+
+    /// Updates only the minimum of a single track, preserving its maximum.
+    pub fn min(self, min: impl Into<GridMinTrackSizingFunction>) -> Self {
+        let mut sizing: GridTrackSizingFunction = self.into();
+        sizing.min = min.into();
+        Self::Single(sizing)
+    }
+
+    /// Updates only the maximum of a single track, preserving its minimum.
+    pub fn max(self, max: impl Into<GridMaxTrackSizingFunction>) -> Self {
+        let mut sizing: GridTrackSizingFunction = self.into();
+        sizing.max = max.into();
+        Self::Single(sizing)
+    }
+}
+
 impl From<GridTrackSizingFunction> for GridTemplateComponent {
     fn from(track: GridTrackSizingFunction) -> Self {
         Self::Single(track)
+    }
+}
+
+impl From<GridTemplateRepetition> for GridTemplateComponent {
+    fn from(repetition: GridTemplateRepetition) -> Self {
+        Self::Repeat(repetition)
+    }
+}
+
+impl From<GridTemplateComponent> for GridTrackSizingFunction {
+    fn from(component: GridTemplateComponent) -> Self {
+        match component {
+            GridTemplateComponent::Single(track) => track,
+            GridTemplateComponent::Repeat(_) => {
+                panic!("expected a single Grid track; repeat is not valid here")
+            }
+        }
+    }
+}
+
+impl From<GridTemplateComponent> for GridTemplateDefinition {
+    fn from(component: GridTemplateComponent) -> Self {
+        Self::from(vec![component])
+    }
+}
+
+impl From<GridTrackSizingFunction> for GridTemplateDefinition {
+    fn from(sizing: GridTrackSizingFunction) -> Self {
+        Self::from(GridTemplateComponent::Single(sizing))
     }
 }
 
@@ -216,6 +344,18 @@ pub enum GridRepetitionCount {
 impl From<u16> for GridRepetitionCount {
     fn from(count: u16) -> Self {
         Self::Count(count)
+    }
+}
+
+impl From<i32> for GridRepetitionCount {
+    fn from(count: i32) -> Self {
+        Self::Count(u16::try_from(count).expect("Grid repeat count must be between 0 and 65535"))
+    }
+}
+
+impl From<usize> for GridRepetitionCount {
+    fn from(count: usize) -> Self {
+        Self::Count(u16::try_from(count).expect("Grid repeat count must be between 0 and 65535"))
     }
 }
 
@@ -312,6 +452,40 @@ impl GridTrackSizingFunction {
             min: self.min.to_taffy(rem_size, scale_factor),
             max: self.max.to_taffy(rem_size, scale_factor),
         }
+    }
+}
+
+macro_rules! grid_bound_length_conversions {
+    ($($ty:ty),+ $(,)?) => { $(
+        impl From<$ty> for GridMinTrackSizingFunction {
+            fn from(length: $ty) -> Self { Self::Length(length.into()) }
+        }
+        impl From<$ty> for GridMaxTrackSizingFunction {
+            fn from(length: $ty) -> Self { Self::Length(length.into()) }
+        }
+    )+ };
+}
+
+grid_bound_length_conversions!(Pixels, Rems, Relative, AbsoluteLength, DefiniteLength);
+
+impl From<GridTrackSizingFunction> for GridMinTrackSizingFunction {
+    fn from(track: GridTrackSizingFunction) -> Self {
+        track.min
+    }
+}
+impl From<GridTrackSizingFunction> for GridMaxTrackSizingFunction {
+    fn from(track: GridTrackSizingFunction) -> Self {
+        track.max
+    }
+}
+impl From<GridTemplateComponent> for GridMinTrackSizingFunction {
+    fn from(track: GridTemplateComponent) -> Self {
+        GridTrackSizingFunction::from(track).min
+    }
+}
+impl From<GridTemplateComponent> for GridMaxTrackSizingFunction {
+    fn from(track: GridTemplateComponent) -> Self {
+        GridTrackSizingFunction::from(track).max
     }
 }
 

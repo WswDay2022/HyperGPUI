@@ -5,11 +5,10 @@
 mod example_prelude;
 
 use hgpui::{
-    AlignItems, App, AppContext, Bounds, Context, GridAutoFlow, GridMaxTrackSizingFunction as Max,
-    GridMinTrackSizingFunction as Min, GridRepetitionCount, GridTemplateArea,
-    GridTemplateComponent, GridTemplateRepetition, GridTrackSizingFunction as Track,
-    InteractiveElement, IntoElement, LayoutDirection, ParentElement, Render,
-    StatefulInteractiveElement, Styled, Window, WindowBounds, WindowOptions, div, px, rgb, size,
+    AlignItems, App, AppContext, Bounds, Context, GridAutoFlow, GridRepetitionCount,
+    GridTemplateArea, InteractiveElement, IntoElement, LayoutDirection, ParentElement, Render,
+    StatefulInteractiveElement, Styled, Window, WindowBounds, WindowOptions, div, px, repeat, rgb,
+    size, track,
 };
 
 struct GridExample;
@@ -30,15 +29,7 @@ impl Render for GridExample {
                 .grid()
                 .flex_none()
                 .gap(px(8.))
-                .grid_template_columns([GridTemplateComponent::Repeat(
-                    GridTemplateRepetition::new(
-                        count,
-                        [Track::minmax(
-                            Min::Length(px(130.).into()),
-                            Max::Fraction(1.),
-                        )],
-                    ),
-                )])
+                .grid_template_cols(repeat(count, [track().minmax(px(130.), track().fr(1.))]))
                 .children((1..=3).map(|index| tile(format!("Item {index}"))))
         };
         div()
@@ -62,10 +53,10 @@ impl Render for GridExample {
                     .grid()
                     .flex_none()
                     .gap(px(8.))
-                    .grid_template_columns([
-                        Track::length(px(120.)),
-                        Track::flex(1.),
-                        Track::flex(2.),
+                    .grid_template_cols([
+                        track().size(px(120.)),
+                        track().flex(1.),
+                        track().flex(2.),
                     ])
                     .child(tile("120px"))
                     .child(tile("1fr"))
@@ -83,7 +74,7 @@ impl Render for GridExample {
                     .grid_cols(3)
                     .gap(px(8.))
                     .grid_auto_flow(GridAutoFlow::RowDense)
-                    .grid_auto_rows([Track::length(px(44.))])
+                    .grid_auto_rows([track().size(px(44.))])
                     .child(tile("Wide A").col_span(2))
                     .child(tile("Wide B").col_span(2))
                     .child(tile("Hole filler")),
@@ -95,8 +86,8 @@ impl Render for GridExample {
                     .flex_none()
                     .gap(px(8.))
                     .h(px(150.))
-                    .grid_template_columns([Track::length(px(120.)), Track::flex(1.)])
-                    .grid_template_rows([Track::length(px(44.)), Track::flex(1.)])
+                    .grid_template_cols([track().size(px(120.)), track().flex(1.)])
+                    .grid_template_rows([track().size(px(44.)), track().flex(1.)])
                     .grid_template_areas([
                         GridTemplateArea {
                             name: "header".into(),

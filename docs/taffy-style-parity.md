@@ -9,20 +9,26 @@ Grid 布局最终仍由 TaffyTree 计算。着色器、平台后端和绘制顺�
 ## 完整轨道接口
 
 ```rust
-use hgpui::{div, px, Styled, GridTrackSizingFunction as Track};
+use hgpui::{div, px, repeat, track, Styled};
 
-let content = div().grid().grid_template_columns([
-    Track::length(px(120.)),
-    Track::flex(1.),
-    Track::flex(2.),
-]);
+let content = div().grid()
+    .grid_template_cols([
+        track().size(px(120.)),
+        track().flex(1.),
+        track().flex(2.),
+    ])
+    .grid_template_rows(repeat(3, [track().size(px(40.))]));
 ```
 
-- `length(...)` 接收 px、rem、百分比。
-- `fr(n)` 是 `minmax(auto, nfr)`，符合 Taffy 的普通 fr 语义。
-- `flex(n)` 是 `minmax(0, nfr)`，符合旧 `grid_cols` 的零最小值语义。
-- `auto()`、`min_content()`、`max_content()`、`fit_content(...)`、`minmax(min, max)` 提供其余已有轨道类型。
-- `GridTemplateComponent::Repeat(GridTemplateRepetition::new(count, tracks))` 表达重复的多轨道组；count 支持 `Count(u16)`、`AutoFill`、`AutoFit`。
+- `track()` 默认是 auto；链式 `.size(...)`（别名 `.length(...)`）接收 px、rem、百分比。
+- `track().fr(n)` 是 `minmax(auto, nfr)`，符合 Taffy 的普通 fr 语义。
+- `track().flex(n)` 是 `minmax(0, nfr)`，符合旧 `grid_cols` 的零最小值语义。
+- `.auto()`、`.min_content()`、`.max_content()`、`.fit_content(...)` 提供其余已有轨道类型。
+- `track().minmax(px(120.), track().fr(1.))` 表达有固定最小值的弹性轨道；`.min(...)`、`.max(...)` 可只修改单轨道的一个边界。
+- `repeat(3, [track().size(px(40.)), track().fr(1.)])` 重复整个多轨道组；count 也支持 usize/u16、`GridRepetitionCount::AutoFill`、`AutoFit`。
+- `repeat` 的返回值既能直接传给 `grid_template_rows/cols`，也能与 `track()` 在数组中混排。`grid_template_cols` 是 `grid_template_columns` 的短名别名。
+- 现有 `GridTrackSizingFunction`、`GridTemplateRepetition` 等强类型构造接口仍可用，序列化模型不变。
+- repeat 不能嵌套，也不能用于隐式轨道或单轨道边界；这些误用会明确报错（panic），不会静默丢弃。负数或超过 u16 范围的次数同样不会被截断。
 - `GridTemplateTracks::with_line_names` 表达外层轨道组之间的线名；重复内部的线名使用 `GridTemplateRepetition::with_line_names`。
 - 线名数组按 Taffy 的 component 边界组织。转换时补齐缺少的空边界，重复组内部同样补齐，调用者不用为 unnamed 边界自行填空。
 
@@ -113,6 +119,6 @@ cargo check --workspace --all-targets
 
 回归覆盖 Styled → StyleRefinement → Style → Taffy 的调用路径，以及轨道转换、真实布局、层叠覆盖和序列化。另有测试窗口从 Render/Div 布局到 Scene quad 的接线验证。
 
-2026-11-15 已执行（含定位层叠收尾）：核心 421 项、细化工具 10 项、组件库 142 项、渲染契约 43 项测试全部通过；Grid 专属回归共 41 项（包含在核心测试内）。`cargo check --workspace --all-targets --offline` 通过；`grid_complete` 示例在默认 Windows 后端与 `--features wgpu` 下均通过编译检查。新增文件已格式化，`git diff --check` 通过。
+2026-11-15 已执行（含定位层叠收尾）：核心 421 项、细化工具 10 项、组件库 142 项、渲染契约 43 项测试全部通过；Grid 专属回归共 41 项（包含在核心测试内）。`cargo check --workspace --all-targets --offline` 通过；`grid_complete` 示例在默认 Windows 后端与 `--features wgpu` 下均通过编译检查。新增的 `track/repeat` 工厂另有 13 项外部调用回归和 1 项文档示例测试，均通过；示例已使用工厂写法。新增文件已格式化，`git diff --check` 通过。
 
 本轮没有启动示例窗口做视觉验收；macOS 不在本机实机验证范围内。

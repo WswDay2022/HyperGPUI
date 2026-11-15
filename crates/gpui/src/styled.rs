@@ -1273,6 +1273,11 @@ pub trait Styled: Sized {
         self
     }
 
+    /// Sets the complete column template, using GPUI's `cols` short spelling.
+    fn grid_template_cols(self, template: impl Into<crate::GridTemplateDefinition>) -> Self {
+        self.grid_template_columns(template)
+    }
+
     /// Sets the complete row template. An empty template clears explicit rows.
     fn grid_template_rows(mut self, template: impl Into<crate::GridTemplateDefinition>) -> Self {
         self.style().grid_rows = Some(template.into());
@@ -1280,14 +1285,14 @@ pub trait Styled: Sized {
     }
 
     /// Sets the cyclic sizes of implicitly created rows. Empty means auto.
-    fn grid_auto_rows(mut self, tracks: impl IntoIterator<Item = crate::GridTrackSizingFunction>) -> Self {
-        self.style().grid_auto_rows = Some(tracks.into_iter().collect());
+    fn grid_auto_rows<T: Into<crate::GridTrackSizingFunction>>(mut self, tracks: impl IntoIterator<Item = T>) -> Self {
+        self.style().grid_auto_rows = Some(tracks.into_iter().map(Into::into).collect());
         self
     }
 
     /// Sets the cyclic sizes of implicitly created columns. Empty means auto.
-    fn grid_auto_columns(mut self, tracks: impl IntoIterator<Item = crate::GridTrackSizingFunction>) -> Self {
-        self.style().grid_auto_columns = Some(tracks.into_iter().collect());
+    fn grid_auto_columns<T: Into<crate::GridTrackSizingFunction>>(mut self, tracks: impl IntoIterator<Item = T>) -> Self {
+        self.style().grid_auto_columns = Some(tracks.into_iter().map(Into::into).collect());
         self
     }
 
