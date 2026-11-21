@@ -39,7 +39,7 @@ use hdrhistogram::Histogram;
 use itertools::FoldWhile::{Continue, Done};
 use itertools::Itertools;
 use palette::{Hsla, IntoColor};
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use raw_window_handle::{HandleError, HasDisplayHandle, HasWindowHandle};
 use refineable::Refineable;
 use scheduler::Instant;
@@ -57,7 +57,7 @@ use std::{
     rc::Rc,
     sync::{
         Arc, Weak,
-        atomic::{AtomicBool, AtomicUsize, Ordering::SeqCst},
+        atomic::{AtomicBool, AtomicUsize, Ordering::{AcqRel, Acquire, Release, SeqCst}},
     },
     time::Duration,
 };
@@ -430,7 +430,52 @@ impl ArenaClearNeeded {
     }
 }
 
-pub(crate) type FocusMap = RwLock<SlotMap<FocusId, FocusRef>>;
+/// Focus slots plus a final-release queue. Ordinary effects never scan the slots.
+/// Accessors keep the existing RwLock interface; cleanup drains only dropped IDs.
+pub(crate) struct FocusMap {
+    slots: RwLock<SlotMap<FocusId, FocusRef>>,
+    dropped: Mutex<SmallVec<[FocusId; 16]>>,
+    has_dropped: AtomicBool,
+}
+
+impl FocusMap {
+    pub(crate) fn new() -> Self {
+        Self {
+            slots: RwLock::new(SlotMap::with_key()),
+            dropped: Mutex::new(SmallVec::new()),
+            has_dropped: AtomicBool::new(false),
+        }
+    }
+
+    fn queue_dropped(&self, id: FocusId) {
+        let mut dropped = self.dropped.lock();
+        dropped.push(id);
+        // Publish while holding the queue lock: a cleanup that sees the flag
+        // will wait for the complete insertion rather than observe a partial batch.
+        self.has_dropped.store(true, Release);
+    }
+
+    pub(crate) fn take_dropped(&self) -> SmallVec<[FocusId; 16]> {
+        // The overwhelmingly common no-release path is only an atomic read.
+        if !self.has_dropped.load(Acquire) || !self.has_dropped.swap(false, AcqRel) {
+            return SmallVec::new();
+        }
+        // Release the queue lock before the caller acquires the slots write lock.
+        mem::take(&mut *self.dropped.lock())
+    }
+}
+
+impl Default for FocusMap {
+    fn default() -> Self { Self::new() }
+}
+
+impl std::ops::Deref for FocusMap {
+    type Target = RwLock<SlotMap<FocusId, FocusRef>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.slots
+    }
+}
 pub(crate) struct FocusRef {
     pub(crate) ref_count: AtomicUsize,
     pub(crate) tab_index: isize,
@@ -596,12 +641,13 @@ impl Eq for FocusHandle {}
 
 impl Drop for FocusHandle {
     fn drop(&mut self) {
-        self.handles
-            .read()
-            .get(self.id)
-            .unwrap()
-            .ref_count
-            .fetch_sub(1, SeqCst);
+        let handles = self.handles.read();
+        let focus = handles.get(self.id).expect("over-release of a FocusHandle");
+        let previous = focus.ref_count.fetch_sub(1, SeqCst);
+        assert_ne!(previous, 0, "over-release of a FocusHandle");
+        if previous == 1 {
+            self.handles.queue_dropped(self.id);
+        }
     }
 }
 
