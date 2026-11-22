@@ -394,7 +394,9 @@ impl MetalRenderer {
         );
 
         let command_queue = device.new_command_queue();
-        let sprite_atlas = Arc::new(MetalAtlas::new(device.clone(), is_apple_gpu));
+        // 原实现：MetalAtlas::new(device.clone(), is_apple_gpu)
+        // Atlas retirement must be ordered behind draws on this same command queue.
+        let sprite_atlas = Arc::new(MetalAtlas::new(device.clone(), is_apple_gpu, command_queue.clone()));
         let core_video_texture_cache =
             CVMetalTextureCache::new(None, device.clone(), None).unwrap();
 

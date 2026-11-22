@@ -1399,6 +1399,15 @@ pub trait PlatformAtlas {
     ) -> Result<Option<AtlasTile>>;
     fn remove(&self, key: &AtlasKey);
 
+    /// Removes keys no longer referenced by a retained scene. Backends whose CPU uploads can
+    /// overwrite in-flight reads must delay allocator reuse until prior submissions complete.
+    /// Queue-ordered upload backends can use their ordinary removal path.
+    fn retire(&self, keys: &[AtlasKey]) {
+        for key in keys {
+            self.remove(key);
+        }
+    }
+
     #[cfg(any(test, feature = "test-support"))]
     fn contains(&self, _key: &AtlasKey) -> bool {
         false

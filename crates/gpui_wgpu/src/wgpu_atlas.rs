@@ -426,6 +426,38 @@ mod tests {
     }
 
     #[test]
+    fn shadow_retirement_releases_pages_and_pending_uploads() -> anyhow::Result<()> {
+        let (device, queue) = test_device_and_queue()?;
+        let atlas = WgpuAtlas::new(device, queue, wgpu::TextureFormat::Bgra8Unorm);
+        let keys: Vec<_> = (0..3).map(|index| AtlasKey::Image(RenderImageParams {
+            image_id: ImageId(100 + index), frame_index: 0,
+        })).collect();
+        let size = Size { width: DevicePixels(1024), height: DevicePixels(1024) };
+        let mut tiles = Vec::new();
+        for key in &keys {
+            tiles.push(atlas.get_or_insert_with(key, &mut || {
+                Ok(Some((size, Cow::Owned(vec![0u8; 1024 * 1024 * 4]))))
+            })?.expect("full page tile"));
+        }
+        assert_eq!(atlas.0.lock().storage.polychrome_textures.textures.iter().flatten().count(), 3);
+        // Queue::write_texture orders subsequent uploads after previously submitted draws.
+        // Retiring an empty page also discards uploads that were never submitted.
+        atlas.retire(&keys[1..]);
+        atlas.retire(&keys[1..]);
+        let state = atlas.0.lock();
+        assert_eq!(state.tiles_by_key.len(), 1);
+        assert_eq!(state.tiles_by_key[&keys[0]], tiles[0]);
+        let retained = state.storage.polychrome_textures.textures.iter().flatten().count();
+        assert_eq!(retained, 1);
+        assert_eq!(state.storage.polychrome_textures.free_list.len(), 2);
+        assert_eq!(state.pending_uploads.len(), 1);
+        assert_eq!(state.pending_uploads[0].id, tiles[0].texture_id);
+        assert_eq!(state.pending_uploads[0].data.len(), 1024 * 1024 * 4);
+        eprintln!("WGPU shadow retirement: BGRA pages and pending bytes 3->{retained}, 12582912->4194304");
+        Ok(())
+    }
+
+    #[test]
     fn atlas_rejects_empty_tiles_without_publishing_pages() -> anyhow::Result<()> {
         let (device, queue) = test_device_and_queue()?;
         let atlas = WgpuAtlas::new(device, queue, wgpu::TextureFormat::Bgra8Unorm);

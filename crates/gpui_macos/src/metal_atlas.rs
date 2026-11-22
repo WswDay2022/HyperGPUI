@@ -6,25 +6,59 @@ use hgpui::{
     AtlasKey, AtlasTextureId, AtlasTextureKind, AtlasTextureList, AtlasTile, Bounds, DevicePixels,
     PlatformAtlas, Point, Size, atlas_page_size,
 };
-use metal::Device;
+use block::ConcreteBlock;
+use metal::{CommandQueue, Device};
 use parking_lot::Mutex;
-use std::borrow::Cow;
+use std::{borrow::Cow, sync::Arc};
 
-pub(crate) struct MetalAtlas(Mutex<MetalAtlasState>);
+// 原实现：pub(crate) struct MetalAtlas(Mutex<MetalAtlasState>);
+// A retirement callback owns the state until earlier GPU reads have completed, including close.
+pub(crate) struct MetalAtlas(Arc<Mutex<MetalAtlasState>>, AssertSend<CommandQueue>);
 
 impl MetalAtlas {
-    pub(crate) fn new(device: Device, is_apple_gpu: bool) -> Self {
-        MetalAtlas(Mutex::new(MetalAtlasState {
+    // 原实现：new(device, is_apple_gpu) only stored a Mutex; retirement needs the render queue.
+    pub(crate) fn new(device: Device, is_apple_gpu: bool, command_queue: CommandQueue) -> Self {
+        MetalAtlas(Arc::new(Mutex::new(MetalAtlasState {
             device: AssertSend(device),
             is_apple_gpu,
             monochrome_textures: Default::default(),
             polychrome_textures: Default::default(),
             tiles_by_key: Default::default(),
-        }))
+        })), AssertSend(command_queue))
     }
 
     pub(crate) fn metal_texture(&self, id: AtlasTextureId) -> metal::Texture {
         self.0.lock().texture(id).metal_texture.clone()
+    }
+
+    /// Return the production retirement submission so tests can wait on its exact boundary.
+    /// Normal drawing drops this handle without blocking the UI thread.
+    fn retire_tiles(&self, keys: &[AtlasKey]) -> Option<metal::CommandBuffer> {
+        let tiles: Vec<_> = {
+            let mut state = self.0.lock();
+            keys.iter().filter_map(|key| state.tiles_by_key.remove(key)).collect()
+        };
+        if tiles.is_empty() {
+            return None;
+        }
+        // CPU replace_region uploads are not queue-ordered. Removing a key is safe now, but
+        // allocator/page reuse must wait for all previously committed draws on this queue.
+        // Keep live_atlas_keys and the owning state until completion, even if the window closes.
+        let state = self.0.clone();
+        let command_buffer = self.1.new_command_buffer();
+        command_buffer.set_label("retire shadow atlas tiles");
+        // Encode an actual GPU queue marker rather than relying on an empty buffer fence.
+        let boundary = self.0.lock().device.new_event();
+        command_buffer.encode_signal_event(&boundary, 1);
+        let completion = ConcreteBlock::new(move |_| {
+            let mut state = state.lock();
+            for tile in &tiles {
+                state.deallocate_tile(*tile);
+            }
+        }).copy();
+        command_buffer.add_completed_handler(&completion);
+        command_buffer.commit();
+        Some(command_buffer.to_owned())
     }
 }
 
@@ -64,22 +98,29 @@ impl PlatformAtlas for MetalAtlas {
         let Some(tile) = lock.tiles_by_key.remove(key) else {
             return;
         };
-        let id = tile.texture_id;
+        // 原实现：此处按 texture_id 查页，deallocate(tile_id)、decrement_ref_count，
+        // 最后一个引用释放时回收 slot；同一实现保留在 deallocate_tile 供完成回调复用。
+        lock.deallocate_tile(tile);
+    }
 
+    fn retire(&self, keys: &[AtlasKey]) {
+        drop(self.retire_tiles(keys));
+    }
+}
+
+impl MetalAtlasState {
+    // This is the original remove deallocation algorithm, shared with delayed retirement.
+    fn deallocate_tile(&mut self, tile: AtlasTile) {
+        let id = tile.texture_id;
         let textures = match id.kind {
-            AtlasTextureKind::Monochrome => &mut lock.monochrome_textures,
-            AtlasTextureKind::Polychrome => &mut lock.polychrome_textures,
+            AtlasTextureKind::Monochrome => &mut self.monochrome_textures,
+            AtlasTextureKind::Polychrome => &mut self.polychrome_textures,
             AtlasTextureKind::Subpixel => unreachable!(),
         };
-
-        let Some(texture_slot) = textures
-            .textures
-            .iter_mut()
-            .find(|texture| texture.as_ref().is_some_and(|v| v.id == id))
-        else {
+        let Some(texture_slot) = textures.textures.iter_mut()
+            .find(|texture| texture.as_ref().is_some_and(|v| v.id == id)) else {
             return;
         };
-
         if let Some(mut texture) = texture_slot.take() {
             texture.allocator.deallocate(tile.tile_id.into());
             texture.decrement_ref_count();
@@ -90,9 +131,7 @@ impl PlatformAtlas for MetalAtlas {
             }
         }
     }
-}
 
-impl MetalAtlasState {
     fn allocate(
         &mut self,
         size: Size<DevicePixels>,
@@ -268,7 +307,8 @@ mod tests {
 
     fn create_atlas() -> Option<MetalAtlas> {
         let device = metal::Device::system_default()?;
-        Some(MetalAtlas::new(device, true))
+        let queue = device.new_command_queue();
+        Some(MetalAtlas::new(device, true, queue))
     }
 
     fn make_image_key(image_id: usize, frame_index: usize) -> AtlasKey {
@@ -286,6 +326,70 @@ mod tests {
             })
             .expect("allocation should succeed")
             .expect("callback returns Some")
+    }
+
+    struct SignalOnDrop(metal::SharedEvent);
+
+    impl Drop for SignalOnDrop {
+        fn drop(&mut self) {
+            self.0.set_signaled_value(1);
+        }
+    }
+
+    #[test]
+    fn shadow_retirement_waits_for_in_flight_reads_and_preserves_reloaded_key() {
+        objc::rc::autoreleasepool(|| {
+            let atlas = create_atlas().expect("Metal device should be available");
+            let keys: Vec<_> = (0..3).map(|index| make_image_key(100 + index, 0)).collect();
+            let size = Size { width: DevicePixels(1024), height: DevicePixels(1024) };
+            let tiles: Vec<_> = keys.iter().map(|key| insert_tile(&atlas, key, size)).collect();
+            let gate = SignalOnDrop(atlas.0.lock().device.new_shared_event());
+            let in_flight = atlas.1.new_command_buffer();
+            in_flight.encode_wait_for_event(&gate.0, 1);
+            in_flight.commit();
+            let retirement = atlas.retire_tiles(&keys[1..]).expect("retirement submission");
+            assert!(atlas.retire_tiles(&keys[1..]).is_none(), "duplicate retirement is harmless");
+            {
+                let state = atlas.0.lock();
+                assert_eq!(state.tiles_by_key.len(), 1);
+                assert_eq!(state.tiles_by_key[&keys[0]], tiles[0]);
+                assert_eq!(state.polychrome_textures.textures.iter().flatten().count(), 3,
+                    "in-flight pages must not be freed or reused before the queue boundary");
+                assert!(state.polychrome_textures.free_list.is_empty());
+            }
+            let reloaded = insert_tile(&atlas, &keys[1], size);
+            assert_ne!(reloaded.texture_id, tiles[1].texture_id,
+                "CPU upload must not overwrite a retired but in-flight page");
+            drop(gate);
+            retirement.wait_until_completed();
+            let state = atlas.0.lock();
+            assert_eq!(state.polychrome_textures.textures.iter().flatten().count(), 2);
+            assert_eq!(state.polychrome_textures.free_list.len(), 2);
+            assert_eq!(state.tiles_by_key[&keys[0]], tiles[0]);
+            assert_eq!(state.tiles_by_key[&keys[1]], reloaded,
+                "late completion must not revoke a reloaded instance of the same key");
+        });
+    }
+
+    #[test]
+    fn shadow_retirement_completes_after_atlas_owner_drop() {
+        let state = objc::rc::autoreleasepool(|| {
+            let atlas = create_atlas().expect("Metal device should be available");
+            let key = make_image_key(100, 0);
+            insert_tile(&atlas, &key, Size { width: DevicePixels(1), height: DevicePixels(1) });
+            let state = std::sync::Arc::downgrade(&atlas.0);
+            let gate = SignalOnDrop(atlas.0.lock().device.new_shared_event());
+            let in_flight = atlas.1.new_command_buffer();
+            in_flight.encode_wait_for_event(&gate.0, 1);
+            in_flight.commit();
+            let retirement = atlas.retire_tiles(&[key]).expect("retirement submission");
+            drop(atlas);
+            assert!(state.upgrade().is_some(), "callback owns resources until safe completion");
+            drop(gate);
+            retirement.wait_until_completed();
+            state
+        });
+        assert!(state.upgrade().is_none(), "completion and autorelease must release final state");
     }
 
     #[test]

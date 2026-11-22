@@ -3019,6 +3019,16 @@ impl Window {
         // Advance the per-frame cache epoch before any element paints. The shadow cache uses
         // it to defer baking until a shape has been stable for one full frame.
         self.shadow_tile_cache.begin_frame();
+        let evicted = self.shadow_tile_cache.trim(
+            self.rendered_frame.scene.polychrome_sprites.iter().map(|sprite| sprite.tile),
+        );
+        if !evicted.is_empty() {
+            let keys: Vec<_> = evicted.iter().map(|image| {
+                RenderImageParams { image_id: image.id, frame_index: 0 }.into()
+            }).collect();
+            self.sprite_atlas.retire(&keys);
+        }
+        drop(evicted);
 
         // Drain unconditionally so a stale first-invalidation timestamp can't
         // leak into a later frame across enable/disable of frame tracing.
@@ -3130,6 +3140,13 @@ impl Window {
             self.refresh();
         }
         self.needs_present.set(true);
+        if self.shadow_tile_cache.needs_cooldown_frame(
+            self.rendered_frame.scene.polychrome_sprites.iter().map(|sprite| sprite.tile),
+        ) {
+            // A single visibility-change draw may be the last frame before idle. Deliver the
+            // finite grace cleanup without invalidating cached views or starting an animation.
+            self.on_next_frame(|window, _| window.invalidator.set_dirty(true));
+        }
 
         if let Some(draw_start) = draw_started_at {
             profiler::record_frame_timing(profiler::FrameTiming {
@@ -4382,25 +4399,26 @@ impl Window {
                 );
                 let image =
                     generate_shadow_tile(&key, shape_bounds, corner_radii, blur_radius, color);
-                if let Some(evicted) = self.shadow_tile_cache.insert(key, Arc::clone(&image)) {
-                    self.sprite_atlas.remove(
-                        &RenderImageParams {
-                            image_id: evicted.id,
-                            frame_index: 0,
-                        }
-                        .into(),
-                    );
-                }
-                self.paint_shadow_tile(image, shape_bounds, blur_radius)
+                // 原实现：insert 返回单个旧 image 后立刻 atlas.remove；现在统一在帧边界
+                // trim，并经 retire 保护在途 GPU 读取，不在 paint 中提前复用纹素。
+                // if let Some(evicted) = self.shadow_tile_cache.insert(key, Arc::clone(&image)) {
+                //     self.sprite_atlas.remove(&RenderImageParams {
+                //         image_id: evicted.id, frame_index: 0,
+                //     }.into());
+                // }
+                self.shadow_tile_cache.insert(key, Arc::clone(&image));
+                self.paint_shadow_tile(key, image, shape_bounds, blur_radius)
             }
             ShadowTileLookup::Hit(image) => {
-                self.paint_shadow_tile(image, shape_bounds, blur_radius)
+                // 原实现：self.paint_shadow_tile(image, shape_bounds, blur_radius)
+                self.paint_shadow_tile(key, image, shape_bounds, blur_radius)
             }
         }
     }
 
     fn paint_shadow_tile(
         &mut self,
+        key: ShadowTileKey,
         image: Arc<RenderImage>,
         shape_bounds: Bounds<ScaledPixels>,
         blur_radius: ScaledPixels,
@@ -4435,6 +4453,7 @@ impl Window {
         let Ok(Some(tile)) = tile else {
             return false;
         };
+        self.shadow_tile_cache.record_atlas_tile(key, tile);
 
         self.next_frame.scene.insert_primitive(PolychromeSprite {
             order: 0,
@@ -8170,6 +8189,145 @@ mod tests {
             assert_eq!(tiles, baked_tiles, "cached sprites must keep their atlas tiles");
         })
         .unwrap();
+    }
+
+    struct ShadowPeakView {
+        count: Rc<Cell<usize>>,
+        replay: bool,
+        hot_range: Rc<RefCell<Option<std::ops::Range<super::PaintIndex>>>>,
+    }
+
+    impl Render for ShadowPeakView {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let count = self.count.get();
+            let replay = self.replay;
+            let hot_range = self.hot_range.clone();
+            div().size_full().child(canvas(
+                |_, _, _| {},
+                move |_, _, window, _| {
+                    if count == 1 && replay {
+                        let range = hot_range.borrow().clone().expect("warm paint range");
+                        let start = window.paint_index();
+                        window.reuse_paint(range);
+                        *hot_range.borrow_mut() = Some(start..window.paint_index());
+                        return;
+                    }
+                    for index in 0..count {
+                        let start = window.paint_index();
+                        window.paint_drop_shadows(
+                            Bounds::new(point(px(10.), px(20.)), size(px(40.), px(24.))),
+                            Corners::default(),
+                            0.0,
+                            &[crate::BoxShadow::new(px(0.), px(0.),
+                                crate::hsla(index as f32 / 100., 0.5, 0.5, 0.5))
+                                .blur_radius(px(4.))],
+                        );
+                        if index == 0 {
+                            *hot_range.borrow_mut() = Some(start..window.paint_index());
+                        }
+                    }
+                },
+            ).size_full())
+        }
+    }
+
+    fn assert_shadow_peak_cooldown(cx: &mut TestAppContext, replay: bool, idle: bool) {
+        use std::sync::Arc;
+        use crate::shadow_cache::{ShadowTileKey, ShadowTileLookup};
+        let count = Rc::new(Cell::new(80));
+        let window = cx.add_window({
+            let count = count.clone();
+            move |_, _| ShadowPeakView {
+                count, replay, hot_range: Rc::new(RefCell::new(None)),
+            }
+        });
+        let window: AnyWindowHandle = window.into();
+        let mut peak = Vec::new();
+        // TestWindow uses 2x DPI: each tile has four times the unit fixture's pixels.
+        // Respect the real bake budget rather than forcing all variants into one frame.
+        for _ in 0..32 {
+            let ready = cx.update_window(window, |_, window, cx| {
+                window.draw(cx).clear(cx);
+                if window.rendered_frame.scene.polychrome_sprites.len() != 80 {
+                    return false;
+                }
+                let bounds = window.cover_bounds(
+                    Bounds::new(point(px(10.), px(20.)), size(px(40.), px(24.))),
+                );
+                let blur = px(4.).scale(window.scale_factor());
+                for index in 0..80 {
+                    let key = ShadowTileKey::new(bounds, Corners::default(), blur,
+                        crate::hsla(index as f32 / 100., 0.5, 0.5, 0.5).into()).unwrap();
+                    let ShadowTileLookup::Hit(image) = window.shadow_tile_cache.lookup(key) else {
+                        panic!("all peak keys must be baked");
+                    };
+                    let atlas_key: crate::AtlasKey = crate::RenderImageParams {
+                        image_id: image.id, frame_index: 0,
+                    }.into();
+                    assert!(window.sprite_atlas.contains(&atlas_key));
+                    peak.push((atlas_key, Arc::downgrade(&image)));
+                }
+                true
+            }).unwrap();
+            if ready { break; }
+        }
+        assert_eq!(peak.len(), 80, "all peak shadows must reach the actual atlas");
+        cx.update_window(window, |_, window, cx| {
+            assert_eq!(window.simulate_next_frame(cx), 0,
+                "a fully active over-target scene must not animate just to enforce a soft cap");
+        }).unwrap();
+        let hot_tile = cx.update_window(window, |_, window, _| {
+            window.rendered_frame.scene.polychrome_sprites[0].tile
+        }).unwrap();
+        count.set(1);
+        for frame in 0..6 {
+            let settled = cx.update_window(window, |_, window, cx| {
+                // Idle windows get no forced redraws after the initial visibility change.
+                // Subsequent draws must be requested by the production cooldown path.
+                if idle && frame > 0 && window.simulate_next_frame(cx) == 0 {
+                    return true;
+                }
+                window.draw(cx).clear(cx);
+                let scene = &window.rendered_frame.scene;
+                assert!(scene.shadows.is_empty(), "hot shadow must not fall back or rebake");
+                assert_eq!(scene.polychrome_sprites.len(), 1);
+                assert_eq!(scene.polychrome_sprites[0].tile, hot_tile,
+                    "direct hits and cached replay must preserve the same atlas allocation");
+                false
+            }).unwrap();
+            if settled { break; }
+        }
+        if idle {
+            cx.update_window(window, |_, window, cx| {
+                assert_eq!(window.simulate_next_frame(cx), 0,
+                    "cooldown must stop requesting frames after settling");
+            }).unwrap();
+        }
+        cx.update_window(window, |_, window, _| {
+            let retained = peak.iter().filter(|(key, _)| window.sprite_atlas.contains(key)).count();
+            let live_images = peak.iter().filter(|(_, image)| image.upgrade().is_some()).count();
+            eprintln!("window shadow cooldown replay={replay}: atlas 80->{retained}, images 80->{live_images}");
+            assert!(retained <= 64, "Window must revoke stale atlas keys without new inserts");
+            assert_eq!(live_images, retained, "CPU release and atlas retirement must agree");
+            assert!(window.sprite_atlas.contains(&peak[0].0), "hot key must remain resident");
+        }).unwrap();
+        cx.update_window(window, |_, window, _| window.remove_window()).unwrap();
+        assert!(peak.iter().all(|(_, image)| image.upgrade().is_none()), "close drops cached images");
+    }
+
+    #[hgpui::test]
+    fn shadow_cache_window_cooldown_retires_atlas_tiles(cx: &mut TestAppContext) {
+        assert_shadow_peak_cooldown(cx, false, false);
+    }
+
+    #[hgpui::test]
+    fn shadow_cache_window_cooldown_preserves_cached_replay(cx: &mut TestAppContext) {
+        assert_shadow_peak_cooldown(cx, true, false);
+    }
+
+    #[hgpui::test]
+    fn shadow_cache_window_idle_cooldown_requests_bounded_frames(cx: &mut TestAppContext) {
+        assert_shadow_peak_cooldown(cx, true, true);
     }
 
     #[hgpui::test]

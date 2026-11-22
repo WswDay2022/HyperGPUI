@@ -15,7 +15,7 @@ use image::{Frame, ImageBuffer, Rgba as ImageRgba};
 use smallvec::SmallVec;
 use std::sync::Arc;
 
-use crate::{Bounds, Corners, RenderImage, SceneHsla, ScaledPixels};
+use crate::{AtlasTextureId, AtlasTile, Bounds, Corners, RenderImage, SceneHsla, ScaledPixels};
 
 /// The same Gaussian cutoff the fragment shader uses for the shadow's quad geometry.
 pub(crate) const SHADOW_GAUSSIAN_CUTOFF: f32 = 3.0;
@@ -308,6 +308,8 @@ fn erf_approx(value: f32) -> f32 {
 pub(crate) struct ShadowTile {
     pub(crate) image: Arc<RenderImage>,
     last_used_frame: u64,
+    /// Atlas identity survives cached scene replay, which does not perform a key lookup.
+    atlas_tile: Option<(AtlasTextureId, u32)>,
 }
 
 pub(crate) enum ShadowTileLookup {
@@ -364,33 +366,82 @@ impl ShadowTileCache {
         ShadowTileLookup::Deferred
     }
 
-    /// Inserts a freshly baked tile, returning the least-recently-used entry evicted to stay
-    /// within the cap. Entries used by the current frame are never evicted.
-    pub(crate) fn insert(
-        &mut self,
-        key: ShadowTileKey,
-        image: Arc<RenderImage>,
-    ) -> Option<Arc<RenderImage>> {
+    /// Inserts a freshly baked tile. Eviction is performed at the next frame boundary, after
+    /// the retained scene's atlas references can be protected (including cached view replay).
+    pub(crate) fn insert(&mut self, key: ShadowTileKey, image: Arc<RenderImage>) {
         self.current_pending.remove(&key);
         self.entries.insert(
             key,
             ShadowTile {
                 image,
                 last_used_frame: self.frame,
+                atlas_tile: None,
             },
         );
-        if self.entries.len() <= MAX_CACHED_TILES {
-            return None;
+        // 原实现：只在 insert 时最多驱逐一个 key，纯 hit/无新 insert 时不会回落；
+        // 也无法保护只在 cached scene 重放中使用、未 lookup 的 atlas tile。
+        // if self.entries.len() <= MAX_CACHED_TILES {
+        //     return None;
+        // }
+        // let oldest = self.entries.iter()
+        //     .filter(|(_, entry)| entry.last_used_frame + 1 < self.frame)
+        //     .min_by_key(|(_, entry)| entry.last_used_frame)
+        //     .map(|(key, _)| *key);
+        // oldest.and_then(|key| self.entries.remove(&key).map(|entry| entry.image))
+    }
+
+    pub(crate) fn record_atlas_tile(&mut self, key: ShadowTileKey, tile: AtlasTile) {
+        if let Some(entry) = self.entries.get_mut(&key) {
+            entry.atlas_tile = Some((tile.texture_id, tile.tile_id.0));
         }
-        // Keep one frame of slack before dropping an atlas tile: the previous frame's GPU
-        // submission may still be reading it when the new frame starts baking.
-        let oldest = self
-            .entries
-            .iter()
-            .filter(|(_, entry)| entry.last_used_frame + 1 < self.frame)
-            .min_by_key(|(_, entry)| entry.last_used_frame)
-            .map(|(key, _)| *key);
-        oldest.and_then(|key| self.entries.remove(&key).map(|entry| entry.image))
+    }
+
+    /// Schedule only the finite grace-frame cleanup needed by an over-target, now-cold cache.
+    /// Fully active over-target scenes and caches at/below the target do not animate for cleanup.
+    pub(crate) fn needs_cooldown_frame(
+        &self,
+        current_scene_tiles: impl Iterator<Item = AtlasTile>,
+    ) -> bool {
+        if self.entries.len() <= MAX_CACHED_TILES {
+            return false;
+        }
+        let live_tiles: FxHashSet<_> = current_scene_tiles
+            .map(|tile| (tile.texture_id, tile.tile_id.0)).collect();
+        self.entries.values().any(|entry| {
+            entry.last_used_frame < self.frame
+                && entry.atlas_tile.is_none_or(|tile| !live_tiles.contains(&tile))
+        })
+    }
+
+    /// At the start of a draw, trim cold entries back to the existing soft target. The last
+    /// rendered scene is still the source of cached paint ranges, so refresh its tile usage
+    /// before choosing victims. No scan, set allocation or sort occurs below the target.
+    /// Returned images must be retired from the platform atlas before their CPU owner drops.
+    pub(crate) fn trim(
+        &mut self,
+        previous_scene_tiles: impl Iterator<Item = AtlasTile>,
+    ) -> Vec<Arc<RenderImage>> {
+        if self.entries.len() <= MAX_CACHED_TILES {
+            return Vec::new();
+        }
+        let live_tiles: FxHashSet<_> = previous_scene_tiles
+            .map(|tile| (tile.texture_id, tile.tile_id.0))
+            .collect();
+        let previous_frame = self.frame.saturating_sub(1);
+        for entry in self.entries.values_mut() {
+            if entry.atlas_tile.is_some_and(|tile| live_tiles.contains(&tile)) {
+                entry.last_used_frame = entry.last_used_frame.max(previous_frame);
+            }
+        }
+        let mut candidates: Vec<_> = self.entries.iter()
+            .filter(|(_, entry)| self.frame.saturating_sub(entry.last_used_frame) > 1)
+            .map(|(key, entry)| (entry.last_used_frame, *key))
+            .collect();
+        candidates.sort_unstable_by_key(|(last_used, _)| *last_used);
+        let excess = self.entries.len() - MAX_CACHED_TILES;
+        candidates.into_iter().take(excess)
+            .map(|(_, key)| self.entries.remove(&key).unwrap().image)
+            .collect()
     }
 }
 
@@ -560,12 +611,115 @@ mod tests {
 
         let image = generate_shadow_tile(&key, bounds, radii(6.0), ScaledPixels(4.0), color);
         let id = image.id;
-        assert!(cache.insert(key, image).is_none());
+        // 原实现：assert!(cache.insert(key, image).is_none()); eviction now runs at a frame boundary.
+        cache.insert(key, image);
         cache.begin_frame();
         match cache.lookup(key) {
             ShadowTileLookup::Hit(image) => assert_eq!(image.id, id),
             _ => panic!("a stable key must hit the cache"),
         }
+    }
+
+    /// Exercise the production stability gate and bake budget, keeping every key live until
+    /// the peak is reached. Weak references let the cooldown test observe actual image drops.
+    fn warm_peak() -> (ShadowTileCache, Vec<ShadowTileKey>, Vec<std::sync::Weak<RenderImage>>) {
+        let mut cache = ShadowTileCache::default();
+        let keys: Vec<_> = (0..MAX_CACHED_TILES + 16)
+            .map(|index| {
+                ShadowTileKey::new(
+                    shape(),
+                    radii(6.0),
+                    ScaledPixels(4.0),
+                    hsla(index as f32 / 100.0, 0.5, 0.5, 0.5).into(),
+                )
+                .unwrap()
+            })
+            .collect();
+        let mut images = Vec::new();
+        for _ in 0..10 {
+            cache.begin_frame();
+            for key in &keys {
+                if matches!(cache.lookup(*key), ShadowTileLookup::Generate) {
+                    let color = SceneHsla {
+                        h: f32::from_bits(key.color[0]),
+                        s: f32::from_bits(key.color[1]),
+                        l: f32::from_bits(key.color[2]),
+                        a: f32::from_bits(key.color[3]),
+                    };
+                    let image = generate_shadow_tile(
+                        key, shape(), radii(6.0), ScaledPixels(4.0), color,
+                    );
+                    images.push(Arc::downgrade(&image));
+                    cache.insert(*key, image);
+                }
+            }
+            if cache.entries.len() == keys.len() {
+                break;
+            }
+        }
+        assert_eq!(cache.entries.len(), keys.len(), "fixture must exceed the soft cap");
+        (cache, keys, images)
+    }
+
+    #[test]
+    fn shadow_cache_cools_down_without_new_inserts() {
+        let (mut cache, keys, images) = warm_peak();
+        let hot_id = cache.entries[&keys[0]].image.id;
+        let peak_bytes: usize = cache.entries.values()
+            .map(|entry| entry.image.as_bytes(0).unwrap().len()).sum();
+        for _ in 0..5 {
+            cache.begin_frame();
+            drop(cache.trim(std::iter::empty()));
+            match cache.lookup(keys[0]) {
+                ShadowTileLookup::Hit(image) => assert_eq!(image.id, hot_id),
+                _ => panic!("cooldown must preserve the only hot key without rebaking"),
+            }
+        }
+        let retained_bytes: usize = cache.entries.values()
+            .map(|entry| entry.image.as_bytes(0).unwrap().len()).sum();
+        eprintln!("shadow cooldown: peak={} retained={} bytes={peak_bytes}->{retained_bytes}",
+            keys.len(), cache.entries.len());
+        assert!(cache.entries.len() <= MAX_CACHED_TILES,
+            "inactive peak must converge without inserts: retained {} > {}",
+            cache.entries.len(), MAX_CACHED_TILES);
+        assert!(retained_bytes < peak_bytes, "cooldown must release actual CPU pixel buffers");
+        assert_eq!(images.iter().filter(|image| image.upgrade().is_some()).count(), cache.entries.len());
+    }
+
+    #[test]
+    fn shadow_cache_trim_preserves_current_and_previous_frame_hits() {
+        let (mut cache, keys, _) = warm_peak();
+        cache.begin_frame();
+        assert!(cache.trim(std::iter::empty()).is_empty(), "previous frame is protected");
+        assert!(matches!(cache.lookup(keys[0]), ShadowTileLookup::Hit(_)));
+        cache.begin_frame();
+        assert!(matches!(cache.lookup(keys[1]), ShadowTileLookup::Hit(_)));
+        let evicted = cache.trim(std::iter::empty());
+        assert_eq!(evicted.len(), 16);
+        assert!(cache.entries.contains_key(&keys[0]), "previous-frame hit survives");
+        assert!(cache.entries.contains_key(&keys[1]), "current-frame hit survives");
+    }
+
+    #[test]
+    fn shadow_cache_trim_retires_cold_lru_but_keeps_external_image_lease() {
+        let (mut cache, keys, images) = warm_peak();
+        let lease = Arc::clone(&cache.entries[&keys[79]].image);
+        cache.begin_frame();
+        for key in &keys[..MAX_CACHED_TILES] {
+            assert!(matches!(cache.lookup(*key), ShadowTileLookup::Hit(_)));
+        }
+        cache.begin_frame();
+        drop(cache.trim(std::iter::empty()));
+        assert_eq!(cache.entries.len(), MAX_CACHED_TILES);
+        assert!(keys[..MAX_CACHED_TILES].iter().all(|key| cache.entries.contains_key(key)));
+        assert!(keys[MAX_CACHED_TILES..].iter().all(|key| !cache.entries.contains_key(key)));
+        assert!(!lease.as_bytes(0).unwrap().is_empty(), "existing CPU readers stay valid");
+        assert_eq!(images.iter().filter(|image| image.upgrade().is_some()).count(), 65);
+        drop(lease);
+        assert_eq!(images.iter().filter(|image| image.upgrade().is_some()).count(), 64);
+        assert!(cache.trim(std::iter::from_fn(|| -> Option<AtlasTile> {
+            panic!("at the target there must be no scene scan or temporary live set");
+        })).is_empty());
     }
 
     #[test]

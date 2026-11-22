@@ -47,6 +47,7 @@ D 盘曾 ENOSPC=0，暂停后用户清理至约123GB；2026-11-22 查询仍约82
 | [Grid 定位层叠修复](grid-location-refinement-fix.md) | 调整 hover/focus/Auto/Refineable/Range时读，含红绿与兼容边界。 |
 | [审计第1、2组修复](perf-ownership-render-wiring-fixes.md) | 文字池所有权、atlas失败事务、Mac callback、DX smoothing问题时读。 |
 | [第3组核心优化证据](core-hotpath-optimizations.md) | FocusMap释放、空间树平衡/精确端点、cached-view依赖捕获及夹具数据时读。 |
+| [G09缓存回落修复](shadow-cache-cooldown-fix.md) | 无新insert/空闲回落、cached replay保护、三端atlas retirement与真实缓冲/页释放证据。 |
 
 原始完整报告最初在 `D:/WswDay2022/tmp/Hgpui_Performance_Memory_Audit_2026-11-15_e484.md`。仓库中的基线副本在本次整理前已存在且未跟踪，SHA-256与原件一致：`c9e46f5833417bfeb0a373af8fa69388f413f94a0cb3430de9cd2de3dedb77ae`。纳入版本管理时保留原文，不把“报告在仓库外/未修”等历史描述改为当前结论。原行号按基线查，当前源码重新定位。
 
@@ -84,6 +85,7 @@ let flexible = track().minmax(px(120.), track().fr(1.));
 | R01 | ✅ 本机回归/夹具验证 | `4c8d5da9b1` | final Drop队列；无释放不扫描、不锁table；窗口更新锁外；5功能回归。 |
 | G01 | ✅ 本机结构/顺序验证 | `423f917d53` | 12路等深split6/7；精确max_corner防float少包围；7回归含随机参考和细条反例。 |
 | R02 | ✅ 本机回归/夹具验证 | `6987fcbb64` | global+top scope收集；nested merge、clear、release、panic恢复；修复共享ID遗漏；7回归。 |
+| G09 | ✅ 本机修复闭环；⏸ Metal编译/实机 | 本轮独立修复（见Git日志） | 6项专项；CPU图像/Window atlas 80→64；DX/WGPU原生页3→1；空闲有限帧、cached replay及close覆盖。 |
 
 记录提交：第1/2组 `e8ec127072`；第3组 `4ab93d3ce5`。前两工作分支合并main的提交为 `d7aed1aa7b`。
 
@@ -100,13 +102,13 @@ let flexible = track().minmax(px(120.), track().fr(1.));
 
 ## 5. 后续实现顺序与首个工作门
 
-用户批准的大组顺序：第1所有权 → 第2DX接线 → 第3二次放大 → 第4预算 → 第5无用GPU分配/overdraw。前三组源码实现已完成；T14/Metal实机验证仍挂账。第4、5组未实现。
+用户批准的大组顺序：第1所有权 → 第2DX接线 → 第3二次放大 → 第4预算 → 第5无用GPU分配/overdraw。前三组及第4组的 G09 已完成源码修复；T14/Metal编译或实机验证仍挂账。当前停止进一步实现，先验证前四阶段；第4组其他项及第5组未开始。
 
 当前执行范围仅为 4A/G09；完成后先验证前四阶段的正确性和实际收益，不进入 4B。下表 4B 及之后仅保留为未来路线，须等用户后续安排：
 
 | 次序 | ID | 打算 | 完成门 |
 |---|---|---|---|
-| **4A 下一步** | **G09** | shadow cache超过64后主动回落；保留热缓存/当前与安全在途使用 | “峰值同时活跃→只留一个已命中key→无新insert”回归先red后green，CPU图像和atlas evict接线可验证。 |
+| **4A 已完成，转验证** | **G09** | 帧边界回落及有限空闲清理帧；保护热缓存、重放与安全在途使用 | 专项红绿与实际缓冲/页释放已验证；接下来只验证前四阶段，不进入4B。 |
 |4B|G02 + T02|配套GPU glyph/SVG与CPU raster_bounds、wrapper字号组预算/驱逐|固定集合warm稳定；长期字号/DPI churn受预算；不能只清CPU放任GPU占位。 |
 |4C|T03 + T04|默认图片cache、消费者/请求/解码预算，CPU eviction连逐窗GPU撤销|跨窗共享/重载/离屏/pending/失败恢复正确；显式retain-all仍可用。 |
 |4D|T05|动画图聚合帧/字节和并发预算，之后再评估流式frame窗口|大动画可解释拒绝/降级；小动画行为保持，预算并发峰值有证据。 |
@@ -114,7 +116,7 @@ let flexible = track().minmax(px(120.), track().fr(1.));
 |5B|G08|分离scene target与Gaussian scratch，只有实际blur创建ping/pong|纯clip/颜色路径无闲置Gaussian页，blur正确性保留。 |
 |5C|G05|Metal fullscreen triangle vertex count统一3|shared shader/draw契约、Mac静态核对及实际验证状态如实记录。 |
 
-### G09 首个可执行闭环
+### G09 验收闭环（本轮已实施；证据见修复记录）
 
 1. 只读定位 `crates/gpui/src/shadow_cache.rs` 的begin_frame/lookup/insert，以及window.rs的shadow使用/atlas.remove接线；不用重新打开完整38项报告。
 2. 用现有crate测试模拟稳定阴影逐帧完成烘焙。所有活跃key不能被硬删，因此先产生>64缓存，再退出大多数，仅访问一个已缓存key、完全不制造新miss。完成门：现版确实无法收敛的失败回归和key/图像数量证据，而非RSS“看起来没降”。
@@ -144,7 +146,7 @@ S/C含义与详细触发/旧位置见原始审计；C1是机制确认，不是�
 |R09|S1/C2|⏸ 未实现，Unix条件待运行|主计划后Unix pipe/executor|
 |G07|S2/C1|⏸ 未开始|5A target真实深度|
 |G08|S2/C1|⏸ 未开始|5B 闲置Gaussian纹理|
-|G09|S2/C1|⏸ **下一步，未开始**|4A shadow缓存回落|
+|G09|S2/C1|✅ 本机修复；⏸Metal编译/实机|4A记录；当前转前四阶段验证|
 |T02|S2/C1|⏸ 未开始|4B CPU glyph/wrapper缓存|
 |T04|S2/C1|⏸ 未开始|4C remove_asset/GPU image tile|
 |T07|S2/C1|⏸ 未开始|主计划后EditableText整文复制|
@@ -169,7 +171,7 @@ S/C含义与详细触发/旧位置见原始审计；C1是机制确认，不是�
 |P03|S3/C1文档|⏸ 未开始|工具：delta符号说明|
 |R10|S3/C2编译|⏸ 未开始，编译影响待测|工具：Inspector AST往返|
 
-总账：**6项本机相关验证完成＋T14实现待Mac验证＋31项未修/未实现候选**。G03还有Metal实机验证债，不因账目计数而抹掉。主计划4/5含9项未开始，另22项留在后续按用户优先级安排；不凑性能问题、不为“全部改完”盲修C2/C3。
+总账：**7项本机相关修复验证完成＋T14实现待Mac验证＋30项未修/未实现候选**。G03、G09仍有Metal编译或实机验证债，不因账目计数而抹掉。主计划4/5余8项未开始，另22项留在后续按用户优先级安排；当前只验证前四阶段，不继续实现其他候选。
 
 ## 7. 测试与测量入口
 

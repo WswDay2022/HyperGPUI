@@ -386,6 +386,26 @@ mod tests {
     }
 
     #[test]
+    fn shadow_retirement_releases_pages_but_keeps_hot_tile() {
+        let atlas = create_atlas().expect("WARP device should be available");
+        let keys: Vec<_> = (0..3).map(|index| make_image_key(100 + index)).collect();
+        let size = Size { width: DevicePixels(1024), height: DevicePixels(1024) };
+        let tiles: Vec<_> = keys.iter().map(|key| insert_tile(&atlas, key, size)).collect();
+        assert_eq!(atlas.0.lock().polychrome_textures.textures.iter().flatten().count(), 3);
+        // The core uses this same dispatch. D3D11 UpdateSubresource/draw ordering protects
+        // prior GPU reads; no CPU wait or extra page quarantine is needed for later uploads.
+        atlas.retire(&keys[1..]);
+        atlas.retire(&keys[1..]); // Duplicate retirement is harmless.
+        let state = atlas.0.lock();
+        assert_eq!(state.tiles_by_key.len(), 1);
+        assert_eq!(state.tiles_by_key[&keys[0]], tiles[0]);
+        let retained = state.polychrome_textures.textures.iter().flatten().count();
+        assert_eq!(retained, 1);
+        assert_eq!(state.polychrome_textures.free_list.len(), 2);
+        eprintln!("DX shadow retirement: 1024x1024 BGRA pages 3->{retained}, bytes 12582912->4194304");
+    }
+
+    #[test]
     fn atlas_rejects_empty_tiles_without_publishing_pages() {
         let atlas = create_atlas().expect("WARP device should be available");
         let keeper = make_image_key(1);
