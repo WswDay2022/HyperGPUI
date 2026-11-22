@@ -19,6 +19,7 @@ use futures::{
     future::{LocalBoxFuture, Shared},
 };
 use itertools::Itertools;
+#[cfg(any(test, feature = "leak-detection"))]
 use parking_lot::RwLock;
 use slotmap::SlotMap;
 
@@ -719,6 +720,8 @@ pub struct App {
     pub(crate) windows: SlotMap<WindowId, Option<Box<Window>>>,
     pub(crate) window_handles: FxHashMap<WindowId, AnyWindowHandle>,
     pub(crate) focus_handles: Arc<FocusMap>,
+    #[cfg(test)]
+    focus_cleanup_visits: usize,
     pub(crate) keymap: Rc<RefCell<Keymap>>,
     pub(crate) keyboard_layout: Box<dyn PlatformKeyboardLayout>,
     pub(crate) keyboard_mapper: Rc<dyn PlatformKeyboardMapper>,
@@ -847,7 +850,9 @@ impl App {
                 windows: SlotMap::with_key(),
                 window_update_stack: Vec::new(),
                 window_handles: FxHashMap::default(),
-                focus_handles: Arc::new(RwLock::new(SlotMap::with_key())),
+                focus_handles: Arc::new(FocusMap::new()),
+                #[cfg(test)]
+                focus_cleanup_visits: 0,
                 keymap: Rc::new(RefCell::new(Keymap::default())),
                 keyboard_layout,
                 keyboard_mapper,
@@ -1122,16 +1127,15 @@ impl App {
         &mut self,
         callback: impl FnOnce(&mut App) -> R,
     ) -> (R, FxHashSet<EntityId>) {
-        let accessed_entities_start = self.entities.accessed_entities.get_mut().clone();
-        let result = callback(self);
-        let entities_accessed_in_callback = self
-            .entities
-            .accessed_entities
-            .get_mut()
-            .difference(&accessed_entities_start)
-            .copied()
-            .collect::<FxHashSet<EntityId>>();
-        (result, entities_accessed_in_callback)
+        // Previously clone + difference of the entire frame prefix: quadratic
+        // sibling misses and omitted dependencies already read earlier in the frame.
+        let depth = self.entities.accessed_entities.get_mut().begin_capture();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| callback(self)));
+        let captured = self.entities.accessed_entities.get_mut().end_capture(depth);
+        match result {
+            Ok(value) => (value, captured),
+            Err(panic) => std::panic::resume_unwind(panic),
+        }
     }
 
     pub(crate) fn record_entities_accessed(
@@ -1758,27 +1762,36 @@ impl App {
         }
     }
 
-    /// Repeatedly called during `flush_effects` to handle a focused handle being dropped.
+    /// Drain final FocusHandle releases. No release signal means no focus-table lock or scan.
     fn release_dropped_focus_handles(&mut self) {
-        self.focus_handles
-            .clone()
-            .write()
-            .retain(|handle_id, focus| {
-                if focus.ref_count.load(SeqCst) == 0 {
-                    for window_handle in self.windows() {
-                        window_handle
-                            .update(self, |_, window, _| {
-                                if window.focus == Some(handle_id) {
-                                    window.blur();
-                                }
-                            })
-                            .unwrap();
+        loop {
+            let dropped = self.focus_handles.take_dropped();
+            if dropped.is_empty() { break; }
+            let focus_handles = self.focus_handles.clone();
+            let mut released = SmallVec::<[crate::FocusId; 16]>::new();
+            {
+                let mut handles = focus_handles.write();
+                for id in dropped {
+                    #[cfg(test)]
+                    { self.focus_cleanup_visits += 1; }
+                    if handles.get(id).is_some_and(|focus| focus.ref_count.load(SeqCst) == 0) {
+                        handles.remove(id);
+                        released.push(id);
                     }
-                    false
-                } else {
-                    true
                 }
-            });
+            }
+            // Window updates may acquire focus handles or cause more releases. Never hold
+            // the focus-table write lock across them; drain any resulting batch next.
+            if !released.is_empty() {
+                for window_handle in self.windows() {
+                    window_handle.update(self, |_, window, _| {
+                        if window.focus.is_some_and(|id| released.contains(&id)) {
+                            window.blur();
+                        }
+                    }).unwrap();
+                }
+            }
+        }
     }
 
     fn apply_notify_effect(&mut self, emitter: EntityId) {
@@ -3131,6 +3144,263 @@ mod test {
     use std::{cell::RefCell, rc::Rc};
 
     use crate::{AppContext, TestAppContext};
+
+    #[test]
+    fn focus_cleanup_no_drop_effect_batch_does_not_scan_live_handles() {
+        let cx = TestAppContext::single();
+        let handles = cx.update(|cx| (0..256).map(|_| cx.focus_handle()).collect::<Vec<_>>());
+        cx.update(|cx| {
+            cx.focus_cleanup_visits = 0;
+            for _ in 0..64 { cx.defer(|_| {}); }
+            cx.flush_effects();
+            assert_eq!(cx.focus_cleanup_visits, 0,
+                "effects with no final FocusHandle drop must not inspect the live focus table");
+        });
+        drop(handles);
+    }
+
+    #[test]
+    fn focus_cleanup_non_final_drop_does_not_visit_slots() {
+        let cx = TestAppContext::single();
+        let handles = cx.update(|cx| (0..128).map(|_| cx.focus_handle()).collect::<Vec<_>>());
+        let clone = handles[0].clone();
+        let id = clone.id;
+        cx.update(|cx| {
+            cx.focus_cleanup_visits = 0;
+            drop(clone);
+            cx.release_dropped_focus_handles();
+            assert_eq!(cx.focus_cleanup_visits, 0);
+            assert!(cx.focus_handles.read().contains_key(id));
+        });
+        drop(handles);
+    }
+
+    #[test]
+    fn focus_cleanup_only_visits_final_drops_among_many_live_handles() {
+        let cx = TestAppContext::single();
+        let live = cx.update(|cx| (0..256).map(|_| cx.focus_handle()).collect::<Vec<_>>());
+        let dropped = cx.update(|cx| (0..3).map(|_| cx.focus_handle()).collect::<Vec<_>>());
+        let ids: Vec<_> = dropped.iter().map(|handle| handle.id).collect();
+        let weak = dropped[0].downgrade();
+        cx.update(|cx| {
+            cx.focus_cleanup_visits = 0;
+            drop(dropped);
+            cx.release_dropped_focus_handles();
+            assert_eq!(cx.focus_cleanup_visits, 3);
+            let slots = cx.focus_handles.read();
+            for id in &ids { assert!(!slots.contains_key(*id)); }
+            for handle in &live { assert!(slots.contains_key(handle.id)); }
+            assert!(weak.upgrade().is_none());
+        });
+        drop(live);
+    }
+
+    #[test]
+    fn focus_cleanup_collects_background_final_drops() {
+        let cx = TestAppContext::single();
+        let handles = cx.update(|cx| (0..64).map(|_| cx.focus_handle()).collect::<Vec<_>>());
+        let ids: Vec<_> = handles.iter().map(|handle| handle.id).collect();
+        std::thread::spawn(move || drop(handles)).join().unwrap();
+        cx.update(|cx| {
+            cx.focus_cleanup_visits = 0;
+            cx.release_dropped_focus_handles();
+            assert_eq!(cx.focus_cleanup_visits, 64);
+            let slots = cx.focus_handles.read();
+            for id in ids { assert!(!slots.contains_key(id)); }
+        });
+    }
+
+    #[test]
+    fn focus_cleanup_blurs_window_after_final_handle_release() {
+        let mut cx = TestAppContext::single();
+        let window: crate::AnyWindowHandle = cx.add_window(|_, _| crate::Empty).into();
+        let focus = cx.update(|cx| cx.focus_handle());
+        let id = focus.id;
+        cx.update_window(window, |_, window, cx| window.focus(&focus, cx)).unwrap();
+        cx.update(|cx| {
+            cx.focus_cleanup_visits = 0;
+            drop(focus);
+            cx.release_dropped_focus_handles();
+            assert_eq!(cx.focus_cleanup_visits, 1);
+            assert!(!cx.focus_handles.read().contains_key(id));
+        });
+        cx.update_window(window, |_, window, _| assert!(window.focus.is_none())).unwrap();
+    }
+
+    #[test]
+    #[ignore = "manual CPU benchmark; run with --ignored --nocapture"]
+    fn focus_cleanup_effect_batch_benchmark() {
+        use std::time::Instant;
+        for focus_count in [256, 1024, 4096] {
+            let cx = TestAppContext::single();
+            let handles = cx.update(|cx| (0..focus_count).map(|_| cx.focus_handle()).collect::<Vec<_>>());
+            for effect_count in [64, 256] {
+                let started = Instant::now();
+                let mut visits = 0;
+                for _ in 0..20 {
+                    cx.update(|cx| {
+                        cx.focus_cleanup_visits = 0;
+                        for _ in 0..effect_count { cx.defer(|_| {}); }
+                        cx.flush_effects();
+                        visits += cx.focus_cleanup_visits;
+                    });
+                }
+                eprintln!("focus-cleanup F={focus_count} P={effect_count} batches=20 visits={visits} elapsed_ms={:.3}",
+                    started.elapsed().as_secs_f64() * 1000.);
+            }
+            drop(handles);
+        }
+    }
+
+    #[test]
+    #[ignore = "manual CPU benchmark; run with --ignored --nocapture"]
+    fn accessed_capture_prefix_benchmark() {
+        use std::time::Instant;
+        for prefix_count in [256, 1024, 4096] {
+            let cx = TestAppContext::single();
+            let entities = cx.update(|cx| (0..prefix_count).map(|_| cx.new(|_| 7usize)).collect::<Vec<_>>());
+            cx.update(|cx| {
+                cx.entities.clear_accessed();
+                for entity in &entities { let _ = entity.read(cx); }
+                let started = Instant::now();
+                let mut captured = 0;
+                for _ in 0..200 {
+                    let (_, dependencies) = cx.detect_accessed_entities(|cx| *entities[0].read(cx));
+                    captured += dependencies.len();
+                }
+                eprintln!("access-capture prefix={prefix_count} scopes=200 local_reads=1 captured={captured} elapsed_ms={:.3}",
+                    started.elapsed().as_secs_f64() * 1000.);
+            });
+        }
+    }
+
+    #[test]
+    fn accessed_capture_includes_a_dependency_already_in_the_frame_prefix() {
+        let cx = TestAppContext::single();
+        cx.update(|cx| {
+            let shared = cx.new(|_| 7usize);
+            let id = shared.entity_id();
+            assert_eq!(*shared.read(cx), 7);
+            let (value, dependencies) = cx.detect_accessed_entities(|cx| *shared.read(cx));
+            assert_eq!(value, 7);
+            assert!(dependencies.contains(&id), "a cached sibling must capture shared entities even if the frame already accessed them");
+        });
+    }
+
+    #[test]
+    fn accessed_capture_nested_scopes_include_shared_and_child_dependencies() {
+        let cx = TestAppContext::single();
+        cx.update(|cx| {
+            let shared = cx.new(|_| 1usize);
+            let outer_only = cx.new(|_| 2usize);
+            cx.entities.clear_accessed();
+            let _ = shared.read(cx);
+            let (inner, outer) = cx.detect_accessed_entities(|cx| {
+                let _ = outer_only.read(cx);
+                let (_, inner) = cx.detect_accessed_entities(|cx| { let _ = shared.read(cx); });
+                inner
+            });
+            assert_eq!(inner.len(), 1);
+            assert!(inner.contains(&shared.entity_id()));
+            assert_eq!(outer.len(), 2);
+            assert!(outer.contains(&shared.entity_id()) && outer.contains(&outer_only.entity_id()));
+        });
+    }
+
+    #[test]
+    fn accessed_capture_records_cache_replay_in_the_active_scope() {
+        let cx = TestAppContext::single();
+        cx.update(|cx| {
+            let shared = cx.new(|_| 1usize);
+            let mut replay = collections::FxHashSet::default();
+            replay.insert(shared.entity_id());
+            let (_, captured) = cx.detect_accessed_entities(|cx| cx.entities.extend_accessed(&replay));
+            assert_eq!(captured, replay);
+        });
+    }
+
+    #[test]
+    fn accessed_capture_restores_scope_stack_on_nested_and_outer_panics() {
+        use std::panic::{catch_unwind, AssertUnwindSafe};
+        let cx = TestAppContext::single();
+        cx.update(|cx| {
+            let first = cx.new(|_| 1usize);
+            let second = cx.new(|_| 2usize);
+            let (_, outer) = cx.detect_accessed_entities(|cx| {
+                let inner = catch_unwind(AssertUnwindSafe(|| cx.detect_accessed_entities(|cx| {
+                    let _ = first.read(cx);
+                    panic!("expected inner access capture panic");
+                })));
+                assert!(inner.is_err());
+                let _ = second.read(cx);
+            });
+            assert!(outer.contains(&first.entity_id()) && outer.contains(&second.entity_id()));
+            let failed = catch_unwind(AssertUnwindSafe(|| cx.detect_accessed_entities(|cx| {
+                let _ = first.read(cx);
+                panic!("expected outer access capture panic");
+            })));
+            assert!(failed.is_err());
+            let (_, next) = cx.detect_accessed_entities(|cx| { let _ = second.read(cx); });
+            assert_eq!(next.len(), 1);
+            assert!(next.contains(&second.entity_id()));
+        });
+    }
+
+    #[test]
+    fn accessed_capture_clear_does_not_restore_an_old_frame_prefix() {
+        let cx = TestAppContext::single();
+        cx.update(|cx| {
+            let prefix = cx.new(|_| 1usize);
+            let local = cx.new(|_| 2usize);
+            let after_clear = cx.new(|_| 3usize);
+            cx.entities.clear_accessed();
+            let _ = prefix.read(cx);
+            let (_, capture) = cx.detect_accessed_entities(|cx| {
+                let _ = local.read(cx);
+                cx.entities.clear_accessed();
+                let _ = after_clear.read(cx);
+            });
+            assert_eq!(capture.len(), 2);
+            assert!(!capture.contains(&prefix.entity_id()));
+            assert!(capture.contains(&local.entity_id()) && capture.contains(&after_clear.entity_id()));
+            let global = &cx.entities.accessed_entities.get_mut().global;
+            assert_eq!(global.len(), 1);
+            assert!(global.contains(&after_clear.entity_id()));
+        });
+    }
+
+    #[test]
+    fn accessed_capture_does_not_merge_a_released_entity_back_into_dependencies() {
+        let cx = TestAppContext::single();
+        cx.update(|cx| {
+            let dropped = cx.new(|_| 1usize);
+            let id = dropped.entity_id();
+            // EntityCreated temporarily owns a handle; finish it before testing final Drop.
+            cx.flush_effects();
+            let (_, captured) = cx.detect_accessed_entities(|cx| {
+                let _ = dropped.read(cx);
+                drop(dropped);
+                cx.release_dropped_entities();
+            });
+            assert!(!captured.contains(&id));
+            assert!(!cx.entities.accessed_entities.get_mut().global.contains(&id));
+        });
+    }
+
+    #[test]
+    fn accessed_capture_tracks_insert_update_and_mutable_borrows() {
+        let cx = TestAppContext::single();
+        cx.update(|cx| {
+            let existing = cx.new(|_| 1usize);
+            let (inserted, captured) = cx.detect_accessed_entities(|cx| {
+                existing.update(cx, |value, _| *value = 2);
+                { let mut value = existing.as_mut(cx); *std::borrow::BorrowMut::borrow_mut(&mut value) = 3; }
+                cx.new(|_| 4usize)
+            });
+            assert!(captured.contains(&existing.entity_id()) && captured.contains(&inserted.entity_id()));
+            assert_eq!(*existing.read(cx), 3);
+        });
+    }
 
     #[test]
     fn test_gpui_borrow() {

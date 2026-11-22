@@ -53,9 +53,50 @@ impl Display for EntityId {
     }
 }
 
+/// One frame-wide access set and only the currently active capture scopes.
+/// Recording touches the global set and the top scope, never every ancestor.
+#[derive(Default)]
+pub(crate) struct EntityAccessTracker {
+    pub(crate) global: FxHashSet<EntityId>,
+    scopes: Vec<FxHashSet<EntityId>>,
+}
+
+impl EntityAccessTracker {
+    fn record(&mut self, id: EntityId) {
+        self.global.insert(id);
+        // A global hit may still be a new dependency of this cached subtree.
+        if let Some(scope) = self.scopes.last_mut() { scope.insert(id); }
+    }
+
+    fn extend(&mut self, ids: &FxHashSet<EntityId>) {
+        self.global.extend(ids.iter().copied());
+        if let Some(scope) = self.scopes.last_mut() { scope.extend(ids.iter().copied()); }
+    }
+
+    fn remove(&mut self, id: EntityId) {
+        self.global.remove(&id);
+        for scope in &mut self.scopes { scope.remove(&id); }
+    }
+
+    pub(crate) fn begin_capture(&mut self) -> usize {
+        let depth = self.scopes.len();
+        self.scopes.push(FxHashSet::default());
+        depth
+    }
+
+    pub(crate) fn end_capture(&mut self, depth: usize) -> FxHashSet<EntityId> {
+        assert_eq!(self.scopes.len(), depth + 1, "entity access capture scopes must close in order");
+        let captured = self.scopes.pop().expect("entity access capture missing");
+        if let Some(parent) = self.scopes.last_mut() { parent.extend(captured.iter().copied()); }
+        // Do not merge into global here: a nested draw may have started a new frame,
+        // or an entity may have been released during the callback.
+        captured
+    }
+}
+
 pub(crate) struct EntityMap {
     entities: SecondaryMap<EntityId, Box<dyn Any>>,
-    pub accessed_entities: RefCell<FxHashSet<EntityId>>,
+    pub accessed_entities: RefCell<EntityAccessTracker>,
     ref_counts: Arc<RwLock<EntityRefCounts>>,
 }
 
@@ -71,7 +112,7 @@ impl EntityMap {
     pub fn new() -> Self {
         Self {
             entities: SecondaryMap::new(),
-            accessed_entities: RefCell::new(FxHashSet::default()),
+            accessed_entities: RefCell::new(EntityAccessTracker::default()),
             ref_counts: Arc::new(RwLock::new(EntityRefCounts {
                 counts: SlotMap::with_key(),
                 dropped_entity_ids: Vec::new(),
@@ -122,7 +163,7 @@ impl EntityMap {
         T: 'static,
     {
         let mut accessed_entities = self.accessed_entities.get_mut();
-        accessed_entities.insert(slot.entity_id);
+        accessed_entities.record(slot.entity_id);
 
         let handle = slot.0;
         self.entities.insert(handle.entity_id, Box::new(entity));
@@ -134,7 +175,7 @@ impl EntityMap {
     pub fn lease<T>(&mut self, pointer: &Entity<T>) -> Lease<T> {
         self.assert_valid_context(pointer);
         let mut accessed_entities = self.accessed_entities.get_mut();
-        accessed_entities.insert(pointer.entity_id);
+        accessed_entities.record(pointer.entity_id);
 
         let entity = Some(
             self.entities
@@ -156,7 +197,7 @@ impl EntityMap {
     pub fn read<T: 'static>(&self, entity: &Entity<T>) -> &T {
         self.assert_valid_context(entity);
         let mut accessed_entities = self.accessed_entities.borrow_mut();
-        accessed_entities.insert(entity.entity_id);
+        accessed_entities.record(entity.entity_id);
 
         self.entities
             .get(entity.entity_id)
@@ -172,13 +213,11 @@ impl EntityMap {
     }
 
     pub fn extend_accessed(&mut self, entities: &FxHashSet<EntityId>) {
-        self.accessed_entities
-            .get_mut()
-            .extend(entities.iter().copied());
+        self.accessed_entities.get_mut().extend(entities);
     }
 
     pub fn clear_accessed(&mut self) {
-        self.accessed_entities.get_mut().clear();
+        self.accessed_entities.get_mut().global.clear();
     }
 
     pub fn take_dropped(&mut self) -> Vec<(EntityId, Box<dyn Any>)> {
@@ -194,7 +233,7 @@ impl EntityMap {
                     0,
                     "dropped an entity that was referenced"
                 );
-                accessed_entities.remove(&entity_id);
+                accessed_entities.remove(entity_id);
                 // If the EntityId was allocated with `Context::reserve`,
                 // the entity may not have been inserted.
                 Some((entity_id, self.entities.remove(entity_id)?))
