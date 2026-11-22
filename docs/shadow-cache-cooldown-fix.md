@@ -69,6 +69,25 @@ CARGO_INCREMENTAL=0 cargo test -p hgpui_wgpu --lib shadow_retirement_ --offline 
 
 这些证据是实际 CPU 图像所有权/缓冲释放与引擎 atlas 页撤销，不当作进程 RSS、驱动实际驻留显存或整体 UI/FPS 提升；已有命令/图形上下文也可能延后释放 GPU 原生引用。
 
+## 四阶段核验发现并修正的全热维护成本
+
+首个 G09 完成版本在80个全热key下仍构建live set，即使无victim/无cleanup请求。同进程 debug 机制benchmark：2000帧/样本、5轮交替顺序，额外维护成本为57.105μs/帧（旧命中机制29.734、首版带维护86.839）。
+
+追加失败回归 `shadow_cache_hot_peak_skips_scene_scans` 已实际red：`no old candidates: do not scan the scene or allocate a live set`。追加两个可证明早退：
+
+- trim前没有age>1条目时，scene刷新只能提高使用帧龄，不可能新造victim，无须扫描Scene/构建set。
+- needs_cooldown中全是当前帧hit时，最终谓词必false，无须扫描Scene/构建set。
+
+真实cold/cached replay/空闲回落和三端retirement路径不变。7项专项通过（另1项手动benchmark默认ignored）；相同warm benchmark复测：
+
+|热key数|旧命中机制μs/帧|修正后带维护μs/帧|差值|
+|---:|---:|---:|---:|
+|1|0.329|0.383|0.054|
+|64|22.370|22.169|-0.201（测量噪声，不声称负成本）|
+|80|28.551|33.123|4.572|
+
+80项全热额外维护57.105→4.572μs/帧，同时80→64资源回落保持。以上为debug CPU cache子路径，不代表Release UI帧时。该核验发现的冗余开销单独本地提交；其他前四阶段核验测试不混入本修正。
+
 ## 验证边界与停止门
 
 - Metal 新增真实队列阻塞/完成、同 key 重载、owner drop 测试；源码、队列一致性、API 签名及 Rust 语法静态核对完成。本机没有 Mac，不声称已编译或运行。

@@ -405,6 +405,11 @@ impl ShadowTileCache {
         if self.entries.len() <= MAX_CACHED_TILES {
             return false;
         }
+        // The final predicate below cannot match a current-frame hit, regardless of scene.
+        // Skip the original unconditional live-set construction when every key just hit.
+        if self.entries.values().all(|entry| entry.last_used_frame >= self.frame) {
+            return false;
+        }
         let live_tiles: FxHashSet<_> = current_scene_tiles
             .map(|tile| (tile.texture_id, tile.tile_id.0)).collect();
         self.entries.values().any(|entry| {
@@ -422,6 +427,12 @@ impl ShadowTileCache {
         previous_scene_tiles: impl Iterator<Item = AtlasTile>,
     ) -> Vec<Arc<RenderImage>> {
         if self.entries.len() <= MAX_CACHED_TILES {
+            return Vec::new();
+        }
+        // Refreshing a retained tile can only increase its usage epoch. If no entry is old
+        // enough before that refresh, there cannot be a victim afterwards either. Preserve
+        // the original live-set path below for cached replay and real cooldown candidates.
+        if self.entries.values().all(|entry| self.frame.saturating_sub(entry.last_used_frame) <= 1) {
             return Vec::new();
         }
         let live_tiles: FxHashSet<_> = previous_scene_tiles
@@ -720,6 +731,77 @@ mod tests {
         assert!(cache.trim(std::iter::from_fn(|| -> Option<AtlasTile> {
             panic!("at the target there must be no scene scan or temporary live set");
         })).is_empty());
+    }
+
+    #[test]
+    fn shadow_cache_hot_peak_skips_scene_scans() {
+        let (mut cache, keys, _) = warm_peak();
+        cache.begin_frame();
+        assert!(cache.trim(std::iter::from_fn(|| -> Option<AtlasTile> {
+            panic!("no old candidates: do not scan the scene or allocate a live set");
+        })).is_empty());
+        for key in keys { assert!(matches!(cache.lookup(key), ShadowTileLookup::Hit(_))); }
+        assert!(!cache.needs_cooldown_frame(std::iter::from_fn(|| -> Option<AtlasTile> {
+            panic!("all keys hit this frame: do not scan the scene to request cleanup");
+        })));
+        assert_eq!(cache.entries.len(), MAX_CACHED_TILES + 16);
+    }
+
+    #[test]
+    #[ignore = "manual warm-path overhead measurement; run with --ignored --nocapture"]
+    fn shadow_cache_maintenance_benchmark() {
+        fn measure(cache: &mut ShadowTileCache, keys: &[ShadowTileKey], tiles: &[AtlasTile], maintenance: bool) -> f64 {
+            let started = std::time::Instant::now();
+            let mut evictions = 0;
+            let mut requests = 0;
+            for _ in 0..2000 {
+                cache.begin_frame();
+                if maintenance {
+                    evictions += cache.trim(tiles.iter().copied()).len();
+                }
+                for key in keys { std::hint::black_box(cache.lookup(*key)); }
+                if maintenance {
+                    requests += usize::from(cache.needs_cooldown_frame(tiles.iter().copied()));
+                }
+            }
+            let micros = started.elapsed().as_secs_f64() * 1_000_000. / 2000.;
+            assert_eq!((evictions, requests), (0, 0), "fully hot scene stays stable");
+            micros
+        }
+        for count in [1, 64, 80] {
+            let (mut cache, mut keys, _) = warm_peak();
+            keys.truncate(count);
+            cache.entries.retain(|key, _| keys.contains(key));
+            // Identity-only scene fixture; the measured part is the production CPU cache path,
+            // not a GPU renderer, raster baking, frame pacing or a whole-app frame time.
+            let tiles: Vec<_> = keys.iter().enumerate().map(|(index, key)| {
+                let tile = AtlasTile {
+                    texture_id: AtlasTextureId { index: 0, kind: crate::AtlasTextureKind::Polychrome },
+                    tile_id: crate::TileId(index as u32), padding: 0,
+                    bounds: Bounds::new(crate::Point::default(), crate::size(crate::DevicePixels(1), crate::DevicePixels(1))),
+                };
+                cache.record_atlas_tile(*key, tile);
+                tile
+            }).collect();
+            measure(&mut cache, &keys, &tiles, false);
+            measure(&mut cache, &keys, &tiles, true);
+            let mut baseline = Vec::new();
+            let mut current = Vec::new();
+            for round in 0..5 {
+                let (old, new) = if round % 2 == 0 {
+                    (measure(&mut cache, &keys, &tiles, false), measure(&mut cache, &keys, &tiles, true))
+                } else {
+                    let new = measure(&mut cache, &keys, &tiles, true);
+                    (measure(&mut cache, &keys, &tiles, false), new)
+                };
+                baseline.push(old);
+                current.push(new);
+            }
+            baseline.sort_by(f64::total_cmp);
+            current.sort_by(f64::total_cmp);
+            eprintln!("G09 warm count={count} median5_us/frame old_mechanism={:.3} with_maintenance={:.3} added={:.3}",
+                baseline[2], current[2], current[2] - baseline[2]);
+        }
     }
 
     #[test]
