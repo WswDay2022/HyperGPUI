@@ -1,0 +1,17 @@
+[package]
+name = "core-element-bench"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# A tiny independent harness: optimize the actual generic storage implementation without
+# rebuilding every GPU/platform dependency in the main workspace.
+[workspace]
+
+[dependencies]
+smallvec = { version = "=1.15.2", features = ["union", "const_new"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

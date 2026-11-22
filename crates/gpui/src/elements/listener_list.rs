@@ -12,7 +12,13 @@ impl<T> Default for ListenerList<T> {
 
 impl<T> ListenerList<T> {
     pub(crate) fn push(&mut self, listener: T) {
-        self.0.get_or_insert_with(|| Box::new(SmallVec::new())).push(listener);
+        let listeners = self.0.get_or_insert_with(|| Box::new(SmallVec::new()));
+        // 原实现：push directly spilled to capacity2 then reallocated again at item3.
+        // Once this kind is no longer single, use Vec's usual initial capacity4.
+        if listeners.len() == 1 && listeners.capacity() == 1 {
+            listeners.reserve(3);
+        }
+        listeners.push(listener);
     }
 
     #[cfg(test)]
@@ -79,6 +85,19 @@ mod tests {
     }
 
     #[test]
+    fn core_component_four_listeners_require_only_one_spill_buffer() {
+        use crate::elements::div::ClickListener;
+        let listener: ClickListener = Rc::new(|_, _, _| {});
+        let mut storage = ListenerList::default();
+        let (_, counts) = measure(|| {
+            for _ in 0..4 { storage.push(listener.clone()); }
+        });
+        eprintln!("four listener growth requests={counts:?}");
+        assert_eq!(counts.count, 2, "the header and one Vec-compatible spill should be sufficient");
+        assert_eq!(storage.len(), 4);
+    }
+
+    #[test]
     fn spilling_cloning_and_draining_preserve_order() {
         let mut list = ListenerList::default();
         for value in 0..20 { list.push(value); }
@@ -100,6 +119,50 @@ mod tests {
         cloned[0].set(8);
         assert_eq!(values[0].get(), 8);
         assert!(list.is_empty());
+    }
+
+    #[test]
+    #[ignore = "manual same-process storage comparison; run with --ignored --nocapture"]
+    fn core_component_listener_storage_benchmark() {
+        use crate::elements::div::ClickListener;
+        fn run(batch: usize, count: usize, clone_capture: bool, legacy: bool, listener: &ClickListener) {
+            for _ in 0..batch {
+                if legacy {
+                    let mut callbacks = Vec::new();
+                    for _ in 0..count { callbacks.push(listener.clone()); }
+                    if clone_capture { std::hint::black_box(callbacks.clone()); }
+                    std::hint::black_box(callbacks);
+                } else {
+                    let mut storage = ListenerList::default();
+                    for _ in 0..count { storage.push(listener.clone()); }
+                    let callbacks = storage.take();
+                    if clone_capture { std::hint::black_box(callbacks.clone()); }
+                    std::hint::black_box(callbacks);
+                }
+            }
+        }
+        let listener: ClickListener = Rc::new(|_, _, _| {});
+        for (count, clone_capture) in [(0, false), (1, false), (1, true), (4, false), (16, true)] {
+            let old_allocs = measure(|| run(1, count, clone_capture, true, &listener)).1;
+            let new_allocs = measure(|| run(1, count, clone_capture, false, &listener)).1;
+            run(200, count, clone_capture, true, &listener);
+            run(200, count, clone_capture, false, &listener);
+            let mut old_samples = Vec::new();
+            let mut new_samples = Vec::new();
+            for round in 0..5 {
+                for legacy in if round % 2 == 0 { [true, false] } else { [false, true] } {
+                    let started = std::time::Instant::now();
+                    run(2000, count, clone_capture, legacy, &listener);
+                    let per_node = started.elapsed().as_secs_f64() * 1_000_000. / 2000.;
+                    if legacy { old_samples.push(per_node); } else { new_samples.push(per_node); }
+                }
+            }
+            old_samples.sort_by(f64::total_cmp);
+            new_samples.sort_by(f64::total_cmp);
+            eprintln!("listener storage count={count} clone_capture={clone_capture} requests/bytes legacy={}/{} compact={}/{} median5_us/node legacy={:.3} compact={:.3}",
+                old_allocs.count, old_allocs.requested_bytes, new_allocs.count, new_allocs.requested_bytes,
+                old_samples[2], new_samples[2]);
+        }
     }
 
     #[test]

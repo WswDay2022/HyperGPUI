@@ -30,6 +30,7 @@
       <sourceFolder url="file://$MODULE_DIR$/crates/gpui_render/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/gpui_wgpu/tests" isTestSource="true" />
       <sourceFolder url="file://$MODULE_DIR$/crates/safe_deserialize/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/gpui_refineable/tests" isTestSource="true" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>
     <orderEntry type="inheritedJdk" />

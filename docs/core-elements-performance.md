@@ -46,6 +46,8 @@
 |C04|18组listener Vec的空header与单监听器过量容量|✅ red→green：空header24→8B；single click capacity4→1、请求64→24B，仍1次分配；Interactivity864→576/Div968→680；核心466及workspace检查通过|
 |C05|AnimatedDiv稳定的scroll child_bounds应复用buffer；不能每帧替换Vec|✅ 实际red→green：16个子项连续帧同一pointer/capacity16；核心467 passed / 5 ignored；独立提交见Git日志|
 |C06|普通/AnimatedDiv子项16→0后ScrollHandle不能残留旧bounds/峰值buffer|✅ 实际red→green：两类len/capacity16/16→0/0，稳定非空复用仍通过；核心469 passed / 5 ignored；独立提交见Git日志|
+|C04b|复测发现多项spill与高密度action成本退步|✅ red→green：4回调3/120→2/88请求；dense action5/1000→3/896，恢复Vec adapter；核心471及workspace通过；优化构建复测已记录|
+|C07|Canvas不带样式时不应携带1352B可选refinement；保留Styled与RequestLayoutState接口/绘制|⏳ default构造分配/inline体积红测与实际styled布局/蓝色背景回归正在执行|
 
 入口命令：
 
@@ -122,6 +124,22 @@ debug同机median5每节点μs，旧Vec/compact：0项0.026/0.076；1项0.275/0.
 |16/true|4/704，6/760|489.54 / 760.27|
 
 证明空/单/单clone收益，但多项spill是确认的额外分配/时间成本，继续检查减少spilling增长或对高密度种类保留旧存储；不将上述机制ns视为实际应用帧时。
+
+## C04b — 密集路径回退/补偿而非掩盖回归
+
+- 原C04优化构建确认4回调/16回调比Vec慢；实际新红测分别为3次120B增长和dense action5次1000B（目标2次/3次）。
+- 多项第一次spill直接预留Vec惯常capacity4，避免capacity2→4额外realloc；第一项仍capacity1/一次24B。
+- action注册通常高密度，恢复该字段原Vec adapter；17种稀疏字段保留空/单项收益。原ListenerList字段注释保留。
+- 实际green：4回调2次88B；16个action3次896B，与Vec增长成本相同。相比C04 inline payload多16B：Interactivity592、Div696，仍比最初1160/1264少568B。
+- 专项13 passed / 1 ignored、核心471 passed / 5 ignored，workspace all-targets通过。
+- 直接导入生产实现的优化harness复测median7 ns/节点：0项7.38/1.29；1项99.24/83.28；1项clone170.68/84.24；4项120.57/206.17；16项clone535.14/663.18（旧/新）。
+- 4项相对C04原304.37下降到206.17，但非action多项仍有一个额外storage分配/时间成本，明确保留权衡；不宣称所有输入密度都提速。
+
+```sh
+# 独立小harness，无GPU依赖；同进程控制，使用生产ListenerList源码。
+CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=target/core-element-bench cargo build --manifest-path tooling/core-element-bench/Cargo.toml --release --offline
+target/core-element-bench/release/core-element-bench.exe
+```
 
 ## 基线结构体尺寸（Windows debug测试配置）
 

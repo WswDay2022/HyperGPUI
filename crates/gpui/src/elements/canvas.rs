@@ -93,3 +93,41 @@ impl<T> Styled for Canvas<T> {
         &mut self.style
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{canvas, Canvas};
+    use crate::{AnyWindowHandle, AppContext as _, Context, IntoElement, ParentElement,
+        Render, Styled, TestAppContext, Window, div, px};
+    use std::{cell::Cell, rc::Rc};
+
+    #[test]
+    fn core_component_unstyled_canvas_has_compact_payload() {
+        let (_, allocations) = crate::elements::test_allocations::measure(|| canvas(|_, _, _| (), |_, _, _, _| {}));
+        eprintln!("unstyled canvas payload={} construction_requests={allocations:?}", std::mem::size_of::<Canvas<()>>());
+        assert_eq!(allocations.count, 0, "unstyled canvas must not gain a style allocation");
+        assert!(std::mem::size_of::<Canvas<()>>() <= 64,
+            "optional style must not occupy the full 1352-byte refinement in every canvas");
+    }
+
+    #[hgpui::test]
+    fn core_component_styled_canvas_keeps_layout_and_paint(cx: &mut TestAppContext) {
+        struct Probe(Rc<Cell<(f32, f32)>>);
+        impl Render for Probe {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                let measured = self.0.clone();
+                div().size_full().child(canvas(move |bounds, _, _| {
+                    measured.set((bounds.size.width.0, bounds.size.height.0));
+                }, |_, _, _, _| {}).w(px(24.)).h(px(16.)).background(crate::rgb(0x0000ff)))
+            }
+        }
+        let measured = Rc::new(Cell::new((0., 0.)));
+        let window: AnyWindowHandle = cx.add_window({ let measured = measured.clone(); move |_, _| Probe(measured) }).into();
+        assert_eq!(measured.get(), (24., 16.));
+        cx.update_window(window, |_, window, _| {
+            let blue = crate::Background::from(crate::rgb(0x0000ff)).solid;
+            assert!(window.rendered_frame.scene.quads.iter().any(|quad| quad.background.solid == blue),
+                "style materialization must still paint the configured background");
+        }).unwrap();
+    }
+}

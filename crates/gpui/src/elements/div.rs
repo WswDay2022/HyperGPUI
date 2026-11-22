@@ -2392,7 +2392,9 @@ pub struct Interactivity {
     pub(crate) key_down_listeners: ListenerList<KeyDownListener>,
     pub(crate) key_up_listeners: ListenerList<KeyUpListener>,
     pub(crate) modifiers_changed_listeners: ListenerList<ModifiersChangedListener>,
-    pub(crate) action_listeners: ListenerList<(TypeId, ActionListener)>,
+    // C04初版：ListenerList<(TypeId, ActionListener)>; dense action roots regressed.
+    // Keep the original dense adapter rather than spending a header/spill on root keymaps.
+    pub(crate) action_listeners: Vec<(TypeId, ActionListener)>,
     pub(crate) drop_listeners: ListenerList<(TypeId, DropListener<dyn Any>)>,
     pub(crate) can_drop_predicate: Option<CanDropPredicate>,
     pub(crate) click_listeners: ListenerList<ClickListener>,
@@ -4535,6 +4537,20 @@ mod tests {
         assert_eq!(allocations.count, 1, "single callback storage should require only one allocation");
         assert_eq!(interactivity.click_listeners.capacity(), 1, "one callback should not retain spare listener slots");
         assert_eq!(allocations.requested_bytes, mem::size_of::<SmallVec<[ClickListener; 1]>>());
+    }
+
+    #[test]
+    fn core_component_dense_action_listeners_keep_vec_growth_cost() {
+        let mut interactivity = Interactivity::default();
+        let (_, counts) = crate::elements::test_allocations::measure(|| {
+            for _ in 0..16 {
+                let listener: ActionListener = Box::new(|_, _, _, _| {});
+                interactivity.action_listeners.push((TypeId::of::<()>(), listener));
+            }
+        });
+        eprintln!("dense action storage requests={counts:?}");
+        assert_eq!(counts.count, 3, "dense action registrations must not add header/spill allocations over Vec");
+        assert_eq!(interactivity.action_listeners.len(), 16);
     }
 
     struct GroupHoverTestView {

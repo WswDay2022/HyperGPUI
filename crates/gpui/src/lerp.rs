@@ -22,6 +22,18 @@ where
     fn lerp(&self, to: &Self, delta: f32) -> Output;
 }
 
+impl<A: Lerp, B: Lerp> Lerp for (A, B) {
+    fn lerp(&self, to: &Self, delta: f32) -> Self {
+        (self.0.lerp(&to.0, delta), self.1.lerp(&to.1, delta))
+    }
+}
+
+impl<A: Lerp, B: Lerp, C: Lerp> Lerp for (A, B, C) {
+    fn lerp(&self, to: &Self, delta: f32) -> Self {
+        (self.0.lerp(&to.0, delta), self.1.lerp(&to.1, delta), self.2.lerp(&to.2, delta))
+    }
+}
+
 impl Lerp<f32> for bool {
     fn lerp(&self, to: &Self, delta: f32) -> f32 {
         lerp(*self as u8 as f32, *to as u8 as f32, delta)

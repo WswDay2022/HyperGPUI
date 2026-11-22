@@ -1,7 +1,8 @@
 //! Scoped Rust allocation-request measurements for core element regression tests.
 //!
-//! This module is compiled only into hgpui's unit-test binary. The adapter delegates to the
-//! same System allocator; a const, dropless thread-local counter isolates one measured caller
+//! This module is enabled only in hgpui's unit tests or explicitly imported by an independent
+//! benchmark, never in the production library. The adapter delegates to the same System
+//! allocator; a const, dropless thread-local counter isolates one measured caller
 //! from parallel tests/background work. Counts are allocation requests, not live heap or RSS.
 
 use std::{
