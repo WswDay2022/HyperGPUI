@@ -2583,10 +2583,13 @@ impl Interactivity {
                 );
 
                 if let Some(element_state) = element_state.as_mut() {
-                    if let Some(clicked_state) = element_state.clicked_state.as_ref() {
-                        let clicked_state = clicked_state.borrow();
-                        self.active = Some(clicked_state.element);
-                    }
+                    // 原实现：only initialized `active` after compute_style had eagerly made a Rc.
+                    // if let Some(clicked_state) = element_state.clicked_state.as_ref() {
+                    //     let clicked_state = clicked_state.borrow();
+                    //     self.active = Some(clicked_state.element);
+                    // }
+                    self.active = Some(element_state.clicked_state.as_ref()
+                        .is_some_and(|clicked_state| clicked_state.borrow().element));
                     if self.hover_style.is_some() || self.group_hover_style.is_some() {
                         element_state
                             .hover_state
@@ -3747,11 +3750,13 @@ impl Interactivity {
             }
         }
 
-        if let Some(element_state) = element_state.as_deref_mut() {
-            let clicked_state = element_state
-                .clicked_state
-                .get_or_insert_with(Default::default)
-                .borrow();
+        // 原实现：read-only style resolution allocated clicked state even for inert keyed nodes.
+        // let clicked_state = element_state.clicked_state
+        //     .get_or_insert_with(Default::default).borrow();
+        if let Some(element_state) = element_state.as_deref_mut()
+            && let Some(clicked_state) = element_state.clicked_state.as_ref()
+        {
+            let clicked_state = clicked_state.borrow();
             if clicked_state.group
                 && let Some(group) = self.group_active_style.as_ref()
             {
@@ -4333,6 +4338,54 @@ mod tests {
     use super::*;
     use crate::{AnyWindowHandle, AppContext as _, Context, InputEvent, Keystroke, TestAppContext, canvas};
     use std::cell::Cell;
+
+    #[hgpui::test]
+    fn core_component_plain_style_does_not_allocate_clicked_state(cx: &mut TestAppContext) {
+        eprintln!("core footprint: Div={} Interactivity={} Aria={} StyleRefinement={} Style={} AnimatedDiv={} Canvas={} Text={} StyledText={} InteractiveText={} Svg={} Img={} List={} UniformList={} Anchored={} ContainerQuery={} Measurer={} Surface={}",
+            mem::size_of::<Div>(), mem::size_of::<Interactivity>(), mem::size_of::<AriaProperties>(),
+            mem::size_of::<StyleRefinement>(), mem::size_of::<Style>(), mem::size_of::<crate::AnimatedDiv>(),
+            mem::size_of::<crate::Canvas<()>>(), mem::size_of::<crate::Text>(), mem::size_of::<crate::StyledText>(),
+            mem::size_of::<crate::InteractiveText>(), mem::size_of::<crate::Svg>(), mem::size_of::<crate::Img>(),
+            mem::size_of::<crate::List>(), mem::size_of::<crate::UniformList>(), mem::size_of::<crate::Anchored>(),
+            mem::size_of::<crate::ContainerQuery>(), mem::size_of::<crate::Measurer>(), mem::size_of::<crate::Surface>());
+        let window = cx.add_window(|_, _| crate::Empty);
+        window.update(cx, |_, window, cx| {
+            let interactivity = Interactivity::new();
+            let mut states: Vec<_> = (0..4096).map(|_| InteractiveElementState::default()).collect();
+            for state in &mut states {
+                std::hint::black_box(interactivity.compute_style_internal(None, None, Some(state), window, cx));
+            }
+            let clicked_owners = states.iter().filter(|state| state.clicked_state.is_some()).count();
+            eprintln!("plain keyed style resolution: nodes=4096 allocated_clicked_Rc={clicked_owners}");
+            assert_eq!(clicked_owners, 0, "read-only style resolution must not create per-node click state");
+        }).unwrap();
+    }
+
+    #[hgpui::test]
+    fn core_component_inert_prepaint_keeps_public_active_state(cx: &mut TestAppContext) {
+        struct Probe(Rc<Cell<Option<bool>>>);
+        impl Render for Probe {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                let observed = self.0.clone();
+                div().size_full().child(canvas(move |bounds, window, cx| {
+                    let mut interactivity = Interactivity::new();
+                    window.with_global_id("core-inert-active".into(), |id, window| {
+                        interactivity.prepaint(Some(id), None, bounds, bounds.size, window, cx,
+                            |_, _, _, _, _| ());
+                        observed.set(interactivity.active);
+                        window.with_element_state::<InteractiveElementState, _>(id, |state, _| {
+                            let state = state.expect("keyed prepaint state");
+                            assert!(state.clicked_state.is_none(), "public prepaint must remain allocation-free for inert clicked state");
+                            ((), state)
+                        });
+                    });
+                }, |_, _, _, _| {}))
+            }
+        }
+        let observed = Rc::new(Cell::new(None));
+        let _window = cx.add_window({ let observed = observed.clone(); move |_, _| Probe(observed) });
+        assert_eq!(observed.get(), Some(false), "absence of a clicked Rc must preserve the existing keyed active=false value");
+    }
 
     struct GroupHoverTestView {
         render_count: Rc<Cell<usize>>,
