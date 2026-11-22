@@ -42,6 +42,8 @@
 |---|---|---|
 |C01|4096个普通keyed状态执行真实compute_style_internal；没有click/active交互时不应生成4096个clicked Rc|✅ 实际red→green：4096→0；真实prepaint保持active=Some(false)；核心454 passed / 4 ignored；独立本地提交见Git日志|
 |C02|真实paint_mouse_listeners注册鼠标click，但元素未聚焦；保留pending mouse/clicked，不创建无用pending keyboard|✅ 有效red→green：字段分配(true,true,true)→(true,true,false)；核心455 passed / 4 ignored；独立本地提交见Git日志|
+|C03|ARIA稀疏属性不应在所有共享Interactivity中占304B；保留默认读、实例隔离、builder与可访问性动作|✅ red→green：slot304→8B，Interactivity1160→864、Div1264→968；专项6、核心458通过；workspace all-targets通过；独立提交见Git日志|
+|C04候选|19组listener Vec的空header与单监听器过量容量|⏳ 已定位调用面；尚未实现。准备test_allocations.rs线程局部分配请求探针，文件暂未链接，未声称已执行|
 
 入口命令：
 
@@ -66,6 +68,16 @@ CARGO_INCREMENTAL=0 cargo test -p hgpui --lib core_component_ --offline -- --noc
 - 原pending_keyboard_down初始化注释保留，将完全相同初始化移入is_focused分支。鼠标/拖拽状态创建、键盘focus generation配对与已存在键盘state寿命不变。
 - 专项3 passed；核心455 passed / 4 ignored，既有点击、focus移动/ABA、hover与滚动回归均通过。未修改平台/GPU路径或公开接口。
 - 收益：每个从未聚焦的mouse/drag控件不再持有一个未消费的键盘跟踪Rc，也少一次相应克隆。
+
+## C03 — 稀疏 ARIA 不内嵌大 payload
+
+- 尺寸红测实际失败：empty ARIA slot=304B，目标为指针大小8B；默认click/focus可访问性动作在旧实现已单独验证。
+- 用LazyAriaProperties(Option<Box<AriaProperties>>)保持原字段式builder/内部写法；只读缺省引用一个不可变static默认值，不用unsafe、全局可变状态或once-lock。第一次写入创建各实例自己的payload。
+- 保留完整属性写入逻辑，只跳过不存在的属性payload；click/focus/custom action注册仍在该条件外。
+- 默认读取不物化、两个实例不共享可写metadata、字符串/数字属性及无metadata动作均回归通过。原inline字段注释保留，公开样式/交互调用接口不变。
+- 实测slot304→8B、Interactivity1160→864、Div1264→968、AnimatedDiv1360→1064、Svg1232→936、Img1280→984、UniformList1232→936。List不使用该Interactivity，尺寸未变。
+- 不带ARIA属性的这些节点少296B inline payload；有属性的节点转为owned heap payload，多一个pointer/首次物化分配，不声称每种节点总内存都下降。
+- 专项6 passed；核心458 passed / 4 ignored；workspace all-targets check通过，未查看或修改独立组件库源码。无GPU/平台资源改动。
 
 ## 基线结构体尺寸（Windows debug测试配置）
 

@@ -2292,6 +2292,36 @@ pub(crate) struct AriaProperties {
     pub(crate) column_count: Option<usize>,
 }
 
+// Read-only defaults are shared; mutable metadata is always private to its element.
+// A static value avoids a heap allocation or a once-lock on absent metadata reads.
+static EMPTY_ARIA_PROPERTIES: AriaProperties = AriaProperties {
+    label: None, description: None, keyshortcuts: None,
+    selected: None, expanded: None, toggled: None,
+    numeric_value: None, min_numeric_value: None, max_numeric_value: None,
+    numeric_value_step: None, value: None, placeholder: None,
+    orientation: None, level: None, position_in_set: None, size_of_set: None,
+    row_index: None, column_index: None, row_count: None, column_count: None,
+};
+
+/// Compact storage keeps the existing field-oriented interface for ARIA builders.
+/// Reading defaults allocates nothing; the first mutation materializes one owned payload.
+#[derive(Default)]
+pub(crate) struct LazyAriaProperties(Option<Box<AriaProperties>>);
+
+impl std::ops::Deref for LazyAriaProperties {
+    type Target = AriaProperties;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_deref().unwrap_or(&EMPTY_ARIA_PROPERTIES)
+    }
+}
+
+impl std::ops::DerefMut for LazyAriaProperties {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.0.get_or_insert_with(Default::default).as_mut()
+    }
+}
+
 /// The interactivity struct. Powers all of the general-purpose
 /// interactivity in the `Div` element.
 #[derive(Default)]
@@ -2357,7 +2387,8 @@ pub struct Interactivity {
     pub(crate) a11y_synthetic_children: Option<Box<dyn FnOnce(&mut crate::A11ySubtreeBuilder)>>,
     pub(crate) report_active_descendant_focus: bool,
     pub(crate) override_role: Option<accesskit::Role>,
-    pub(crate) aria: AriaProperties,
+    // 原实现：pub(crate) aria: AriaProperties, // 304 bytes even with no attributes.
+    pub(crate) aria: LazyAriaProperties,
 
     #[cfg(any(feature = "inspector", debug_assertions))]
     pub(crate) source_location: Option<&'static core::panic::Location<'static>>,
@@ -3795,6 +3826,8 @@ impl Interactivity {
     }
 
     pub(crate) fn write_a11y_info(&self, node: &mut accesskit::Node) {
+        // 原属性写入逻辑保留：only skip the absent payload, never the element's actions.
+        if self.aria.0.is_some() {
         if let Some(label) = &self.aria.label {
             node.set_label(label.to_string());
         }
@@ -3854,6 +3887,7 @@ impl Interactivity {
         }
         if let Some(count) = self.aria.column_count {
             node.set_column_count(count);
+        }
         }
         if !self.click_listeners.is_empty() {
             node.add_action(accesskit::Action::Click);
@@ -4417,6 +4451,40 @@ mod tests {
         eprintln!("unfocused click mouse/clicked/keyboard allocated: {:?}", observed.get());
         assert_eq!(observed.get(), (true, true, false),
             "mouse-only unfocused click must keep mouse semantics without allocating unused keyboard tracking");
+    }
+
+    #[test]
+    fn core_component_empty_aria_has_pointer_sized_slot() {
+        let interactivity = Interactivity::default();
+        eprintln!("empty optional ARIA inline slot: {} bytes; whole Interactivity={}",
+            mem::size_of_val(&interactivity.aria), mem::size_of::<Interactivity>());
+        assert_eq!(mem::size_of_val(&interactivity.aria), mem::size_of::<usize>(),
+            "rare accessibility metadata must not reserve its full 304-byte payload in every base node");
+    }
+
+    #[test]
+    fn core_component_aria_defaults_are_read_only_and_instances_are_isolated() {
+        let mut first = Interactivity::default();
+        let second = Interactivity::default();
+        assert!(first.aria.label.is_none());
+        assert!(first.aria.0.is_none(), "default reads must not materialize metadata");
+        first.aria.label = Some("first".into());
+        assert!(first.aria.0.is_some());
+        assert_eq!(first.aria.label.as_deref(), Some("first"));
+        assert!(second.aria.label.is_none(), "mutable metadata cannot alias global defaults");
+        assert!(second.aria.0.is_none());
+    }
+
+    #[test]
+    fn core_component_empty_aria_keeps_accessibility_actions() {
+        let mut interactivity = Interactivity::default();
+        interactivity.focusable = true;
+        interactivity.on_click(|_, _, _| {});
+        let mut node = accesskit::Node::new(accesskit::Role::Button);
+        interactivity.write_a11y_info(&mut node);
+        assert!(node.supports_action(accesskit::Action::Click));
+        assert!(node.supports_action(accesskit::Action::Focus));
+        assert_eq!(node.label(), None);
     }
 
     struct GroupHoverTestView {
