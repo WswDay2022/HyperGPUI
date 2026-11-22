@@ -206,7 +206,10 @@ impl Element for AnimatedDiv {
             bounds.size
         } else if let Some(scroll_handle) = self.interactivity.tracked_scroll_handle.as_ref() {
             let mut state = scroll_handle.0.borrow_mut();
-            state.child_bounds = Vec::with_capacity(request_layout.child_layout_ids.len());
+            // 原实现：state.child_bounds = Vec::with_capacity(request_layout.child_layout_ids.len());
+            // Match ordinary Div: retain stable storage, reserve once only when growth needs it.
+            state.child_bounds.clear();
+            state.child_bounds.reserve(request_layout.child_layout_ids.len());
             for child_layout_id in &request_layout.child_layout_ids {
                 let child_bounds = window.layout_bounds(*child_layout_id);
                 child_min = child_min.min(&child_bounds.origin);
@@ -325,5 +328,46 @@ impl IntoElement for AnimatedDiv {
 
     fn into_element(self) -> Self::Element {
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{animated_div, AnimatedDivProps};
+    use crate::{AnyWindowHandle, AppContext as _, Context, IntoElement, ParentElement, Render, ScrollHandle,
+        StatefulInteractiveElement, Styled, TestAppContext, Window, div, px};
+    use std::time::Duration;
+
+    #[hgpui::test]
+    fn core_component_animated_div_reuses_scroll_child_buffer(cx: &mut TestAppContext) {
+        struct Probe(ScrollHandle);
+        impl Render for Probe {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                animated_div("stable-scroll-buffer", AnimatedDivProps {
+                    duration: Duration::ZERO, ..Default::default()
+                }).size(px(128.)).overflow_y_scroll().track_scroll(&self.0)
+                    .children((0..16).map(|_| div().size(px(8.))))
+            }
+        }
+        let scroll = ScrollHandle::default();
+        let window: AnyWindowHandle = cx.add_window({
+            let scroll = scroll.clone(); move |_, _| Probe(scroll)
+        }).into();
+        let initial = {
+            let state = scroll.0.borrow();
+            assert_eq!(state.child_bounds.len(), 16);
+            (state.child_bounds.as_ptr() as usize, state.child_bounds.capacity())
+        };
+        for _ in 0..3 {
+            cx.update_window(window, |_, window, cx| {
+                window.draw(cx).clear(cx);
+                let state = scroll.0.borrow();
+                let current = (state.child_bounds.as_ptr() as usize, state.child_bounds.capacity());
+                eprintln!("animated-div child storage initial={initial:?} current={current:?}");
+                assert_eq!(state.child_bounds.len(), 16);
+                assert_eq!(current, initial,
+                    "stable animated container must not replace its scroll child buffer each frame");
+            }).unwrap();
+        }
     }
 }

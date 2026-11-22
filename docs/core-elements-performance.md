@@ -44,6 +44,7 @@
 |C02|真实paint_mouse_listeners注册鼠标click，但元素未聚焦；保留pending mouse/clicked，不创建无用pending keyboard|✅ 有效red→green：字段分配(true,true,true)→(true,true,false)；核心455 passed / 4 ignored；独立本地提交见Git日志|
 |C03|ARIA稀疏属性不应在所有共享Interactivity中占304B；保留默认读、实例隔离、builder与可访问性动作|✅ red→green：slot304→8B，Interactivity1160→864、Div1264→968；专项6、核心458通过；workspace all-targets通过；独立提交见Git日志|
 |C04|18组listener Vec的空header与单监听器过量容量|✅ red→green：空header24→8B；single click capacity4→1、请求64→24B，仍1次分配；Interactivity864→576/Div968→680；核心466及workspace检查通过|
+|C05|AnimatedDiv稳定的scroll child_bounds应复用buffer；不能每帧替换Vec|✅ 实际red→green：16个子项连续帧同一pointer/capacity16；核心467 passed / 5 ignored（第五项是新增未执行的C04测量）；独立提交见Git日志|
 
 入口命令：
 
@@ -89,6 +90,14 @@ CARGO_INCREMENTAL=0 cargo test -p hgpui --lib core_component_ --offline -- --noc
 - Interactivity864→576，Div968→680，AnimatedDiv1064→776，Svg936→648，Img984→696，UniformList936→648。叠加C03，Div基线1264→680，inline payload少584B；不含仍存在的style Box及其他外部分配。
 - 支持0/1/many、clone/drain顺序、partial drain恰好Drop、单项take后clone不分配等4个存储测试；专项8、核心466 passed / 4 ignored；workspace all-targets通过。
 - 多监听器spill可能比原Vec多一个小storage分配，这是explicit权衡，不宣称所有density/总heap/帧时都无条件改善。未更改平台或GPU资源。
+
+## C05 — AnimatedDiv稳定滚动数据复用
+
+- 在实际AnimatedDiv/ScrollHandle视图驱动连续帧。原实现有效red：16项、capacity16保持，但buffer地址在下一帧不同；RHS新Vec在旧Vec释放前分配，不依赖RSS或allocator地址偶然复用。
+- 原with_capacity替换保留为注释，改为clear+reserve：首次/增长仍预留足够空间，稳定帧同一buffer不再分配；与普通Div既有buffer复用策略一致。
+- 连续3帧pointer和capacity均不变，长度16；专项1 passed，核心467 passed / 5 ignored。初始夹具缺AppContext trait导入是测试编译错误，不当产品运行故障。
+- 只消除稳定帧重复分配/释放；容量保留可能令收缩后的逻辑分配高于旧版逐帧精确重建，不宣称所有peak/idle内存都降低。0子项的已有清理语义单独核对，不混入此提交。
+- 没有修改公开调用、动画时间/easing、child bounds顺序或GPU路径。
 
 ## 基线结构体尺寸（Windows debug测试配置）
 
