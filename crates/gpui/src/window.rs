@@ -8362,6 +8362,55 @@ mod tests {
         }
     }
 
+    #[hgpui::test]
+    fn accessed_capture_cached_view_notify_survives_disappearing_prefix(cx: &mut TestAppContext) {
+        struct Child { color: u32, seen: Rc<RefCell<Vec<u32>>> }
+        impl Render for Child {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                self.seen.borrow_mut().push(self.color);
+                div().size_full().background(crate::rgb(self.color))
+            }
+        }
+        struct Root { child: Entity<Child>, read_prefix: Rc<Cell<bool>> }
+        impl Render for Root {
+            fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                if self.read_prefix.get() { std::hint::black_box(self.child.read(cx)); }
+                div().size_full().child(self.child.clone().cached(
+                    crate::StyleRefinement::default().size(px(40.)),
+                ))
+            }
+        }
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let read_prefix = Rc::new(Cell::new(true));
+        let child = cx.update(|cx| {
+            let seen = seen.clone();
+            cx.new(|_| Child { color: 0xff0000, seen })
+        });
+        let window: AnyWindowHandle = cx.add_window({
+            let child = child.clone();
+            let read_prefix = read_prefix.clone();
+            move |_, _| Root { child, read_prefix }
+        }).into();
+        assert_eq!(seen.borrow().last().copied(), Some(0xff0000));
+        let renders = seen.borrow().len();
+        read_prefix.set(false);
+        for _ in 0..3 {
+            cx.update_window(window, |_, window, cx| window.draw(cx).clear(cx)).unwrap();
+        }
+        assert_eq!(seen.borrow().len(), renders, "unchanged child must actually replay its cache");
+        cx.update(|cx| child.update(cx, |child, cx| {
+            child.color = 0x0000ff;
+            cx.notify();
+        }));
+        assert_eq!(seen.borrow().last().copied(), Some(0x0000ff),
+            "cached child dependency must remain tracked after its earlier frame-prefix read disappears");
+        cx.update_window(window, |_, window, _| {
+            let blue = crate::Background::from(crate::rgb(0x0000ff)).solid;
+            assert!(window.rendered_frame.scene.quads.iter().any(|quad| quad.background.solid == blue),
+                "notify must change the actual painted scene, not only a capture counter");
+        }).unwrap();
+    }
+
     struct CountingChildView {
         renders: Rc<Cell<usize>>,
     }

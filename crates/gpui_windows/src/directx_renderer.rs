@@ -6385,6 +6385,32 @@ mod tests {
     }
 
     #[test]
+    fn smoothed_scene_shared_instance_buffer_byte_audit() -> Result<()> {
+        use windows::Win32::Graphics::Direct3D11::D3D11_BUFFER_DESC;
+        let (device, _) = create_warp_device().expect("WARP is required for the instance budget audit");
+        let pipelines = DirectXRenderPipelines::new(&device)?;
+        assert!(pipelines.quad_pipeline.smoothed.is_some());
+        assert!(pipelines.shadow_pipeline.smoothed.is_some());
+        assert!(pipelines.poly_sprites.smoothed.is_some());
+        let mut shared_bytes = 0u64;
+        for (label, buffer, count, stride) in [
+            ("quad", &pipelines.quad_pipeline.buffer, pipelines.quad_pipeline.buffer_size, std::mem::size_of::<Quad>()),
+            ("shadow", &pipelines.shadow_pipeline.buffer, pipelines.shadow_pipeline.buffer_size, std::mem::size_of::<Shadow>()),
+            ("poly", &pipelines.poly_sprites.buffer, pipelines.poly_sprites.buffer_size, std::mem::size_of::<PolychromeSprite>()),
+        ] {
+            let mut desc = D3D11_BUFFER_DESC::default();
+            unsafe { buffer.GetDesc(&mut desc); }
+            assert_eq!(desc.ByteWidth as usize, count * stride);
+            shared_bytes += u64::from(desc.ByteWidth);
+            eprintln!("G04 shared {label}: count={count} stride={stride} actual_GPU_buffer_bytes={}", desc.ByteWidth);
+        }
+        // ShaderStages is shader-only by construction; the three legacy smoothing buffers
+        // of these same initial capacities are absent. This is not a driver residency reading.
+        eprintln!("G04 three shared instance buffers total={shared_bytes}; three duplicate smoothing buffers avoided_bytes={shared_bytes}");
+        Ok(())
+    }
+
+    #[test]
     fn smoothed_scene_upload_reaches_the_selected_pipeline() -> Result<()> {
         let (device, context) = create_warp_device().expect("WARP is required for the smoothing integration regression");
         let globals = install_globals(&device, &context)?;

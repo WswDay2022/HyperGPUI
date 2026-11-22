@@ -3275,6 +3275,59 @@ mod test {
     }
 
     #[test]
+    #[ignore = "manual same-process mechanism comparison; run with --ignored --nocapture"]
+    fn accessed_capture_same_run_comparison_benchmark() {
+        fn measure(cx: &mut crate::App, entity: &crate::Entity<usize>, legacy: bool) -> (f64, usize) {
+            let started = std::time::Instant::now();
+            let mut captured = 0;
+            for _ in 0..200 {
+                if legacy {
+                    // Exact clone/difference mechanism from 6987fcbb64^, using the current
+                    // tracker's unchanged global set. This is not an old whole-app binary.
+                    let before = cx.entities.accessed_entities.get_mut().global.clone();
+                    std::hint::black_box(*entity.read(cx));
+                    let dependencies: collections::FxHashSet<_> = cx.entities.accessed_entities
+                        .get_mut().global.difference(&before).copied().collect();
+                    captured += std::hint::black_box(dependencies.len());
+                } else {
+                    let (value, dependencies) = cx.detect_accessed_entities(|cx| *entity.read(cx));
+                    std::hint::black_box(value);
+                    captured += std::hint::black_box(dependencies.len());
+                }
+            }
+            (started.elapsed().as_secs_f64() * 1000., captured)
+        }
+        for prefix_count in [256, 1024, 4096] {
+            let cx = TestAppContext::single();
+            let entities = cx.update(|cx| (0..prefix_count).map(|_| cx.new(|_| 7usize)).collect::<Vec<_>>());
+            cx.update(|cx| {
+                cx.entities.clear_accessed();
+                for entity in &entities { std::hint::black_box(entity.read(cx)); }
+                measure(cx, &entities[0], true);
+                measure(cx, &entities[0], false);
+                let mut old_samples = Vec::new();
+                let mut new_samples = Vec::new();
+                for round in 0..5 {
+                    let (old, new) = if round % 2 == 0 {
+                        (measure(cx, &entities[0], true), measure(cx, &entities[0], false))
+                    } else {
+                        let new = measure(cx, &entities[0], false);
+                        (measure(cx, &entities[0], true), new)
+                    };
+                    assert_eq!(old.1, 0, "legacy difference misses a shared prefix dependency");
+                    assert_eq!(new.1, 200, "every local capture must include the actual read");
+                    old_samples.push(old.0);
+                    new_samples.push(new.0);
+                }
+                old_samples.sort_by(f64::total_cmp);
+                new_samples.sort_by(f64::total_cmp);
+                eprintln!("R02 same-run prefix={prefix_count} scopes=200 median5_ms legacy={:.3} local={:.3} dependencies=0->200",
+                    old_samples[2], new_samples[2]);
+            });
+        }
+    }
+
+    #[test]
     fn accessed_capture_includes_a_dependency_already_in_the_frame_prefix() {
         let cx = TestAppContext::single();
         cx.update(|cx| {
