@@ -41,7 +41,7 @@
 |ID|反馈与边界|状态/证据|
 |---|---|---|
 |C01|4096个普通keyed状态执行真实compute_style_internal；没有click/active交互时不应生成4096个clicked Rc|✅ 实际red→green：4096→0；真实prepaint保持active=Some(false)；核心454 passed / 4 ignored；独立本地提交见Git日志|
-|C02|真实paint_mouse_listeners注册鼠标click，但元素未聚焦；保留pending mouse/clicked，不创建无用pending keyboard|⏳ 待完成有效红测；初始夹具违反hitbox阶段/typed window.draw重入已识别，不把夹具错误当产品红测|
+|C02|真实paint_mouse_listeners注册鼠标click，但元素未聚焦；保留pending mouse/clicked，不创建无用pending keyboard|✅ 有效red→green：字段分配(true,true,true)→(true,true,false)；核心455 passed / 4 ignored；独立本地提交见Git日志|
 
 入口命令：
 
@@ -58,6 +58,14 @@ CARGO_INCREMENTAL=0 cargo test -p hgpui --lib core_component_ --offline -- --noc
 - 原实现注释保留；没有更改公开方法/事件/样式API、GPU资源或平台分支。
 - 新增内部路径计数与实际prepaint/element-state检查两项测试，2 passed；核心全量454 passed / 4 ignored。
 - 实际收益是4096个无用Rc实例及之后每次只读style解析的RefCell borrow被消除，不冒充RSS或整体UI倍率。
+
+## C02 — 未聚焦鼠标控件不创建键盘 Rc
+
+- 正确seam：canvas prepaint注册hitbox、paint调用真实paint_mouse_listeners，外部用AnyWindowHandle驱动draw，避免typed root已update时再draw的测试夹具重入。
+- 实际red记录mouse/clicked/keyboard分配(true,true,true)；修复后(true,true,false)。初始两个夹具错误（阶段与root重入）不当作产品运行故障。
+- 原pending_keyboard_down初始化注释保留，将完全相同初始化移入is_focused分支。鼠标/拖拽状态创建、键盘focus generation配对与已存在键盘state寿命不变。
+- 专项3 passed；核心455 passed / 4 ignored，既有点击、focus移动/ABA、hover与滚动回归均通过。未修改平台/GPU路径或公开接口。
+- 收益：每个从未聚焦的mouse/drag控件不再持有一个未消费的键盘跟踪Rc，也少一次相应克隆。
 
 ## 基线结构体尺寸（Windows debug测试配置）
 

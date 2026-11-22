@@ -3234,10 +3234,9 @@ impl Interactivity {
                     .get_or_insert_with(Default::default)
                     .clone();
 
-                let pending_keyboard_down = element_state
-                    .pending_keyboard_down
-                    .get_or_insert_with(Default::default)
-                    .clone();
+                // 原实现：unfocused mouse/drag handlers also allocated keyboard tracking.
+                // let pending_keyboard_down = element_state.pending_keyboard_down
+                //     .get_or_insert_with(Default::default).clone();
 
                 let clicked_state = element_state
                     .clicked_state
@@ -3286,6 +3285,9 @@ impl Interactivity {
                 });
 
                 if is_focused {
+                    // Keyboard tracking is consumed only by these focused key handlers.
+                    let pending_keyboard_down = element_state.pending_keyboard_down
+                        .get_or_insert_with(Default::default).clone();
                     // Record the focus generation at which an enter/space key
                     // down event happened on this element. The next key up
                     // event will be mapped to a click event if both of the
@@ -4385,6 +4387,36 @@ mod tests {
         let observed = Rc::new(Cell::new(None));
         let _window = cx.add_window({ let observed = observed.clone(); move |_, _| Probe(observed) });
         assert_eq!(observed.get(), Some(false), "absence of a clicked Rc must preserve the existing keyed active=false value");
+    }
+
+    #[hgpui::test]
+    fn core_component_unfocused_click_does_not_allocate_keyboard_state(cx: &mut TestAppContext) {
+        struct Probe(Rc<Cell<(bool, bool, bool)>>);
+        impl Render for Probe {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                let observed = self.0.clone();
+                div().size_full().child(canvas(
+                    |_, window, _| window.insert_hitbox(
+                        Bounds::new(point(px(0.), px(0.)), size(px(40.), px(40.))), HitboxBehavior::Normal,
+                    ),
+                    move |_, hitbox, window, cx| {
+                        let mut interactivity = Interactivity::new();
+                        interactivity.on_click(|_, _, _| {});
+                        let mut state = InteractiveElementState::default();
+                        interactivity.paint_mouse_listeners(&hitbox, Some(&mut state), window, cx);
+                        observed.set((state.pending_mouse_down.is_some(), state.clicked_state.is_some(), state.pending_keyboard_down.is_some()));
+                    },
+                ))
+            }
+        }
+        let observed = Rc::new(Cell::new((false, false, false)));
+        let window: AnyWindowHandle = cx.add_window({
+            let observed = observed.clone(); move |_, _| Probe(observed)
+        }).into();
+        cx.update_window(window, |_, window, cx| window.draw(cx).clear(cx)).unwrap();
+        eprintln!("unfocused click mouse/clicked/keyboard allocated: {:?}", observed.get());
+        assert_eq!(observed.get(), (true, true, false),
+            "mouse-only unfocused click must keep mouse semantics without allocating unused keyboard tracking");
     }
 
     struct GroupHoverTestView {
