@@ -2151,6 +2151,10 @@ impl Element for Div {
             *handle.last_origin.borrow_mut() = bounds.origin - window.element_offset();
         }
         let content_size = if request_layout.child_layout_ids.is_empty() {
+            // 原实现：bounds.size only; the handle kept stale items and its unused peak buffer.
+            if let Some(scroll_handle) = self.interactivity.tracked_scroll_handle.as_ref() {
+                scroll_handle.0.borrow_mut().child_bounds = Vec::new();
+            }
             bounds.size
         } else if let Some(scroll_handle) = self.interactivity.tracked_scroll_handle.as_ref() {
             let mut state = scroll_handle.0.borrow_mut();

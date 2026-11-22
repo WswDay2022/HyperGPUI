@@ -44,7 +44,8 @@
 |C02|真实paint_mouse_listeners注册鼠标click，但元素未聚焦；保留pending mouse/clicked，不创建无用pending keyboard|✅ 有效red→green：字段分配(true,true,true)→(true,true,false)；核心455 passed / 4 ignored；独立本地提交见Git日志|
 |C03|ARIA稀疏属性不应在所有共享Interactivity中占304B；保留默认读、实例隔离、builder与可访问性动作|✅ red→green：slot304→8B，Interactivity1160→864、Div1264→968；专项6、核心458通过；workspace all-targets通过；独立提交见Git日志|
 |C04|18组listener Vec的空header与单监听器过量容量|✅ red→green：空header24→8B；single click capacity4→1、请求64→24B，仍1次分配；Interactivity864→576/Div968→680；核心466及workspace检查通过|
-|C05|AnimatedDiv稳定的scroll child_bounds应复用buffer；不能每帧替换Vec|✅ 实际red→green：16个子项连续帧同一pointer/capacity16；核心467 passed / 5 ignored（第五项是新增未执行的C04测量）；独立提交见Git日志|
+|C05|AnimatedDiv稳定的scroll child_bounds应复用buffer；不能每帧替换Vec|✅ 实际red→green：16个子项连续帧同一pointer/capacity16；核心467 passed / 5 ignored；独立提交见Git日志|
+|C06|普通/AnimatedDiv子项16→0后ScrollHandle不能残留旧bounds/峰值buffer|✅ 实际red→green：两类len/capacity16/16→0/0，稳定非空复用仍通过；核心469 passed / 5 ignored；独立提交见Git日志|
 
 入口命令：
 
@@ -98,6 +99,29 @@ CARGO_INCREMENTAL=0 cargo test -p hgpui --lib core_component_ --offline -- --noc
 - 连续3帧pointer和capacity均不变，长度16；专项1 passed，核心467 passed / 5 ignored。初始夹具缺AppContext trait导入是测试编译错误，不当产品运行故障。
 - 只消除稳定帧重复分配/释放；容量保留可能令收缩后的逻辑分配高于旧版逐帧精确重建，不宣称所有peak/idle内存都降低。0子项的已有清理语义单独核对，不混入此提交。
 - 没有修改公开调用、动画时间/easing、child bounds顺序或GPU路径。
+
+## C06 — 完全空内容清理旧滚动数据与buffer
+
+- 实际UI从16个子项变为0，普通Div和AnimatedDiv都red：ScrollHandle仍暴露16个旧bounds并持capacity16。
+- 0子项分支现在将child_bounds置为Vec::new()；清掉错误的旧item数据，释放无用buffer。稳定空帧没有buffer可重复释放；非空稳定帧保留C05复用。
+- 两个UI回归len/capacity均16/16→0/0；C05连续三帧指针复用仍通过；核心469 passed / 5 ignored。
+- 没有改变公开接口、边界顺序、动画或GPU路径；只处理明确完全空内容，不每帧对非空buffer shrink。
+
+## C04 时间成本复测（不隐藏权衡）
+
+debug同机median5每节点μs，旧Vec/compact：0项0.026/0.076；1项0.275/0.344；1项带clone0.487/0.575；4项0.577/1.800；16项带clone2.752/3.770。debug额外调用开销与spill确实更高，不能从省内存推出提速。
+
+新增小型独立优化构建harness `tooling/core-element-bench`，直接用path导入生产ListenerList及测试分配计数器；无改写实现，无GPU依赖，opt-level3/7轮交替顺序。优化构建实测每节点ns旧Vec/compact：
+
+|项数/clone|旧/新请求次数与字节|median7 ns旧/新|
+|---|---|---|
+|0/false|0/0，0/0|7.66 / 1.32|
+|1/false|1/64，1/24|97.34 / 88.09|
+|1/true|2/80，1/24|175.36 / 92.21|
+|4/false|1/64，3/120|102.61 / 304.37|
+|16/true|4/704，6/760|489.54 / 760.27|
+
+证明空/单/单clone收益，但多项spill是确认的额外分配/时间成本，继续检查减少spilling增长或对高密度种类保留旧存储；不将上述机制ns视为实际应用帧时。
 
 ## 基线结构体尺寸（Windows debug测试配置）
 

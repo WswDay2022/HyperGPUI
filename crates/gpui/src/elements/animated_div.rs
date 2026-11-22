@@ -203,6 +203,10 @@ impl Element for AnimatedDiv {
             *handle.last_origin.borrow_mut() = bounds.origin - window.element_offset();
         }
         let content_size = if request_layout.child_layout_ids.is_empty() {
+            // 原实现：bounds.size only; the handle kept stale items and its unused peak buffer.
+            if let Some(scroll_handle) = self.interactivity.tracked_scroll_handle.as_ref() {
+                scroll_handle.0.borrow_mut().child_bounds = Vec::new();
+            }
             bounds.size
         } else if let Some(scroll_handle) = self.interactivity.tracked_scroll_handle.as_ref() {
             let mut state = scroll_handle.0.borrow_mut();
@@ -334,9 +338,51 @@ impl IntoElement for AnimatedDiv {
 #[cfg(test)]
 mod tests {
     use super::{animated_div, AnimatedDivProps};
-    use crate::{AnyWindowHandle, AppContext as _, Context, IntoElement, ParentElement, Render, ScrollHandle,
+    use crate::{AnyWindowHandle, AppContext as _, Context, InteractiveElement, IntoElement, ParentElement, Render, ScrollHandle,
         StatefulInteractiveElement, Styled, TestAppContext, Window, div, px};
     use std::time::Duration;
+
+    fn assert_empty_scroll_data_is_released(cx: &mut TestAppContext, animated: bool) {
+        use std::{cell::Cell, rc::Rc};
+        struct Probe { scroll: ScrollHandle, count: Rc<Cell<usize>>, animated: bool }
+        impl Render for Probe {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                let children = (0..self.count.get()).map(|_| div().size(px(8.)));
+                if self.animated {
+                    animated_div("empty-scroll-buffer", AnimatedDivProps {
+                        duration: Duration::ZERO, ..Default::default()
+                    }).size(px(128.)).overflow_y_scroll().track_scroll(&self.scroll)
+                        .children(children).into_any_element()
+                } else {
+                    div().id("empty-scroll-buffer").size(px(128.)).overflow_y_scroll()
+                        .track_scroll(&self.scroll).children(children).into_any_element()
+                }
+            }
+        }
+        let scroll = ScrollHandle::default();
+        let count = Rc::new(Cell::new(16));
+        let window: AnyWindowHandle = cx.add_window({
+            let scroll = scroll.clone(); let count = count.clone();
+            move |_, _| Probe { scroll, count, animated }
+        }).into();
+        assert_eq!(scroll.children_count(), 16);
+        count.set(0);
+        cx.update_window(window, |_, window, cx| window.draw(cx).clear(cx)).unwrap();
+        let state = scroll.0.borrow();
+        eprintln!("empty scroll animated={animated}: len={} capacity={}", state.child_bounds.len(), state.child_bounds.capacity());
+        assert_eq!(state.child_bounds.len(), 0, "empty content must not expose stale scroll item bounds");
+        assert_eq!(state.child_bounds.capacity(), 0, "fully empty content should release its unused peak buffer");
+    }
+
+    #[hgpui::test]
+    fn core_component_empty_animated_scroll_releases_bounds(cx: &mut TestAppContext) {
+        assert_empty_scroll_data_is_released(cx, true);
+    }
+
+    #[hgpui::test]
+    fn core_component_empty_div_scroll_releases_bounds(cx: &mut TestAppContext) {
+        assert_empty_scroll_data_is_released(cx, false);
+    }
 
     #[hgpui::test]
     fn core_component_animated_div_reuses_scroll_child_buffer(cx: &mut TestAppContext) {
