@@ -44,7 +44,7 @@ use std::{
     sync::Arc,
 };
 
-use super::ImageCacheProvider;
+use super::{ImageCacheProvider, listener_list::ListenerList};
 
 const DRAG_THRESHOLD: f64 = 2.;
 
@@ -2357,6 +2357,7 @@ pub struct Interactivity {
     pub(crate) group_active_style: Option<GroupStyle>,
     pub(crate) drag_over_style:
         Option<Box<dyn Fn(&dyn Any, &mut Window, &mut App) -> StyleRefinement>>,
+    /* 原实现：empty Vec headers and the first Vec growth reserve unused callback slots.
     pub(crate) group_drag_over_styles: Vec<(TypeId, GroupStyle)>,
     pub(crate) prepaint_listeners: Vec<PrepaintListener>,
     pub(crate) mouse_down_listeners: Vec<MouseDownListener>,
@@ -2371,19 +2372,38 @@ pub struct Interactivity {
     pub(crate) modifiers_changed_listeners: Vec<ModifiersChangedListener>,
     pub(crate) action_listeners: Vec<(TypeId, ActionListener)>,
     pub(crate) drop_listeners: Vec<(TypeId, DropListener<dyn Any>)>,
-    pub(crate) can_drop_predicate: Option<CanDropPredicate>,
     pub(crate) click_listeners: Vec<ClickListener>,
     pub(crate) aux_click_listeners: Vec<ClickListener>,
-    pub(crate) drag_listener: Option<DragListener>,
     pub(crate) hover_listeners: Vec<HoverListener>,
+    */
+    pub(crate) group_drag_over_styles: ListenerList<(TypeId, GroupStyle)>,
+    pub(crate) prepaint_listeners: ListenerList<PrepaintListener>,
+    pub(crate) mouse_down_listeners: ListenerList<MouseDownListener>,
+    pub(crate) mouse_up_listeners: ListenerList<MouseUpListener>,
+    pub(crate) mouse_pressure_listeners: ListenerList<MousePressureListener>,
+    pub(crate) mouse_move_listeners: ListenerList<MouseMoveListener>,
+    pub(crate) mouse_exit_listeners: ListenerList<MouseExitListener>,
+    pub(crate) scroll_wheel_listeners: ListenerList<ScrollWheelListener>,
+    pub(crate) pinch_listeners: ListenerList<PinchListener>,
+    pub(crate) key_down_listeners: ListenerList<KeyDownListener>,
+    pub(crate) key_up_listeners: ListenerList<KeyUpListener>,
+    pub(crate) modifiers_changed_listeners: ListenerList<ModifiersChangedListener>,
+    pub(crate) action_listeners: ListenerList<(TypeId, ActionListener)>,
+    pub(crate) drop_listeners: ListenerList<(TypeId, DropListener<dyn Any>)>,
+    pub(crate) can_drop_predicate: Option<CanDropPredicate>,
+    pub(crate) click_listeners: ListenerList<ClickListener>,
+    pub(crate) aux_click_listeners: ListenerList<ClickListener>,
+    pub(crate) drag_listener: Option<DragListener>,
+    pub(crate) hover_listeners: ListenerList<HoverListener>,
     pub(crate) window_control: Option<WindowControlArea>,
     pub(crate) hitbox_behavior: HitboxBehavior,
     pub(crate) tab_index: Option<isize>,
     pub(crate) tab_group: bool,
     pub(crate) tab_stop: bool,
 
+    // 原实现：Vec<(accesskit::Action, crate::window::a11y::A11yActionListener)>.
     pub(crate) a11y_action_listeners:
-        Vec<(accesskit::Action, crate::window::a11y::A11yActionListener)>,
+        ListenerList<(accesskit::Action, crate::window::a11y::A11yActionListener)>,
     pub(crate) a11y_synthetic_children: Option<Box<dyn FnOnce(&mut crate::A11ySubtreeBuilder)>>,
     pub(crate) report_active_descendant_focus: bool,
     pub(crate) override_role: Option<accesskit::Role>,
@@ -3194,9 +3214,11 @@ impl Interactivity {
         let drag_cursor_style = self.base_style.as_ref().mouse_cursor;
 
         let mut drag_listener = mem::take(&mut self.drag_listener);
-        let drop_listeners = mem::take(&mut self.drop_listeners);
-        let click_listeners = mem::take(&mut self.click_listeners);
-        let aux_click_listeners = mem::take(&mut self.aux_click_listeners);
+        // 原实现：mem::take(&mut self.{drop,click,aux_click}_listeners).
+        // Move the small payload out and release its storage box before captures/clones.
+        let drop_listeners = self.drop_listeners.take();
+        let click_listeners = self.click_listeners.take();
+        let aux_click_listeners = self.aux_click_listeners.take();
         let can_drop_predicate = mem::take(&mut self.can_drop_predicate);
 
         if !drop_listeners.is_empty() {
@@ -3444,7 +3466,9 @@ impl Interactivity {
                     .pending_mouse_down
                     .get_or_insert_with(Default::default)
                     .clone();
-                let hover_listeners = self.hover_listeners.clone();
+                // 原实现：self.hover_listeners.clone() allocated a second listener buffer.
+                // Registration consumes these callbacks just as it consumes click handlers.
+                let hover_listeners = self.hover_listeners.take();
                 let update_hover = move |is_hovered: bool, window: &mut Window, cx: &mut App| {
                     let mut was_hovered = was_hovered.borrow_mut();
                     if is_hovered != *was_hovered {
@@ -4485,6 +4509,28 @@ mod tests {
         assert!(node.supports_action(accesskit::Action::Click));
         assert!(node.supports_action(accesskit::Action::Focus));
         assert_eq!(node.label(), None);
+    }
+
+    #[test]
+    fn core_component_empty_listener_slot_is_pointer_sized() {
+        let interactivity = Interactivity::default();
+        eprintln!("empty listener header: {} bytes", mem::size_of_val(&interactivity.click_listeners));
+        assert_eq!(mem::size_of_val(&interactivity.click_listeners), mem::size_of::<usize>(),
+            "empty callback kinds must not each reserve a full Vec header");
+    }
+
+    #[test]
+    fn core_component_single_click_listener_has_no_spare_buffer() {
+        let mut interactivity = Interactivity::default();
+        let listener: ClickListener = Rc::new(|_, _, _| {});
+        let (_, allocations) = crate::elements::test_allocations::measure(|| {
+            interactivity.click_listeners.push(listener);
+        });
+        eprintln!("single click storage: capacity={} allocations={allocations:?}; compact_payload={}",
+            interactivity.click_listeners.capacity(), mem::size_of::<SmallVec<[ClickListener; 1]>>());
+        assert_eq!(allocations.count, 1, "single callback storage should require only one allocation");
+        assert_eq!(interactivity.click_listeners.capacity(), 1, "one callback should not retain spare listener slots");
+        assert_eq!(allocations.requested_bytes, mem::size_of::<SmallVec<[ClickListener; 1]>>());
     }
 
     struct GroupHoverTestView {

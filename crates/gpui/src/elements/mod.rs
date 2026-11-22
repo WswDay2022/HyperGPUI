@@ -7,6 +7,7 @@ mod div;
 mod image_cache;
 mod img;
 mod list;
+mod listener_list;
 mod surface;
 mod svg;
 mod text;
@@ -15,6 +16,9 @@ mod animated_div;
 mod animated_list;
 mod animated_uniform_list;
 mod measurer;
+
+#[cfg(test)]
+pub(crate) mod test_allocations;
 
 pub use anchored::*;
 pub use animation::*;

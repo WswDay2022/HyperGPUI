@@ -43,7 +43,7 @@
 |C01|4096个普通keyed状态执行真实compute_style_internal；没有click/active交互时不应生成4096个clicked Rc|✅ 实际red→green：4096→0；真实prepaint保持active=Some(false)；核心454 passed / 4 ignored；独立本地提交见Git日志|
 |C02|真实paint_mouse_listeners注册鼠标click，但元素未聚焦；保留pending mouse/clicked，不创建无用pending keyboard|✅ 有效red→green：字段分配(true,true,true)→(true,true,false)；核心455 passed / 4 ignored；独立本地提交见Git日志|
 |C03|ARIA稀疏属性不应在所有共享Interactivity中占304B；保留默认读、实例隔离、builder与可访问性动作|✅ red→green：slot304→8B，Interactivity1160→864、Div1264→968；专项6、核心458通过；workspace all-targets通过；独立提交见Git日志|
-|C04候选|19组listener Vec的空header与单监听器过量容量|⏳ 已定位调用面；尚未实现。准备test_allocations.rs线程局部分配请求探针，文件暂未链接，未声称已执行|
+|C04|18组listener Vec的空header与单监听器过量容量|✅ red→green：空header24→8B；single click capacity4→1、请求64→24B，仍1次分配；Interactivity864→576/Div968→680；核心466及workspace检查通过|
 
 入口命令：
 
@@ -78,6 +78,17 @@ CARGO_INCREMENTAL=0 cargo test -p hgpui --lib core_component_ --offline -- --noc
 - 实测slot304→8B、Interactivity1160→864、Div1264→968、AnimatedDiv1360→1064、Svg1232→936、Img1280→984、UniformList1232→936。List不使用该Interactivity，尺寸未变。
 - 不带ARIA属性的这些节点少296B inline payload；有属性的节点转为owned heap payload，多一个pointer/首次物化分配，不声称每种节点总内存都下降。
 - 专项6 passed；核心458 passed / 4 ignored；workspace all-targets check通过，未查看或修改独立组件库源码。无GPU/平台资源改动。
+
+## C04 — 空/单/多监听器按实际需要存储
+
+- 首先验证test-only System分配请求探针：线程局部隔离、scope重置与panic恢复2 passed。计数仅Rust成功分配请求/请求字节，不是live heap或GPU/RSS；生产构建无此模块/allocator。
+- 真实红测：空click字段Vec header24B；第一个16B Rc listener触发capacity4、一次64B请求。
+- 18组私有监听器字段改为ListenerList(Option<Box<SmallVec<[T;1]>>>)：空字段8B无分配，首项保存在首个存储分配中；多项才spill，原type声明注释保留。公开builder不变。
+- take/drain保留顺序与未消费项Drop；click/aux/drop/hover捕获移动small payload，释放storage header，单项clone无需第二个buffer。spill与多监听器路径保持全部回调。
+- 实际green：空header8B，single click capacity1、一次24B请求；省40B请求且不增加分配次数。
+- Interactivity864→576，Div968→680，AnimatedDiv1064→776，Svg936→648，Img984→696，UniformList936→648。叠加C03，Div基线1264→680，inline payload少584B；不含仍存在的style Box及其他外部分配。
+- 支持0/1/many、clone/drain顺序、partial drain恰好Drop、单项take后clone不分配等4个存储测试；专项8、核心466 passed / 4 ignored；workspace all-targets通过。
+- 多监听器spill可能比原Vec多一个小storage分配，这是explicit权衡，不宣称所有density/总heap/帧时都无条件改善。未更改平台或GPU资源。
 
 ## 基线结构体尺寸（Windows debug测试配置）
 
