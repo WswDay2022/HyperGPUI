@@ -63,7 +63,7 @@ use scheduler::Instant;
 use crate::{
     AnyElement, App, Bounds, Element, ElementId, GlobalElementId, InspectorElementId, IntoElement,
     InteractiveElement as _, LayoutId, Lerp as _, Overflow, ParentElement as _, Pixels, Point,
-    StyleRefinement, Styled, Window, div, progress, px,
+    SharedString, StyleRefinement, Styled, Window, div, progress, px,
 };
 
 pub use super::animated_uniform_list::DEFAULT_ROW_DURATION;
@@ -137,8 +137,10 @@ where
         rows: impl Fn(Range<usize>, &mut Window, &mut App) -> Vec<R> + 'static,
     ) -> AnimatedList<K, R> {
         self.rows = Some(Rc::new(rows));
+        let row_id_namespace: SharedString = format!("{}", self.id).into();
         AnimatedList {
             id: self.id,
+            row_id_namespace,
             count: self.count,
             key_of: self.key_of.expect("animated_list(..).key_of(..) is required"),
             rows: self.rows.clone().expect("animated_list(..).rows(..) is required"),
@@ -203,6 +205,7 @@ where
 /// The list element. See [`animated_list`].
 pub struct AnimatedList<K, R> {
     id: ElementId,
+    row_id_namespace: SharedString,
     count: usize,
     key_of: Rc<dyn Fn(usize) -> K>,
     rows: Rc<dyn Fn(Range<usize>, &mut Window, &mut App) -> Vec<R>>,
@@ -311,7 +314,7 @@ where
         for (index, child) in rendered.into_iter().enumerate() {
             let key = (key_of)(index);
             let item = AnimatedItem {
-                id: row_id(&self.id, &key),
+                id: row_id(&self.row_id_namespace, &key),
                 key,
                 child: child.into_any_element(),
                 duration: self.duration,
@@ -397,10 +400,10 @@ where
 ///
 /// The key itself cannot become an [`ElementId`] — it is whatever the caller's data uses — so it
 /// is hashed. A collision would be two rows sharing one row's animation state.
-fn row_id<K: Hash>(list_id: &ElementId, key: &K) -> ElementId {
+fn row_id<K: Hash>(namespace: &SharedString, key: &K) -> ElementId {
     let mut hasher = FxHasher::default();
     key.hash(&mut hasher);
-    ElementId::NamedInteger(format!("{list_id}").into(), hasher.finish())
+    ElementId::NamedInteger(namespace.clone(), hasher.finish())
 }
 
 /// State shared between the list and its rows for this frame.
@@ -760,6 +763,31 @@ mod tests {
 
     const FRAME: Duration = Duration::from_millis(16);
     const DURATION: Duration = Duration::from_millis(100);
+
+    #[test]
+    fn core_component_animated_list_row_ids_reuse_the_list_namespace() {
+        let list_id = ElementId::Name("animated-rows".into());
+        let namespace: SharedString = format!("{list_id}").into();
+        let key = 17u64;
+        let mut expected_hash = FxHasher::default();
+        key.hash(&mut expected_hash);
+        assert_eq!(
+            row_id(&namespace, &key),
+            ElementId::NamedInteger(format!("{list_id}").into(), expected_hash.finish()),
+            "cached namespace must preserve the existing row ElementId"
+        );
+
+        let (_, allocations) = crate::elements::test_allocations::measure(|| {
+            for key in 0..100u64 {
+                std::hint::black_box(row_id(&namespace, &key));
+            }
+        });
+        eprintln!("animated list row-id namespace allocations: {allocations:?}");
+        assert_eq!(
+            allocations.count, 0,
+            "building row ids should not format and allocate the same list namespace per row"
+        );
+    }
 
     fn step(
         state: &mut RowState,

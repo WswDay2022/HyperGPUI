@@ -33,7 +33,7 @@
 |uniform_list|默认Auto已不做布局阶段冷测量；预paint测量/可见范围/空列表|⏳ Auto冷测量优化保持；显式Infer的代表行测量由布局阶段结果复用至prepaint，见C09|
 |list|可见布局、sum_tree共享、focus查询与离屏保活|⏳ 已读可见/overdraw测量、SumTree seek及focus汇总；宽度失效和measure_all为有意语义，暂不改|
 |animation|steady/done状态、时间评估、帧调度、wrapper分配|⏳ 尚待执行路径核对|
-|animated_list|shared状态读写、painted map与enter/leave快路径、行构造|⏳ 已读状态与退出/painted map；painted map clear保留桶，构造全行是此非虚拟API的语义选择，暂不改|
+|animated_list|shared状态读写、painted map与enter/leave快路径、行构造|⏳ painted map clear保留桶；全行构造维持非虚拟语义；C10将每行重复格式化list ID改为每个list构造一次|
 |animated_uniform_list|可见帧动画scratch、advance追踪范围、稳定列表|⏳ tracked表原先逐帧mem::take重建；C08已用稳态分配计数红绿验证|
 
 ## 量化与修复账本
@@ -50,7 +50,7 @@
 |C07|Canvas不带样式时不应携带1352B可选refinement；保留Styled与RequestLayoutState接口/绘制|✅ red→green：payload 1384→40B，默认构造0次分配；styled Canvas布局/蓝色背景回归通过；组件专项15 passed / 1 ignored，workspace all-targets通过；独立本地提交见Git日志|
 |C08|animated_uniform_list稳定tracked窗口避免每帧重建HashMap buckets；动画/滚动语义不变|✅ red→green：10,000-key harness稳定暖机后100帧从400次/156,400B分配请求→0；四类List定向回归和核心库全测通过；workspace all-targets通过；独立本地提交见Git日志|
 |C09|uniform_list显式Infer避免request_layout与prepaint重复测量同一代表行；Auto冷路径不变|✅ 实际render回归red→green：稳态每帧回调3→2（Infer测量1＋可见范围1）；uniform_list、四列表相关回归、核心库全测与workspace all-targets通过；独立本地提交见Git日志|
-
+|C10|animated_list生成行ID时避免每行格式化相同列表命名空间；行key hash及ID稳定性不变|✅ red→green：100个row_id由100次/1,300B分配请求→0；list namespace仍在每次列表构造时生成一次；动画渲染回归通过|
 入口命令：
 
 ```sh
@@ -167,6 +167,14 @@ target/core-element-bench/release/core-element-bench.exe
 - `UniformListFrameState` 暂存 Infer 已测得的 `Size<Pixels>`，prepaint复用该结果。Auto 仍在 prepaint 执行唯一必要测量，不在 request_layout 冷测量；可见范围构建、布局约束和绘制不变。
 - 修改后相同实际重绘为2次：代表行测量一次＋可见范围构建一次。该反馈直接证明少一次完整 throw-away row tree构建和布局，不外推为整体帧时倍率。对有副作用的 row-builder，回调次数变少属于性能优化的预期；builder 仍应可重复且遵循元素构建约定。
 - uniform_list回归和list/动画列表相关回归通过；hgpui全库与workspace all-targets检查通过。未涉及平台/GPU资源。
+
+## C10 — animated_list 行 ID 复用命名空间
+
+- `request_layout` 为每个 animated row 调用 `row_id(&self.id, &key)`；旧 helper 每次都执行 `format!("{list_id}").into()`，重复创建相同 list namespace 字符串。
+- 修改前分配红测：将同一 list ID 对应100个row key生成row ID，计到100次分配、1,300B请求。
+- 在列表构造时将显示形式缓存为 `SharedString`，每个 row ID 只 clone该共享命名空间，并独立 hash key；每次 list 构造保留一次 namespace创建，避免夸大为全帧0分配。
+- 修改后同一100次 row ID生成请求为0次、0B。该优化仅减少命名空间格式化与分配，不更改 key hash、ElementId 格式/稳定性、动画状态或每行构造语义。
+- animated_list 行动画及实际 enter/leave 绘制回归通过；其他列表状态由四列表相关回归覆盖。无GPU/平台资源改动。
 
 ## 基线结构体尺寸（Windows debug测试配置）
 
