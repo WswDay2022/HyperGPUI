@@ -639,6 +639,8 @@ struct Slide {
 struct ListState<K> {
     /// Where each tracked key was painted on the previous frame.
     tracked: HashMap<K, Tracked>,
+    /// Reusable storage for the previous frame while `tracked` is rebuilt.
+    previous_tracked: HashMap<K, Tracked>,
     /// The keys currently sliding.
     sliding: HashMap<K, Slide>,
     /// The keys that just appeared, and when they did.
@@ -657,6 +659,7 @@ impl<K> Default for ListState<K> {
     fn default() -> Self {
         Self {
             tracked: HashMap::default(),
+            previous_tracked: HashMap::default(),
             sliding: HashMap::default(),
             entering: HashMap::default(),
             leaving: Vec::new(),
@@ -766,7 +769,12 @@ impl<K: Hash + Eq + Clone> ListState<K> {
         let first = effective_top.saturating_sub(tracking_margin);
         let last = (effective_top + span.max(tracking_margin)).min(count);
 
-        let previous = std::mem::take(&mut self.tracked);
+        // Keep both maps' buckets and alternate their roles instead of dropping the old table
+        // and allocating another one for every frame.
+        // Previous per-frame replacement: let previous = std::mem::take(&mut self.tracked);
+        std::mem::swap(&mut self.tracked, &mut self.previous_tracked);
+        self.tracked.clear();
+        let previous = &self.previous_tracked;
         // A key that was not tracked on the previous frame is a genuinely new item — items that
         // merely scroll into view arrive on a frame that snapped, so they never get here.
         let known_keys = !previous.is_empty();
@@ -1004,6 +1012,24 @@ mod tests {
         harness.frame();
         assert!(!harness.state.is_animating());
         assert!(harness.offset_of(3) == Pixels::ZERO);
+    }
+
+    #[test]
+    fn core_component_animated_uniform_list_reuses_tracking_map_capacity() {
+        let mut harness = Harness::new(10_000);
+        harness.frame();
+        harness.frame();
+
+        let (_, allocations) = crate::elements::test_allocations::measure(|| {
+            for _ in 0..100 {
+                harness.frame();
+            }
+        });
+        eprintln!("stable animated uniform-list frames: {allocations:?}");
+        assert_eq!(
+            allocations.count, 0,
+            "a warmed stable tracking window must not allocate HashMap buckets per frame"
+        );
     }
 
     #[test]

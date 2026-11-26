@@ -30,11 +30,11 @@
 |image_cache|wrapper三阶段scope、pending消费者、retain-all显式语义、owner释放|⏳ 执行路径已读，待量化|
 |img|布局/异步加载/订阅、动画帧与解码中间缓冲|⏳ 已定位，尚未完成执行路径核对|
 |text|普通/Styled/InteractiveText、runs、transform/truncation、layout共享|⏳ 部分执行路径已读，待继续|
-|uniform_list|默认Auto已不做布局阶段冷测量；预paint测量/可见范围/空列表|⏳ 执行路径已读，待量化|
-|list|可见布局、sum_tree共享、focus查询与离屏保活|⏳ 已定位，尚未完成执行路径核对|
+|uniform_list|默认Auto已不做布局阶段冷测量；预paint测量/可见范围/空列表|⏳ 已读热路径；Auto避免冷测量，SmallVec通常覆盖可见行，未发现足以单独立项的量化反馈|
+|list|可见布局、sum_tree共享、focus查询与离屏保活|⏳ 已读可见/overdraw测量、SumTree seek及focus汇总；宽度失效和measure_all为有意语义，暂不改|
 |animation|steady/done状态、时间评估、帧调度、wrapper分配|⏳ 尚待执行路径核对|
-|animated_list|shared状态读写、painted map与enter/leave快路径、行构造|⏳ 已读主要wrapper路径，待继续|
-|animated_uniform_list|可见帧动画scratch、advance追踪范围、稳定列表|⏳ 已读主要wrapper路径，待继续|
+|animated_list|shared状态读写、painted map与enter/leave快路径、行构造|⏳ 已读状态与退出/painted map；painted map clear保留桶，构造全行是此非虚拟API的语义选择，暂不改|
+|animated_uniform_list|可见帧动画scratch、advance追踪范围、稳定列表|⏳ tracked表原先逐帧mem::take重建；C08已用稳态分配计数红绿验证|
 
 ## 量化与修复账本
 
@@ -48,6 +48,7 @@
 |C06|普通/AnimatedDiv子项16→0后ScrollHandle不能残留旧bounds/峰值buffer|✅ 实际red→green：两类len/capacity16/16→0/0，稳定非空复用仍通过；核心469 passed / 5 ignored；独立提交见Git日志|
 |C04b|复测发现多项spill与高密度action成本退步|✅ red→green：4回调3/120→2/88请求；dense action5/1000→3/896，恢复Vec adapter；核心471及workspace通过；优化构建复测已记录|
 |C07|Canvas不带样式时不应携带1352B可选refinement；保留Styled与RequestLayoutState接口/绘制|✅ red→green：payload 1384→40B，默认构造0次分配；styled Canvas布局/蓝色背景回归通过；组件专项15 passed / 1 ignored，workspace all-targets通过；独立本地提交见Git日志|
+|C08|animated_uniform_list稳定tracked窗口避免每帧重建HashMap buckets；动画/滚动语义不变|✅ red→green：10,000-key harness稳定暖机后100帧从400次/156,400B分配请求→0；四类List定向回归和核心库全测通过；workspace all-targets通过；独立本地提交见Git日志|
 
 入口命令：
 
@@ -148,6 +149,15 @@ target/core-element-bench/release/core-element-bench.exe
 - 实际green：inline payload 1384→40B；未样式构造仍为0次、0B分配请求。styled Canvas实际设置24×16尺寸和蓝色背景，布局与场景绘制回归通过。
 - `core_component_` 专项15 passed / 1 ignored；`cargo check --workspace --all-targets --offline`通过。只有开启样式的 Canvas 额外在首次样式访问时拥有 heap refinement；不声称全场景总内存必然下降。
 - 未修改公开API、平台/GPU路径或独立组件库。
+
+## C08 — animated_uniform_list tracked-map 稳态复用
+
+- 在 `ListState::advance` 中，原 `mem::take(&mut self.tracked)` 将旧 HashMap 带容量移出；本帧将 tracked keys 插入默认空表，下一帧旧表销毁，暖机后仍重复申请桶。
+- 修改前 red：固定 Harness/key 集合预热两帧，再计量100帧；稳定窗口出现400次、156,400B allocation/reallocation requests（约4次/帧）。计量仅覆盖每帧 `advance`，计数器为测试线程局部；不含 Harness 初始化。
+- 增加 `previous_tracked` 作为双缓冲，与 `tracked` 每帧交换角色并清空待写表。读前一帧索引与构造当前帧索引仍分属两表；key查找、可见跟踪区间、动画判定及绘制位置逻辑不变。两张表的桶容量都保留，稳定帧不再反复申请。
+- 修改后 green：同一100帧反馈为0次、0B请求。代价是稳定窗口缓存两张 HashMap 的有界桶容量（当前帧与上一帧各一份）；这不是总 live-heap 减少，改进点是消除持续分配/释放。
+- `animated_uniform_list` 19项回归通过，覆盖插入/删除滑动、anchor、scroll snap、enter/leave、reduce motion和新分配回归；四列表中的变高list、uniform_list、animated_list、animated_uniform_list专项回归均通过；hgpui全库474 passed / 5 ignored，workspace all-targets检查通过。GPU/平台资源未涉及。
+- 其他三类本轮审阅结论：普通 `uniform_list` Auto已经避免布局阶段冷测量；变高 `list` 的可见测量/SumTree/宽度失效/focus语义耦合，不能猜缓存；`animated_list` 每行构建是其非虚拟语义，painted map清空时已保留容量。暂不为无量化收益扩大改动。
 
 ## 基线结构体尺寸（Windows debug测试配置）
 
