@@ -47,7 +47,7 @@
 |C05|AnimatedDiv稳定的scroll child_bounds应复用buffer；不能每帧替换Vec|✅ 实际red→green：16个子项连续帧同一pointer/capacity16；核心467 passed / 5 ignored；独立提交见Git日志|
 |C06|普通/AnimatedDiv子项16→0后ScrollHandle不能残留旧bounds/峰值buffer|✅ 实际red→green：两类len/capacity16/16→0/0，稳定非空复用仍通过；核心469 passed / 5 ignored；独立提交见Git日志|
 |C04b|复测发现多项spill与高密度action成本退步|✅ red→green：4回调3/120→2/88请求；dense action5/1000→3/896，恢复Vec adapter；核心471及workspace通过；优化构建复测已记录|
-|C07|Canvas不带样式时不应携带1352B可选refinement；保留Styled与RequestLayoutState接口/绘制|⏳ default构造分配/inline体积红测与实际styled布局/蓝色背景回归正在执行|
+|C07|Canvas不带样式时不应携带1352B可选refinement；保留Styled与RequestLayoutState接口/绘制|✅ red→green：payload 1384→40B，默认构造0次分配；styled Canvas布局/蓝色背景回归通过；组件专项15 passed / 1 ignored，workspace all-targets通过；独立本地提交见Git日志|
 
 入口命令：
 
@@ -140,6 +140,14 @@ debug同机median5每节点μs，旧Vec/compact：0项0.026/0.076；1项0.275/0.
 CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=target/core-element-bench cargo build --manifest-path tooling/core-element-bench/Cargo.toml --release --offline
 target/core-element-bench/release/core-element-bench.exe
 ```
+
+## C07 — Canvas 样式按需物化
+
+- 修改前真实红测：`Canvas<()>` inline payload=1384B，默认构造分配请求0次；compact目标≤64B，测试因体积断言失败。
+- Canvas改为 `Option<Box<StyleRefinement>>`：无样式默认值为 `None`；首次调用既有 `Styled` setter 时才创建 refinement。`request_layout` 仅在存在 refinement 时调用 `refine`，默认 `Style` 及布局/绘制接口保持不变。
+- 实际green：inline payload 1384→40B；未样式构造仍为0次、0B分配请求。styled Canvas实际设置24×16尺寸和蓝色背景，布局与场景绘制回归通过。
+- `core_component_` 专项15 passed / 1 ignored；`cargo check --workspace --all-targets --offline`通过。只有开启样式的 Canvas 额外在首次样式访问时拥有 heap refinement；不声称全场景总内存必然下降。
+- 未修改公开API、平台/GPU路径或独立组件库。
 
 ## 基线结构体尺寸（Windows debug测试配置）
 

@@ -14,7 +14,9 @@ pub fn canvas<T>(
     Canvas {
         prepaint: Some(Box::new(prepaint)),
         paint: Some(Box::new(paint)),
-        style: StyleRefinement::default(),
+        // The style refinement is materialized only when a Styled method is used.
+        // style: StyleRefinement::default(),
+        style: None,
     }
 }
 
@@ -23,7 +25,8 @@ pub fn canvas<T>(
 pub struct Canvas<T> {
     prepaint: Option<Box<dyn FnOnce(Bounds<Pixels>, &mut Window, &mut App) -> T>>,
     paint: Option<Box<dyn FnOnce(Bounds<Pixels>, T, &mut Window, &mut App)>>,
-    style: StyleRefinement,
+    // Previous eager storage: style: StyleRefinement,
+    style: Option<Box<StyleRefinement>>,
 }
 
 impl<T: 'static> IntoElement for Canvas<T> {
@@ -54,7 +57,10 @@ impl<T: 'static> Element for Canvas<T> {
         cx: &mut App,
     ) -> (crate::LayoutId, Self::RequestLayoutState) {
         let mut style = Style::default();
-        style.refine(&self.style);
+        // Previous unconditional refinement: style.refine(&self.style);
+        if let Some(refinement) = &self.style {
+            style.refine(refinement);
+        }
         let layout_id = window.request_layout(style.clone(), [], cx);
         (layout_id, style)
     }
@@ -90,7 +96,8 @@ impl<T: 'static> Element for Canvas<T> {
 
 impl<T> Styled for Canvas<T> {
     fn style(&mut self) -> &mut crate::StyleRefinement {
-        &mut self.style
+        self.style
+            .get_or_insert_with(|| Box::new(StyleRefinement::default()))
     }
 }
 
