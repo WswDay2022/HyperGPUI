@@ -1,8 +1,8 @@
 # 核心组件性能与内存优化账本
 
-## 当前任务（2026-11-22）
+## 本轮任务记录（2026-11-22 至 2026-11-26；已按用户要求停止）
 
-用户要求高强度优化 `crates/gpui/src/elements` 全部组件，特别是 div；暂不查看或修改独立 `crates/gpui_elements`。本任务是新授权，不恢复旧38项引擎计划的其他批次。
+用户要求高强度优化 `crates/gpui/src/elements` 全部组件，特别是 div；暂不查看或修改独立 `crates/gpui_elements`。2026-11-26用户明确要求组件优化到此为止，故本账本转为交接记录：不自动优化下列尚未量化/未完成模块，也不恢复旧38项引擎计划；等待用户新指示。C01–C10仅表示实际完成项，不声称17个组件模块均已全盘优化。
 
 - 基线：`f057c297a4`；工作分支：`perf/core-elements-hotpaths`。
 - 分支保留 G09 与前四阶段核验成果，未切旧 main。
@@ -18,9 +18,9 @@
 
 |模块|重点/已读取的执行入口|进度|
 |---|---|---|
-|div|Interactivity构造/布局/样式/事件、属性密度、状态分配、子bounds查询与滚动|⏳ 已建立两项状态分配红测与结构体尺寸探针|
-|animated_div|共享Interactivity、每帧滚动child_bounds容器、稳定/运动期间帧请求|⏳ 执行路径已读，待量化|
-|canvas|inline StyleRefinement、默认构造、布局/paint保留状态|⏳ 执行路径已读，待量化|
+|div|Interactivity构造/布局/样式/事件、属性密度、状态分配、子bounds查询与滚动|⏳ C01–C04b已提交验证；仅代表明确热点，不是全模块穷尽|
+|animated_div|共享Interactivity、每帧滚动child_bounds容器、稳定/运动期间帧请求|✅ C05稳定缓冲复用、C06空态释放均已提交验证；无本轮余项自动继续|
+|canvas|inline StyleRefinement、默认构造、布局/paint保留状态|✅ C07已提交验证；不代表其他核心组件全量完成|
 |container_query|默认size_full、延迟创建子树与CSS继承、inline样式|⏳ 执行路径已读，待量化|
 |measurer|重复实体update/notify、测量布局与不绘制语义|⏳ 执行路径已读，待量化|
 |anchored|子树bounds联合/偏移、fit模式、小容器分配|⏳ 执行路径已读，待量化|
@@ -30,11 +30,11 @@
 |image_cache|wrapper三阶段scope、pending消费者、retain-all显式语义、owner释放|⏳ 执行路径已读，待量化|
 |img|布局/异步加载/订阅、动画帧与解码中间缓冲|⏳ 已定位，尚未完成执行路径核对|
 |text|普通/Styled/InteractiveText、runs、transform/truncation、layout共享|⏳ 部分执行路径已读，待继续|
-|uniform_list|默认Auto已不做布局阶段冷测量；预paint测量/可见范围/空列表|⏳ Auto冷测量优化保持；显式Infer的代表行测量由布局阶段结果复用至prepaint，见C09|
-|list|可见布局、sum_tree共享、focus查询与离屏保活|⏳ 已读可见/overdraw测量、SumTree seek及focus汇总；宽度失效和measure_all为有意语义，暂不改|
-|animation|steady/done状态、时间评估、帧调度、wrapper分配|⏳ 尚待执行路径核对|
-|animated_list|shared状态读写、painted map与enter/leave快路径、行构造|⏳ painted map clear保留桶；全行构造维持非虚拟语义；C10将每行重复格式化list ID改为每个list构造一次|
-|animated_uniform_list|可见帧动画scratch、advance追踪范围、稳定列表|⏳ tracked表原先逐帧mem::take重建；C08已用稳态分配计数红绿验证|
+|uniform_list|默认Auto已不做布局阶段冷测量；预paint测量/可见范围/空列表|✅ C09已优化显式Infer重复测量，Auto冷路径保持；四列表轮次停止|
+|list|可见布局、sum_tree共享、focus查询与离屏保活|⏸ 本轮只读审阅；宽度失效和measure_all语义保留，未发现可安全量化的改动，不继续扩展|
+|animation|steady/done状态、时间评估、帧调度、wrapper分配|⏸ 未检查；本轮已按用户要求停止|
+|animated_list|shared状态读写、painted map与enter/leave快路径、行构造|✅ C10已去除每行重复格式化；全行构造维持非虚拟语义；四列表轮次停止|
+|animated_uniform_list|可见帧动画scratch、advance追踪范围、稳定列表|✅ C08已修复tracked表稳态重建；四列表轮次停止|
 
 ## 量化与修复账本
 
