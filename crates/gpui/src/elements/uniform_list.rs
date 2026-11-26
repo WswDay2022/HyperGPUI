@@ -73,6 +73,7 @@ pub struct UniformList {
 pub struct UniformListFrameState {
     items: SmallVec<[AnyElement; 32]>,
     decorations: SmallVec<[AnyElement; 2]>,
+    measured_item_size: Option<Size<Pixels>>,
 }
 
 /// A handle for controlling the scroll position of a uniform list.
@@ -330,6 +331,8 @@ impl Element for UniformList {
             UniformListFrameState {
                 items: SmallVec::new(),
                 decorations: SmallVec::new(),
+                measured_item_size: (self.sizing_behavior == ListSizingBehavior::Infer)
+                    .then_some(item_size),
             },
         )
     }
@@ -362,7 +365,12 @@ impl Element for UniformList {
             ListHorizontalSizingBehavior::Unconstrained
         );
 
-        let longest_item_size = self.measure_item(None, window, cx);
+        // Infer already measured this representative row during request_layout; reuse it here.
+        // Auto intentionally waits until prepaint to measure, avoiding a throw-away layout.
+        // Previous unconditional implementation: let longest_item_size = self.measure_item(None, window, cx);
+        let longest_item_size = frame_state
+            .measured_item_size
+            .unwrap_or_else(|| self.measure_item(None, window, cx));
         let content_width = if can_scroll_horizontally {
             padded_bounds.size.width.max(longest_item_size.width)
         } else {
@@ -744,6 +752,45 @@ impl InteractiveElement for UniformList {
 #[cfg(test)]
 mod test {
     use crate::TestAppContext;
+
+    #[hgpui::test]
+    fn infer_reuses_the_layout_measurement_during_prepaint(cx: &mut TestAppContext) {
+        use crate::{Context, ListSizingBehavior, Render, Window, div, prelude::*, px, size, uniform_list};
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        struct Probe(Rc<Cell<usize>>);
+        impl Render for Probe {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                let calls = self.0.clone();
+                div().size_full().child(
+                    uniform_list("infer-measurement", 100, move |range, _, _| {
+                        calls.set(calls.get() + 1);
+                        range.map(|_| div().h(px(20.)).child("row")).collect()
+                    })
+                    .with_sizing_behavior(ListSizingBehavior::Infer)
+                    .h(px(200.)),
+                )
+            }
+        }
+
+        let calls = Rc::new(Cell::new(0));
+        let window = cx.open_window(size(px(400.), px(300.)), {
+            let calls = calls.clone();
+            move |_, _| Probe(calls)
+        });
+        cx.run_until_parked();
+        let before = calls.get();
+        window.update(cx, |_, _, cx| cx.notify()).unwrap();
+        cx.run_until_parked();
+
+        let calls_this_frame = calls.get() - before;
+        eprintln!("Infer representative-row render callbacks per frame: {calls_this_frame}");
+        assert_eq!(
+            calls_this_frame, 2,
+            "Infer should render once for measurement and once for the visible range"
+        );
+    }
 
     #[hgpui::test]
     fn test_scroll_strategy_nearest(cx: &mut TestAppContext) {

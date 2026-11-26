@@ -30,7 +30,7 @@
 |image_cache|wrapper三阶段scope、pending消费者、retain-all显式语义、owner释放|⏳ 执行路径已读，待量化|
 |img|布局/异步加载/订阅、动画帧与解码中间缓冲|⏳ 已定位，尚未完成执行路径核对|
 |text|普通/Styled/InteractiveText、runs、transform/truncation、layout共享|⏳ 部分执行路径已读，待继续|
-|uniform_list|默认Auto已不做布局阶段冷测量；预paint测量/可见范围/空列表|⏳ 已读热路径；Auto避免冷测量，SmallVec通常覆盖可见行，未发现足以单独立项的量化反馈|
+|uniform_list|默认Auto已不做布局阶段冷测量；预paint测量/可见范围/空列表|⏳ Auto冷测量优化保持；显式Infer的代表行测量由布局阶段结果复用至prepaint，见C09|
 |list|可见布局、sum_tree共享、focus查询与离屏保活|⏳ 已读可见/overdraw测量、SumTree seek及focus汇总；宽度失效和measure_all为有意语义，暂不改|
 |animation|steady/done状态、时间评估、帧调度、wrapper分配|⏳ 尚待执行路径核对|
 |animated_list|shared状态读写、painted map与enter/leave快路径、行构造|⏳ 已读状态与退出/painted map；painted map clear保留桶，构造全行是此非虚拟API的语义选择，暂不改|
@@ -49,6 +49,7 @@
 |C04b|复测发现多项spill与高密度action成本退步|✅ red→green：4回调3/120→2/88请求；dense action5/1000→3/896，恢复Vec adapter；核心471及workspace通过；优化构建复测已记录|
 |C07|Canvas不带样式时不应携带1352B可选refinement；保留Styled与RequestLayoutState接口/绘制|✅ red→green：payload 1384→40B，默认构造0次分配；styled Canvas布局/蓝色背景回归通过；组件专项15 passed / 1 ignored，workspace all-targets通过；独立本地提交见Git日志|
 |C08|animated_uniform_list稳定tracked窗口避免每帧重建HashMap buckets；动画/滚动语义不变|✅ red→green：10,000-key harness稳定暖机后100帧从400次/156,400B分配请求→0；四类List定向回归和核心库全测通过；workspace all-targets通过；独立本地提交见Git日志|
+|C09|uniform_list显式Infer避免request_layout与prepaint重复测量同一代表行；Auto冷路径不变|✅ 实际render回归red→green：稳态每帧回调3→2（Infer测量1＋可见范围1）；uniform_list、四列表相关回归、核心库全测与workspace all-targets通过；独立本地提交见Git日志|
 
 入口命令：
 
@@ -158,6 +159,14 @@ target/core-element-bench/release/core-element-bench.exe
 - 修改后 green：同一100帧反馈为0次、0B请求。代价是稳定窗口缓存两张 HashMap 的有界桶容量（当前帧与上一帧各一份）；这不是总 live-heap 减少，改进点是消除持续分配/释放。
 - `animated_uniform_list` 19项回归通过，覆盖插入/删除滑动、anchor、scroll snap、enter/leave、reduce motion和新分配回归；四列表中的变高list、uniform_list、animated_list、animated_uniform_list专项回归均通过；hgpui全库474 passed / 5 ignored，workspace all-targets检查通过。GPU/平台资源未涉及。
 - 其他三类本轮审阅结论：普通 `uniform_list` Auto已经避免布局阶段冷测量；变高 `list` 的可见测量/SumTree/宽度失效/focus语义耦合，不能猜缓存；`animated_list` 每行构建是其非虚拟语义，painted map清空时已保留容量。暂不为无量化收益扩大改动。
+
+## C09 — uniform_list Infer 复用代表行测量
+
+- 显式 `ListSizingBehavior::Infer` 的 `request_layout` 已调用 `measure_item(None, ...)` 得到行尺寸用于建立 measured layout；原 `prepaint` 又以相同的无宽度约束调用一次 `measure_item(None, ...)`，其结果作为 content height/item height，重复构造并布局同一个代表行子树。
+- 实际 UI 回归使用固定 viewport/key 与可计数的真实 row-builder。修改前，单次稳态重绘的 builder 调用计数为3：Infer request_layout测量、prepaint重复测量、一次可见行构建；测试以目标2次运行red。
+- `UniformListFrameState` 暂存 Infer 已测得的 `Size<Pixels>`，prepaint复用该结果。Auto 仍在 prepaint 执行唯一必要测量，不在 request_layout 冷测量；可见范围构建、布局约束和绘制不变。
+- 修改后相同实际重绘为2次：代表行测量一次＋可见范围构建一次。该反馈直接证明少一次完整 throw-away row tree构建和布局，不外推为整体帧时倍率。对有副作用的 row-builder，回调次数变少属于性能优化的预期；builder 仍应可重复且遵循元素构建约定。
+- uniform_list回归和list/动画列表相关回归通过；hgpui全库与workspace all-targets检查通过。未涉及平台/GPU资源。
 
 ## 基线结构体尺寸（Windows debug测试配置）
 
