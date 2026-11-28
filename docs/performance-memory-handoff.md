@@ -59,6 +59,7 @@ D 盘曾 ENOSPC=0，暂停后用户清理至约123GB；2026-11-22 查询仍约82
 | [11 月 24–28 日验收](acceptance-2026-11-24-to-28.md) | 日期范围与 amend 净差异、组件优化与新增 API 的复测、回归强化及验证边界。 |
 | [Gaussian pass 工作区优化](render-blur-pass-regions.md) | 三端共享采样依赖、逐像素对照和硬件计时入口。 |
 | [渲染管线冗余巡查](render-pipeline-resource-audit.md) | 用户要求对已流畅的 UI 减负；隔离深度、scratch、根目标、几何提交的复现和验证，不是整应用卡顿排查。 |
+| [Window state 热路径](window-state-hotpath.md) | `use_state` / `use_keyed_state` 借用 ID 栈命中、跨帧与缓存重放回归、分配及耗时基准。 |
 
 原始完整报告最初在 `D:/WswDay2022/tmp/Hgpui_Performance_Memory_Audit_2026-11-15_e484.md`。仓库中的基线副本在本次整理前已存在且未跟踪，SHA-256与原件一致：`c9e46f5833417bfeb0a373af8fa69388f413f94a0cb3430de9cd2de3dedb77ae`。纳入版本管理时保留原文，不把“报告在仓库外/未修”等历史描述改为当前结论。原行号按基线查，当前源码重新定位。
 

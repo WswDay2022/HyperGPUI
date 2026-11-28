@@ -58,6 +58,7 @@ derive_setters.workspace = true
 etagere.workspace = true
 futures.workspace = true
 futures-concurrency.workspace = true
+hashbrown = { version = "0.17", default-features = false, features = ["raw-entry"] }
 hgpui_macros.workspace = true
 hgpui_shared_string.workspace = true
 http.workspace = true

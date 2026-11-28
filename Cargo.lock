@@ -2638,6 +2638,7 @@ dependencies = [
  "futures",
  "futures-concurrency",
  "getrandom 0.3.4",
+ "hashbrown 0.17.1",
  "hdrhistogram",
  "heapless",
  "hgpui_collections",

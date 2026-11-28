@@ -64,7 +64,10 @@ use std::{
 use uuid::Uuid;
 
 pub(crate) mod a11y;
+mod element_state;
 mod prompts;
+
+use self::element_state::{ElementStateKey, ElementStates};
 
 pub use a11y::A11ySubtreeBuilder;
 
@@ -957,8 +960,8 @@ pub(crate) struct DeferredDraw {
 pub(crate) struct Frame {
     pub(crate) focus: Option<FocusId>,
     pub(crate) window_active: bool,
-    pub(crate) element_states: FxHashMap<(GlobalElementId, TypeId), ElementStateBox>,
-    accessed_element_states: Vec<(GlobalElementId, TypeId)>,
+    element_states: ElementStates,
+    accessed_element_states: Vec<ElementStateKey>,
     pub(crate) mouse_listeners: Vec<Option<AnyMouseListener>>,
     pub(crate) dispatch_tree: DispatchTree,
     pub(crate) scene: Scene,
@@ -1001,7 +1004,7 @@ impl Frame {
         Frame {
             focus: None,
             window_active: false,
-            element_states: FxHashMap::default(),
+            element_states: ElementStates::default(),
             accessed_element_states: Vec::new(),
             mouse_listeners: Vec::new(),
             dispatch_tree,
@@ -1096,14 +1099,8 @@ impl Frame {
     }
 
     pub(crate) fn finish(&mut self, prev_frame: &mut Self) {
-        for element_state_key in &self.accessed_element_states {
-            if let Some((element_state_key, element_state)) =
-                prev_frame.element_states.remove_entry(element_state_key)
-            {
-                self.element_states.insert(element_state_key, element_state);
-            }
-        }
-
+        self.element_states
+            .replay_from(&mut prev_frame.element_states, &self.accessed_element_states);
         self.scene.finish();
     }
 }
@@ -1352,12 +1349,6 @@ struct PendingInput {
     focus: Option<FocusId>,
     timer: Option<Task<()>>,
     needs_timeout: bool,
-}
-
-pub(crate) struct ElementStateBox {
-    pub(crate) inner: Box<dyn Any>,
-    #[cfg(debug_assertions)]
-    pub(crate) type_name: &'static str,
 }
 
 fn default_bounds(display_id: Option<DisplayId>, cx: &mut App) -> WindowBounds {
@@ -4055,8 +4046,8 @@ impl Window {
         init: impl FnOnce(&mut Self, &mut Context<S>) -> S,
     ) -> Entity<S> {
         let current_view = self.current_view();
-        self.with_global_id(key.into(), |global_id, window| {
-            window.with_element_state(global_id, |state: Option<Entity<S>>, window| {
+        self.with_id(key, |window| {
+            window.with_element_state_inner(None, |state: Option<Entity<S>>, window| {
                 if let Some(state) = state {
                     (state.clone(), state)
                 } else {
@@ -4103,71 +4094,7 @@ impl Window {
     where
         S: 'static,
     {
-        self.invalidator.debug_assert_paint_or_prepaint();
-
-        let key = (global_id.clone(), TypeId::of::<S>());
-        self.next_frame.accessed_element_states.push(key.clone());
-
-        if let Some(any) = self
-            .next_frame
-            .element_states
-            .remove(&key)
-            .or_else(|| self.rendered_frame.element_states.remove(&key))
-        {
-            let ElementStateBox {
-                inner,
-                #[cfg(debug_assertions)]
-                type_name,
-            } = any;
-            // Using the extra inner option to avoid needing to reallocate a new box.
-            let mut state_box = inner
-                .downcast::<Option<S>>()
-                .map_err(|_| {
-                    #[cfg(debug_assertions)]
-                    {
-                        anyhow::anyhow!(
-                            "invalid element state type for id, requested {:?}, actual: {:?}",
-                            std::any::type_name::<S>(),
-                            type_name
-                        )
-                    }
-
-                    #[cfg(not(debug_assertions))]
-                    {
-                        anyhow::anyhow!(
-                            "invalid element state type for id, requested {:?}",
-                            std::any::type_name::<S>(),
-                        )
-                    }
-                })
-                .unwrap();
-
-            let state = state_box.take().expect(
-                "reentrant call to with_element_state for the same state type and element id",
-            );
-            let (result, state) = f(Some(state), self);
-            state_box.replace(state);
-            self.next_frame.element_states.insert(
-                key,
-                ElementStateBox {
-                    inner: state_box,
-                    #[cfg(debug_assertions)]
-                    type_name,
-                },
-            );
-            result
-        } else {
-            let (result, state) = f(None, self);
-            self.next_frame.element_states.insert(
-                key,
-                ElementStateBox {
-                    inner: Box::new(Some(state)),
-                    #[cfg(debug_assertions)]
-                    type_name: std::any::type_name::<S>(),
-                },
-            );
-            result
-        }
+        self.with_element_state_inner(Some(global_id), f)
     }
 
     /// A variant of `with_element_state` that allows the element's id to be optional. This is a convenience
@@ -7743,6 +7670,10 @@ pub fn outline(
         transformation: None,
     }
 }
+
+#[cfg(test)]
+#[path = "window/state_tests.rs"]
+mod state_tests;
 
 #[cfg(test)]
 mod tests {
