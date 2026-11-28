@@ -228,30 +228,96 @@ fn warn_if_clamped(
     }
 }
 
-/// Clone the items whose bounds intersect `viewport`.
-///
-/// The visible count is computed first so the list is allocated exactly once: `Filter`'s
-/// `size_hint` lower bound is 0, so collecting directly would grow through several
-/// reallocations (and pre-sizing to the full batch would over-allocate for mostly-culled
-/// batches).
-fn visible_items<T, F>(items: &[T], viewport: &Bounds<ScaledPixels>, bounds: F) -> Vec<T>
+/// Returns the visible items in draw order. Contiguous visibility borrows the original
+/// batch; only a sparse batch needs an allocation and an exactly sized gather.
+fn visible_items<'a, T, F>(
+    items: &'a [T],
+    viewport: &Bounds<ScaledPixels>,
+    bounds: F,
+) -> std::borrow::Cow<'a, [T]>
 where
     T: Clone,
     F: Fn(&T) -> Bounds<ScaledPixels>,
 {
-    let mut visible = Vec::with_capacity(
-        items
-            .iter()
-            .filter(|item| bounds(item).intersects(viewport))
-            .count(),
-    );
-    visible.extend(
-        items
-            .iter()
-            .filter(|item| bounds(item).intersects(viewport))
-            .cloned(),
-    );
-    visible
+    use std::borrow::Cow;
+
+    let mut first = None;
+    let mut end = 0;
+    let mut count = 0;
+    for (index, item) in items.iter().enumerate() {
+        if bounds(item).intersects(viewport) {
+            first.get_or_insert(index);
+            end = index + 1;
+            count += 1;
+        }
+    }
+    let Some(first) = first else {
+        return Cow::Borrowed(&items[..0]);
+    };
+    let span = &items[first..end];
+    if span.len() == count {
+        return Cow::Borrowed(span);
+    }
+
+    let mut visible = Vec::with_capacity(count);
+    visible.extend(span.iter().filter(|item| bounds(item).intersects(viewport)).cloned());
+    Cow::Owned(visible)
+}
+
+#[cfg(test)]
+mod visibility_tests {
+    use super::visible_items;
+    use hgpui::{Bounds, ScaledPixels, bounds, point, size};
+    use std::cell::Cell;
+
+    fn rect(x: f32, width: f32) -> Bounds<ScaledPixels> {
+        bounds(
+            point(ScaledPixels(x), ScaledPixels(0.0)),
+            size(ScaledPixels(width), ScaledPixels(2.0)),
+        )
+    }
+
+    #[test]
+    fn contiguous_visibility_uses_one_scan_and_no_clones() {
+        struct Item<'a>(&'a Cell<usize>);
+        impl Clone for Item<'_> {
+            fn clone(&self) -> Self {
+                self.0.set(self.0.get() + 1);
+                Self(self.0)
+            }
+        }
+
+        let clones = Cell::new(0);
+        let checks = Cell::new(0);
+        let items = (0..64).map(|_| Item(&clones)).collect::<Vec<_>>();
+        let visible = visible_items(&items, &rect(0.0, 100.0), |_| {
+            checks.set(checks.get() + 1);
+            rect(10.0, 1.0)
+        });
+        assert_eq!(visible.len(), 64);
+        eprintln!("bounds checks: {}, clones: {}", checks.get(), clones.get());
+        assert_eq!((checks.get(), clones.get()), (64, 0));
+        assert_eq!(visible.as_ptr(), items.as_ptr());
+    }
+
+    #[test]
+    fn trimmed_contiguous_and_sparse_batches_keep_draw_order() {
+        use std::borrow::Cow;
+        let viewport = rect(0.0, 100.0);
+        let positions = [-10.0, 10.0, 12.0, 200.0];
+        let contiguous = visible_items(&positions, &viewport, |x| rect(*x, 1.0));
+        assert!(matches!(&contiguous, Cow::Borrowed(_)));
+        assert_eq!(contiguous.as_ptr(), positions[1..].as_ptr());
+        assert_eq!(contiguous.as_ref(), &[10.0, 12.0]);
+
+        let positions = [12.0, 200.0, 10.0, 300.0, 14.0];
+        let sparse = visible_items(&positions, &viewport, |x| rect(*x, 1.0));
+        assert!(matches!(&sparse, Cow::Owned(_)));
+        assert_eq!(sparse.as_ref(), &[12.0, 10.0, 14.0]);
+
+        let hidden = visible_items(&[200.0], &viewport, |x| rect(*x, 1.0));
+        assert!(matches!(hidden, Cow::Borrowed([])));
+    }
 }
 
 pub struct WgpuSurfaceConfig {
@@ -2045,7 +2111,7 @@ impl WgpuRenderer {
                                 // Interrupt the current pass, blur the content painted so far behind
                                 // each backdrop's rounded rect, then resume drawing on top.
                                 drop(pass);
-                                for filter in &visible_filters {
+                                for filter in visible_filters.iter() {
                                     self.draw_backdrop_filter(
                                         &mut encoder,
                                         filter,
