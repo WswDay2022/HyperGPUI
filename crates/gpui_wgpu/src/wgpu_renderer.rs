@@ -7,6 +7,7 @@ use hgpui::{
     Underline, get_gamma_correction_ratios,
 };
 use hgpui_render::blur_region::{blur_pass_plan, filter_copy_region};
+use hgpui_render::shaders::interface;
 use hgpui_render::filter_matrix::{
     ColorFilterMatrix, color_filter_matrix, combined_blur_radius,
 };
@@ -2347,7 +2348,7 @@ impl WgpuRenderer {
             pass.set_pipeline(&resources.pipelines.surfaces);
             pass.set_bind_group(0, &resources.globals_bind_group, &[]);
             pass.set_bind_group(1, &bind_group, &[]);
-            pass.draw(0..4, 0..1);
+            pass.draw(0..interface::SURFACES.fixed_draw().unwrap().1, 0..1);
             self.draw_call_count.set(self.draw_call_count.get() + 1);
         }
         true
@@ -2465,7 +2466,7 @@ impl WgpuRenderer {
         pass.set_bind_group(0, &resources.globals_bind_group, &[]);
         pass.set_bind_group(1, &bind_group, &[]);
         pass.set_scissor_rect(scissor[0], scissor[1], scissor[2], scissor[3]);
-        pass.draw(0..3, 0..1);
+        pass.draw(0..interface::BLUR.fixed_draw().unwrap().1, 0..1);
     }
 
     /// Composites an isolated clip-group target into its parent, applying the rounded-rect
@@ -2523,7 +2524,7 @@ impl WgpuRenderer {
         pass.set_pipeline(&resources.pipelines.blur_composite);
         pass.set_bind_group(0, &resources.globals_bind_group, &[]);
         pass.set_bind_group(1, &bind_group, &[]);
-        pass.draw(0..4, 0..1);
+        pass.draw(0..interface::BLUR_COMPOSITE.fixed_draw().unwrap().1, 0..1);
     }
 
     /// Apply `filters` to `source` and composite the result into `target`, clipped to
@@ -2706,7 +2707,7 @@ impl WgpuRenderer {
         pass.set_pipeline(&resources.pipelines.blur_composite);
         pass.set_bind_group(0, &resources.globals_bind_group, &[]);
         pass.set_bind_group(1, &bind_group, &[]);
-        pass.draw(0..4, 0..1);
+        pass.draw(0..interface::BLUR_COMPOSITE.fixed_draw().unwrap().1, 0..1);
     }
 
     /// Filter the content painted so far behind `filter.bounds` and composite it back.
@@ -2825,7 +2826,7 @@ impl WgpuRenderer {
         pass.set_pipeline(&resources.pipelines.blur_downsample);
         pass.set_bind_group(0, &resources.globals_bind_group, &[]);
         pass.set_bind_group(1, &bind_group, &[]);
-        pass.draw(0..3, 0..1);
+        pass.draw(0..interface::BLUR_DOWNSAMPLE.fixed_draw().unwrap().1, 0..1);
     }
 
     fn draw_polychrome_sprites(

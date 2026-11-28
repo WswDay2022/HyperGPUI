@@ -60,6 +60,19 @@ pub struct Pipeline {
     pub vertex_count: VertexCount,
 }
 
+impl Pipeline {
+    /// Topology and vertex count for a draw that generates its geometry from the vertex index.
+    /// Dynamic vertex streams supply their own count instead.
+    pub const fn fixed_draw(self) -> Option<(PrimitiveTopology, u32)> {
+        let count = match self.vertex_count {
+            VertexCount::Rectangle => 4,
+            VertexCount::FullscreenTriangle => 3,
+            VertexCount::Dynamic => return None,
+        };
+        Some((self.topology, count))
+    }
+}
+
 macro_rules! define_pipelines {
     ($($name:ident: $label:literal, $vertex:ident, $fragment:ident, $topology:ident, $layout:ident, $vertices:ident;)*) => {
         $(

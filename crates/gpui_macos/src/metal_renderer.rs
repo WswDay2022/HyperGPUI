@@ -7,6 +7,7 @@ use cocoa::{
     quartzcore::AutoresizingMask,
 };
 use hgpui_render::artifacts::NATIVE_SHADERS;
+use hgpui_render::shaders::interface;
 use hgpui_render::blur_region::{blur_pass_plan, filter_copy_region};
 use hgpui_render::filter_matrix::{
     ColorFilterMatrix, color_filter_matrix, combined_blur_radius,
@@ -1303,6 +1304,7 @@ impl MetalRenderer {
             self.run_metal_blur_pass(
                 command_buffer,
                 &self.blur_downsample_pipeline_state,
+                interface::BLUR_DOWNSAMPLE,
                 texture,
                 scene_color,
                 viewport_size,
@@ -1331,6 +1333,7 @@ impl MetalRenderer {
         &self,
         command_buffer: &metal::CommandBufferRef,
         pipeline: &metal::RenderPipelineState,
+        geometry: interface::Pipeline,
         target: &metal::TextureRef,
         source: &metal::TextureRef,
         target_viewport: Size<DevicePixels>,
@@ -1361,7 +1364,13 @@ impl MetalRenderer {
                 height: height as NSUInteger,
             });
         }
-        bind_global_uniforms(encoder, target_viewport, &self.mask_buffer);
+        // Downsample writes a half-size target but samples the full-size source.
+        let scene_viewport = if params.downsample > 0.5 {
+            size((source.width() as i32).into(), (source.height() as i32).into())
+        } else {
+            target_viewport
+        };
+        bind_global_uniforms(encoder, scene_viewport, &self.mask_buffer);
         encoder.set_vertex_bytes(
             BlurInputIndex::Params as u64,
             mem::size_of::<BlurUniform>() as u64,
@@ -1374,7 +1383,7 @@ impl MetalRenderer {
         );
         encoder.set_fragment_texture(0, Some(source));
         encoder.set_fragment_sampler(0, Some(&self.atlas_sampler));
-        encoder.draw_primitives(metal::MTLPrimitiveType::Triangle, 0, 6);
+        draw_fixed_geometry(encoder, geometry);
         encoder.end_encoding();
     }
 
@@ -1401,6 +1410,7 @@ impl MetalRenderer {
         self.run_metal_blur_pass(
             command_buffer,
             &self.blur_composite_pipeline_state,
+            interface::BLUR_COMPOSITE,
             target,
             source,
             viewport_size,
@@ -1485,6 +1495,7 @@ impl MetalRenderer {
         self.run_metal_blur_pass(
             command_buffer,
             &self.blur_downsample_pipeline_state,
+            interface::BLUR_DOWNSAMPLE,
             ping,
             source,
             half,
@@ -1501,6 +1512,7 @@ impl MetalRenderer {
         self.run_metal_blur_pass(
             command_buffer,
             &self.blur_pipeline_state,
+            interface::BLUR,
             pong,
             ping,
             half,
@@ -1517,6 +1529,7 @@ impl MetalRenderer {
         self.run_metal_blur_pass(
             command_buffer,
             &self.blur_pipeline_state,
+            interface::BLUR,
             ping,
             pong,
             half,
@@ -1600,6 +1613,7 @@ impl MetalRenderer {
         self.run_metal_blur_pass(
             command_buffer,
             &self.blur_composite_pipeline_state,
+            interface::BLUR_COMPOSITE,
             target,
             source,
             viewport_size,
@@ -2165,10 +2179,19 @@ impl MetalRenderer {
             });
             command_encoder.set_fragment_sampler(0, Some(&self.atlas_sampler));
 
-            command_encoder.draw_primitives(metal::MTLPrimitiveType::Triangle, 0, 6);
+            draw_fixed_geometry(command_encoder, interface::SURFACES);
         }
         true
     }
+}
+
+fn draw_fixed_geometry(encoder: &metal::RenderCommandEncoderRef, geometry: interface::Pipeline) {
+    let (topology, count) = geometry.fixed_draw().expect("geometry is fixed");
+    let topology = match topology {
+        interface::PrimitiveTopology::TriangleList => metal::MTLPrimitiveType::Triangle,
+        interface::PrimitiveTopology::TriangleStrip => metal::MTLPrimitiveType::TriangleStrip,
+    };
+    encoder.draw_primitives(topology, 0, u64::from(count));
 }
 
 fn corner_radii_array(corners: Corners<ScaledPixels>) -> [f32; 4] {

@@ -23,6 +23,7 @@ use crate::directx_renderer::shader_resources::{RawShaderBytes, ShaderModule, Sh
 use crate::*;
 use hgpui::*;
 use hgpui_render::artifacts::Dx11DrawConstants;
+use hgpui_render::shaders::interface;
 use hgpui_render::blur_region::{blur_pass_plan, filter_copy_region};
 use hgpui_render::filter_matrix::{
     ColorFilterMatrix, color_filter_matrix, combined_blur_radius,
@@ -1126,10 +1127,10 @@ impl DirectXRenderer {
         // `[x, y, width, height]` in target pixels. The blur passes are scissored to the blurred
         // element's region (plus the kernel reach) instead of touching the whole viewport.
         scissor: Option<[u32; 4]>,
-        topology: D3D_PRIMITIVE_TOPOLOGY,
-        vertex_count: u32,
+        geometry: interface::Pipeline,
         clear: bool,
     ) -> Result<()> {
+        let (topology, vertex_count) = dx_fixed_draw(geometry);
         let devices = self.devices.as_ref().context("devices missing")?;
         let ctx = &devices.device_context;
         update_buffer(ctx, &self.pipelines.blur_params_buffer, &[params])?;
@@ -1329,8 +1330,7 @@ impl DirectXRenderer {
             },
             &half_vp,
             Some(plan.downsample),
-            D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
-            3,
+            interface::BLUR_DOWNSAMPLE,
             true,
         )?;
         self.dx_blur_pass(
@@ -1348,8 +1348,7 @@ impl DirectXRenderer {
             },
             &half_vp,
             Some(plan.horizontal),
-            D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
-            3,
+            interface::BLUR,
             true,
         )?;
         self.dx_blur_pass(
@@ -1367,8 +1366,7 @@ impl DirectXRenderer {
             },
             &half_vp,
             Some(plan.vertical),
-            D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
-            3,
+            interface::BLUR,
             true,
         )?;
         // Composite the blurred result into the target (preserving its contents).
@@ -1431,8 +1429,7 @@ impl DirectXRenderer {
             },
             &full_vp,
             None,
-            D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP,
-            4,
+            interface::BLUR_COMPOSITE,
             false,
         )
     }
@@ -1480,8 +1477,7 @@ impl DirectXRenderer {
             },
             &full_vp,
             None,
-            D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP,
-            4,
+            interface::BLUR_COMPOSITE,
             false,
         )
     }
@@ -1509,8 +1505,7 @@ impl DirectXRenderer {
             },
             &full_vp,
             None,
-            D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
-            3,
+            interface::BLUR_DOWNSAMPLE,
             true,
         )
     }
@@ -2424,6 +2419,15 @@ fn create_resources(
 
 #[inline]
 /// Flatten a `Corners` into the `[tl, tr, br, bl]` order expected by the blur composite shader.
+fn dx_fixed_draw(geometry: interface::Pipeline) -> (D3D_PRIMITIVE_TOPOLOGY, u32) {
+    let (topology, count) = geometry.fixed_draw().expect("geometry is fixed");
+    let topology = match topology {
+        interface::PrimitiveTopology::TriangleList => D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
+        interface::PrimitiveTopology::TriangleStrip => D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP,
+    };
+    (topology, count)
+}
+
 fn corner_radii_array(corners: Corners<ScaledPixels>) -> [f32; 4] {
     [
         corners.top_left.0,
@@ -4512,8 +4516,9 @@ mod tests {
             ),
         );
 
-        let run = |mirror_into: Bounds<ScaledPixels>,
-                   content_mask: ContentMask<ScaledPixels>|
+        let run_with_geometry = |mirror_into: Bounds<ScaledPixels>,
+                                 content_mask: ContentMask<ScaledPixels>,
+                                 (topology, count): (D3D_PRIMITIVE_TOPOLOGY, u32)|
          -> Result<()> {
             let rtv = output_rtv.clone().expect("output rtv");
             let srv = &source_srv;
@@ -4594,10 +4599,17 @@ mod tests {
                     ..Default::default()
                 },
                 &full_viewport,
-                D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP,
-                4,
+                topology,
+                count,
             )?;
             Ok(())
+        };
+        let run = |bounds, mask| {
+            run_with_geometry(
+                bounds,
+                mask,
+                super::dx_fixed_draw(hgpui_render::shaders::interface::BLUR_COMPOSITE),
+            )
         };
 
         let close =
@@ -4615,9 +4627,14 @@ mod tests {
             fade_out: Default::default(),
         };
 
-        // With the reflection the blur only ever sees the element's own (opaque) content, so no
-        // tap can fade it out: the whole composite is the element's colour at full alpha.
+        // Reproduce the former Metal submission with the same shared shader: six list
+        // vertices address a four-corner shader incorrectly, leaving a wedge uncovered.
+        run_with_geometry(element_bounds, whole_texture, (D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST, 6))?;
+        assert_eq!(read_pixel(&context, &output, &staging, 18, 58)?[3], 0);
+
+        // With the reflected source and shared strip geometry, the entire composite is filled.
         run(element_bounds, whole_texture)?;
+        assert!(close(read_pixel(&context, &output, &staging, 18, 58)?, RED));
         dump_device_errors(&device);
         for (x, y, what) in [
             (32, 32, "the middle"),
