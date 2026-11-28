@@ -36,7 +36,8 @@ impl AnyView {
     ///
     /// The rendered subtree is recycled from the previous frame unless
     /// [Context::notify] was called on the backing entity since it was rendered
-    /// (or [Window::refresh] is called, which ignores caching).
+    /// (or [Window::refresh] is called, which ignores caching). Active accessibility
+    /// frames also rebuild the subtree to register its nodes and actions.
     pub fn cached(self, style: StyleRefinement) -> ViewElement<AnyView> {
         ViewElement::new(self).cached(style)
     }
@@ -225,7 +226,8 @@ impl<T: Render> Entity<T> {
     /// Embed this entity as a cached [`ViewElement`] laid out at `style`.
     ///
     /// The rendered subtree is reused until the entity is notified (or the
-    /// cached bounds / text style change). Caching requires a definite size:
+    /// cached bounds / text style change). Active accessibility frames rebuild
+    /// the subtree to register its nodes and actions. Caching requires a definite size:
     /// a cached view is laid out from `style` and is *not* measured from its
     /// contents. Use [`ViewElement::new`] (or `.child(entity)`) for the
     /// uncached case.

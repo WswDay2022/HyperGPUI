@@ -3214,6 +3214,10 @@ impl Window {
         self.a11y.sync_active_flag();
         if self.a11y.is_active() {
             self.a11y.begin_frame();
+            // A cache hit replays paint and hitboxes, not accessibility nodes or callbacks.
+            // Use the existing per-frame refresh path to rebuild the whole accessibility tree
+            // without adding another check to each cache lookup when accessibility is inactive.
+            self.refreshing = true;
         }
 
         let _inspector_width: Pixels = rems(30.0).to_pixels(self.rem_size());

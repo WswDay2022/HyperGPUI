@@ -640,6 +640,119 @@ mod tests {
     use accesskit::{NodeId, Role};
     use std::sync::{Arc, atomic::AtomicBool};
 
+    #[cfg(not(target_family = "wasm"))]
+    #[hgpui::test]
+    fn cached_view_keeps_accessible_actions_after_parent_redraw(cx: &mut crate::TestAppContext) {
+        use crate::{
+            Context, Entity, FocusHandle, StyleRefinement, Window, div, prelude::*, px, size,
+        };
+        use accesskit::{Action, ActionRequest, TreeId};
+        use std::{cell::Cell, rc::Rc, sync::atomic::Ordering};
+
+        struct Button {
+            renders: Rc<Cell<usize>>,
+            clicks: Rc<Cell<usize>>,
+            focus: FocusHandle,
+        }
+        impl Render for Button {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                self.renders.set(self.renders.get() + 1);
+                let clicks = self.clicks.clone();
+                div()
+                    .id("cache-probe-button")
+                    .size_full()
+                    .role(Role::Button)
+                    .aria_label("Cached action probe")
+                    .track_focus(&self.focus)
+                    .on_a11y_action(Action::Click, move |_, _, _| clicks.set(clicks.get() + 1))
+            }
+        }
+        struct Parent(Entity<Button>);
+        impl Render for Parent {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div()
+                    .size_full()
+                    .child(self.0.clone().cached(StyleRefinement::default().size_full()))
+            }
+        }
+
+        let renders = Rc::new(Cell::new(0));
+        let clicks = Rc::new(Cell::new(0));
+        let active = Arc::new(AtomicBool::new(false));
+        let window = cx.open_window(size(px(160.), px(100.)), {
+            let (renders, clicks, active) = (renders.clone(), clicks.clone(), active.clone());
+            move |window, cx| {
+                window.a11y = A11y::new(active, false, None);
+                let focus = cx.focus_handle();
+                Parent(cx.new(|_| Button { renders, clicks, focus }))
+            }
+        });
+        cx.run_until_parked();
+        let redraw_parent = |cx: &mut crate::TestAppContext| {
+            window.update(cx, |_, _, cx| cx.notify()).unwrap();
+            cx.run_until_parked();
+        };
+        let rendered = renders.get();
+        assert!(rendered > 0);
+        redraw_parent(cx);
+        assert_eq!(
+            renders.get(),
+            rendered,
+            "inactive accessibility must leave cache hits intact"
+        );
+
+        active.store(true, Ordering::SeqCst);
+        window.update(cx, |_, window, _| window.refresh()).unwrap();
+        cx.run_until_parked();
+        let node_id = |cx: &mut crate::TestAppContext| {
+            window
+                .update(cx, |_, window, _| {
+                    let dump = window
+                        .debug_a11y_tree_json()
+                        .expect("no active accessibility tree");
+                    let tree: serde_json::Value = serde_json::from_str(&dump).unwrap();
+                    tree["nodes"]
+                        .as_object()
+                        .unwrap()
+                        .values()
+                        .find(|node| node["aria"]["label"].as_str() == Some("Cached action probe"))
+                        .map(|node| NodeId(node["accesskit_id"].as_str().unwrap().parse().unwrap()))
+                })
+                .unwrap()
+        };
+        let original_id = node_id(cx).expect("button missing on the first accessible frame");
+        redraw_parent(cx);
+        assert_eq!(
+            node_id(cx),
+            Some(original_id),
+            "cached subtree must stay accessible"
+        );
+        window
+            .update(cx, |parent, window, cx| {
+                for action in [Action::Focus, Action::Click] {
+                    window.handle_a11y_action(
+                        ActionRequest {
+                            action,
+                            target_tree: TreeId::ROOT,
+                            target_node: original_id,
+                            data: None,
+                        },
+                        cx,
+                    );
+                }
+                assert!(parent.0.read(cx).focus.is_focused(window));
+            })
+            .unwrap();
+        assert_eq!(clicks.get(), 1, "the same node must still route its action");
+
+        active.store(false, Ordering::SeqCst);
+        window.update(cx, |_, window, _| window.refresh()).unwrap();
+        cx.run_until_parked();
+        let rendered = renders.get();
+        redraw_parent(cx);
+        assert_eq!(renders.get(), rendered, "deactivating accessibility must restore reuse");
+    }
+
     fn test_node() -> accesskit::Node {
         accesskit::Node::new(Role::GenericContainer)
     }
