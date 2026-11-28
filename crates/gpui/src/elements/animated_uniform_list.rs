@@ -639,7 +639,7 @@ struct Slide {
 struct ListState<K> {
     /// Where each tracked key was painted on the previous frame.
     tracked: HashMap<K, Tracked>,
-    /// Reusable storage for the previous frame while `tracked` is rebuilt.
+    /// Scratch storage for the previous frame while `tracked` is rebuilt; empty between frames.
     previous_tracked: HashMap<K, Tracked>,
     /// The keys currently sliding.
     sliding: HashMap<K, Slide>,
@@ -773,8 +773,7 @@ impl<K: Hash + Eq + Clone> ListState<K> {
         // and allocating another one for every frame.
         // Previous per-frame replacement: let previous = std::mem::take(&mut self.tracked);
         std::mem::swap(&mut self.tracked, &mut self.previous_tracked);
-        self.tracked.clear();
-        let previous = &self.previous_tracked;
+        let previous = &mut self.previous_tracked;
         // A key that was not tracked on the previous frame is a genuinely new item — items that
         // merely scroll into view arrive on a frame that snapped, so they never get here.
         let known_keys = !previous.is_empty();
@@ -827,6 +826,10 @@ impl<K: Hash + Eq + Clone> ListState<K> {
                 },
             );
         }
+
+        // The previous entries were only needed for this transition. Reuse their buckets
+        // without keeping removed keys alive until some unrelated redraw.
+        previous.clear();
 
         if animate {
             let tracked = &self.tracked;
@@ -1029,6 +1032,44 @@ mod tests {
         assert_eq!(
             allocations.count, 0,
             "a warmed stable tracking window must not allocate HashMap buckets per frame"
+        );
+    }
+
+    #[test]
+    fn removed_tracking_keys_are_released_before_the_list_goes_idle() {
+        fn advance(state: &mut ListState<Rc<u64>>, keys: &[Rc<u64>], now: Instant) {
+            state.advance(&FrameInput {
+                row_height: px(ROW),
+                offset: point(Pixels::ZERO, Pixels::ZERO),
+                top_index: 0,
+                count: keys.len(),
+                viewport_height: px(ROW * VIEWPORT_ROWS),
+                key_of: &|index| keys[index].clone(),
+                duration: DURATION,
+                easing: &ease_out_cubic,
+                anchor: true,
+                tracking_margin: DEFAULT_TRACKING_MARGIN,
+                leaving: None,
+                reduce_motion: false,
+                now,
+            });
+        }
+
+        let mut state = ListState::default();
+        let key = Rc::new(17);
+        let weak_key = Rc::downgrade(&key);
+        let now = Instant::now();
+        advance(&mut state, &[key], now);
+        assert!(weak_key.upgrade().is_some(), "the live row must be tracked");
+
+        advance(&mut state, &[], now + FRAME);
+        assert!(
+            !state.is_animating(),
+            "there will not be an animation frame to clean up"
+        );
+        assert!(
+            weak_key.upgrade().is_none(),
+            "the scratch map must not retain removed row keys"
         );
     }
 
