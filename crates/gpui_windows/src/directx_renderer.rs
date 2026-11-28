@@ -23,6 +23,8 @@ use crate::directx_renderer::shader_resources::{RawShaderBytes, ShaderModule, Sh
 use crate::*;
 use hgpui::*;
 use hgpui_render::artifacts::Dx11DrawConstants;
+use hgpui_render::{PATH_TARGET_SLOTS, PathTarget};
+use hgpui_render::abi::{PathRasterizationVertex as PathRasterizationSprite, PathSprite};
 use hgpui_render::shaders::interface;
 use hgpui_render::blur_region::{blur_pass_plan, filter_copy_region};
 use hgpui_render::filter_matrix::{
@@ -87,10 +89,7 @@ struct DirectXResources {
     // Path intermediate textures (with MSAA). Allocated on the first path batch instead of at
     // window creation: the 4x MSAA target is full-resolution and cost tens of MB even for apps
     // that never paint a vector path.
-    path_intermediate_texture: Option<ID3D11Texture2D>,
-    path_intermediate_srv: Option<ID3D11ShaderResourceView>,
-    path_intermediate_msaa_texture: Option<ID3D11Texture2D>,
-    path_intermediate_msaa_view: Option<ID3D11RenderTargetView>,
+    path_targets: [Option<DxPathTargets>; PATH_TARGET_SLOTS],
 
     // Offscreen targets for blur filters (each is render-target + shader-resource).
     blur: BlurResources,
@@ -102,6 +101,13 @@ struct DirectXResources {
 
     // Cached viewport
     viewport: D3D11_VIEWPORT,
+}
+
+struct DxPathTargets {
+    resolved: ID3D11Texture2D,
+    srv: Option<ID3D11ShaderResourceView>,
+    msaa: ID3D11Texture2D,
+    rtv: Option<ID3D11RenderTargetView>,
 }
 
 struct FilterScratch {
@@ -629,8 +635,9 @@ impl DirectXRenderer {
                 }
                 PrimitiveBatch::Paths(range) => {
                     let paths = &scene.paths[range];
-                    self.draw_paths_to_intermediate(paths)?;
-                    self.draw_paths_from_intermediate(paths)
+                    let target = PathTarget::for_paths([self.width, self.height], paths);
+                    self.draw_paths_to_intermediate(paths, target)?;
+                    self.draw_paths_from_intermediate(paths, target)
                 }
                 PrimitiveBatch::Underlines(range) => self.draw_underlines(range.start, range.len()),
                 PrimitiveBatch::MonochromeSprites { texture_id, range } => {
@@ -870,37 +877,31 @@ impl DirectXRenderer {
 
     /// Allocates the path intermediate targets on first use (or after a resize). The MSAA target
     /// is full-resolution and would otherwise cost tens of MB for apps that never paint paths.
-    fn ensure_path_intermediate_textures(&mut self) -> Result<()> {
+    fn ensure_path_targets(&mut self, target: PathTarget) -> Result<()> {
         let devices = self.devices.as_ref().context("devices missing")?;
         let resources = self.resources.as_mut().context("resources missing")?;
-        if resources.path_intermediate_texture.is_some() {
-            return Ok(());
+        let slot = &mut resources.path_targets[target.slot()];
+        if slot.is_none() {
+            let [width, height] = target.size();
+            let (resolved, srv) = create_path_intermediate_texture(&devices.device, width, height)?;
+            let (msaa, rtv) = create_path_intermediate_msaa_texture_and_view(&devices.device, width, height)?;
+            *slot = Some(DxPathTargets { resolved, srv, msaa, rtv });
         }
-        let width = resources.viewport.Width.max(1.0) as u32;
-        let height = resources.viewport.Height.max(1.0) as u32;
-        let (texture, srv) = create_path_intermediate_texture(&devices.device, width, height)?;
-        let (msaa_texture, msaa_view) =
-            create_path_intermediate_msaa_texture_and_view(&devices.device, width, height)?;
-        resources.path_intermediate_texture = Some(texture);
-        resources.path_intermediate_srv = srv;
-        resources.path_intermediate_msaa_texture = Some(msaa_texture);
-        resources.path_intermediate_msaa_view = msaa_view;
         Ok(())
     }
 
-    fn draw_paths_to_intermediate(&mut self, paths: &[Path<ScaledPixels>]) -> Result<()> {
+    fn draw_paths_to_intermediate(&mut self, paths: &[Path<ScaledPixels>], target: PathTarget) -> Result<()> {
         if paths.is_empty() {
             return Ok(());
         }
-        self.ensure_path_intermediate_textures()?;
+        self.ensure_path_targets(target)?;
 
         let devices = self.devices.as_ref().context("devices missing")?;
         let resources = self.resources.as_ref().context("resources missing")?;
-        let msaa_view = resources
-            .path_intermediate_msaa_view
-            .as_ref()
-            .context("path intermediate MSAA view missing")?;
-        let msaa_target = resources.path_intermediate_msaa_view.clone();
+        let targets = resources.path_targets[target.slot()].as_ref().context("path targets missing")?;
+        let msaa_view = targets.rtv.as_ref().context("path intermediate MSAA view missing")?;
+        let [width, height] = target.size();
+        let raster_viewport = D3D11_VIEWPORT { Width: width as f32, Height: height as f32, ..resources.viewport };
         // Clear intermediate MSAA texture
         unsafe {
             devices
@@ -909,22 +910,14 @@ impl DirectXRenderer {
             // Set intermediate MSAA texture as render target
             devices
                 .device_context
-                .OMSetRenderTargets(Some(slice::from_ref(&msaa_target)), None);
+                .OMSetRenderTargets(Some(slice::from_ref(&targets.rtv)), None);
         }
 
         // Collect all vertices and sprites for a single draw call
         let mut vertices = Vec::new();
 
         for path in paths {
-            vertices.extend(path.vertices.iter().map(|v| PathRasterizationSprite {
-                xy_position: v.xy_position,
-                curve_position: v.st_position,
-                color: path.color,
-                bounds: path.bounds,
-                content_mask: path.content_mask.bounds,
-                mask_chain: path.mask_chain,
-                padding: [0; 3],
-            }));
+            vertices.extend(path.vertices.iter().map(|vertex| target.vertex(path, vertex)));
         }
 
         self.pipelines.path_rasterization_pipeline.update_buffer(
@@ -935,30 +928,16 @@ impl DirectXRenderer {
 
         self.pipelines.path_rasterization_pipeline.draw(
             &devices.device_context,
-            slice::from_ref(&resources.viewport),
+            slice::from_ref(&raster_viewport),
             &self.globals.constant_buffers(None),
             D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
             vertices.len() as u32,
             1,
         )?;
 
-        // Resolve MSAA to non-MSAA intermediate texture
-        let intermediate = resources
-            .path_intermediate_texture
-            .as_ref()
-            .context("path intermediate texture missing")?;
-        let msaa_texture = resources
-            .path_intermediate_msaa_texture
-            .as_ref()
-            .context("path intermediate MSAA texture missing")?;
+        // The resolve covers the selected attachment, not the entire window for a compact batch.
         unsafe {
-            devices.device_context.ResolveSubresource(
-                intermediate,
-                0,
-                msaa_texture,
-                0,
-                RENDER_TARGET_FORMAT,
-            );
+            devices.device_context.ResolveSubresource(&targets.resolved, 0, &targets.msaa, 0, RENDER_TARGET_FORMAT);
             // Restore the active render target (the offscreen scene/group target when blurring,
             // otherwise the swapchain) so the path sprites land on the correct surface.
             let restore_target = if self.active_render_target.is_some() {
@@ -974,7 +953,7 @@ impl DirectXRenderer {
         Ok(())
     }
 
-    fn draw_paths_from_intermediate(&mut self, paths: &[Path<ScaledPixels>]) -> Result<()> {
+    fn draw_paths_from_intermediate(&mut self, paths: &[Path<ScaledPixels>], target: PathTarget) -> Result<()> {
         let Some(first_path) = paths.first() else {
             return Ok(());
         };
@@ -989,16 +968,14 @@ impl DirectXRenderer {
         let sprites = if paths.last().unwrap().order == first_path.order {
             paths
                 .iter()
-                .map(|path| PathSprite {
-                    bounds: path.clipped_bounds(),
-                })
+                .map(|path| target.sprite(path.clipped_bounds()))
                 .collect::<Vec<_>>()
         } else {
             let mut bounds = first_path.clipped_bounds();
             for path in paths.iter().skip(1) {
                 bounds = bounds.union(&path.clipped_bounds());
             }
-            vec![PathSprite { bounds }]
+            vec![target.sprite(bounds)]
         };
 
         let devices = self.devices.as_ref().context("devices missing")?;
@@ -1012,7 +989,7 @@ impl DirectXRenderer {
         // Draw the sprites with the path texture
         self.pipelines.path_sprite_pipeline.draw_with_texture(
             &devices.device_context,
-            slice::from_ref(&resources.path_intermediate_srv),
+            slice::from_ref(&resources.path_targets[target.slot()].as_ref().context("path targets missing")?.srv),
             slice::from_ref(&resources.viewport),
             &self.globals.constant_buffers(None),
             slice::from_ref(&self.globals.sampler),
@@ -1587,10 +1564,7 @@ impl DirectXResources {
             swap_chain,
             render_target: Some(render_target),
             render_target_view,
-            path_intermediate_texture: None,
-            path_intermediate_msaa_texture: None,
-            path_intermediate_msaa_view: None,
-            path_intermediate_srv: None,
+            path_targets: Default::default(),
             blur,
             filter_scratch: None,
             viewport,
@@ -1633,10 +1607,7 @@ impl DirectXResources {
         self.render_target = Some(render_target);
         self.render_target_view = render_target_view;
         // Lazily recreated at the new size on the next path batch.
-        self.path_intermediate_texture = None;
-        self.path_intermediate_msaa_texture = None;
-        self.path_intermediate_msaa_view = None;
-        self.path_intermediate_srv = None;
+        self.path_targets = Default::default();
         self.filter_scratch = None;
         self.blur = BlurResources::new();
         self.viewport = viewport;
@@ -2303,30 +2274,6 @@ impl<T> PipelineState<T> {
         }
         Ok(())
     }
-}
-
-#[derive(Clone, Copy)]
-#[repr(C)]
-struct PathRasterizationSprite {
-    xy_position: Point<ScaledPixels>,
-    curve_position: Point<f32>,
-    color: Background,
-    /// The path's own bounds: the gradient box. (Used to be `clipped_bounds`, which made the
-    /// gradient shift/scale whenever an ancestor clip cut the path.)
-    bounds: Bounds<ScaledPixels>,
-    /// The content mask the path is painted under. The shader clips to the mask and evaluates
-    /// its distance field in the fragment, so rounded mask corners apply to vector paths too.
-    content_mask: Bounds<ScaledPixels>,
-    /// Packed reference into the frame's content-mask chain arena.
-    mask_chain: u32,
-    /// Pads the stride to 144 bytes.
-    padding: [u32; 3],
-}
-
-#[derive(Clone, Copy)]
-#[repr(C)]
-struct PathSprite {
-    bounds: Bounds<ScaledPixels>,
 }
 
 impl Drop for DirectXRenderer {
@@ -3203,6 +3150,9 @@ mod tests {
     };
 
     const TEST_SIZE: u32 = 64;
+
+    #[path = "path_msaa_benchmark.rs"]
+    mod path_msaa_benchmark;
 
     /// Same as [`create_warp_device`], but on the real GPU. Used to catch behaviour that the
     /// WARP software rasterizer does not reproduce.
@@ -5179,7 +5129,7 @@ mod tests {
         assert_eq!(offset_of!(PathRasterizationSprite, bounds), 96);
         assert_eq!(offset_of!(PathRasterizationSprite, content_mask), 112);
         assert_eq!(offset_of!(PathRasterizationSprite, mask_chain), 128);
-        assert_eq!(offset_of!(PathRasterizationSprite, padding), 132);
+        assert_eq!(offset_of!(PathRasterizationSprite, tile_info), 132);
     }
 
     // --- Antialiasing / clipping precision tests -------------------------------------------
@@ -6391,7 +6341,7 @@ mod tests {
             bounds: path_bounds,
             content_mask: content_mask.bounds,
             mask_chain,
-            padding: [0; 3],
+            tile_info: [0; 3],
         };
         // Two triangles covering the whole viewport.
         let vertices = [

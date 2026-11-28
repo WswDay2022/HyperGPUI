@@ -15,8 +15,8 @@ pub mod path_rasterization {
         /// The chain carries the mask's corner radii and fades, so they are not duplicated
         /// per vertex.
         pub mask_chain: u32,
-        /// Pads the stride to 144 bytes (16-byte-aligned D3D11 raw-view offsets).
-        pub padding: [u32; 3],
+        /// Scene origin x/y and edge for a compact square; zero edge selects the full target.
+        pub tile_info: [u32; 3],
     }
     storage!(group(1), binding(0), PATH_VERTICES: RuntimeArray<PathRasterizationVertex>);
 
@@ -52,8 +52,15 @@ pub mod path_rasterization {
         #[builtin(vertex_index)] vertex_id: u32,
     ) -> PathRasterizationVarying {
         let vertex = get!(PATH_VERTICES)[vertex_id as usize];
+        let mut position = viewport_to_clip_position(vertex.xy_position);
+        if vertex.tile_info[2] != 0u32 {
+            let origin = vec2f(vertex.tile_info[0] as f32, vertex.tile_info[1] as f32);
+            let local = (vertex.xy_position - origin) / (vertex.tile_info[2] as f32);
+            let clip = local * vec2f(2.0, -2.0) + vec2f(-1.0, 1.0);
+            position = vec4f(clip.x, clip.y, 0.0, 1.0);
+        }
         PathRasterizationVarying {
-            position: viewport_to_clip_position(vertex.xy_position),
+            position,
             curve_position: vertex.curve_position,
             vertex_id,
             clip_distances: distance_from_clip_rect_impl(
@@ -70,21 +77,22 @@ pub mod path_rasterization {
             return transparent();
         }
         let vertex = get!(PATH_VERTICES)[input.vertex_id as usize];
+        let scene_position = input.position.xy() + vec2f(vertex.tile_info[0] as f32, vertex.tile_info[1] as f32);
         let mask_coverage = content_mask_chain_alpha(
             vertex.mask_chain,
-            input.position.xy(),
+            scene_position,
             ContentMask {
                 bounds: vertex.content_mask,
                 corner_radii: zero_corners(),
                 fade_out: zero_edges(),
             },
-            input.position.xy(),
+            scene_position,
             vertex.bounds,
             zero_corners(),
             false,
         );
         let paint = Paint::new(vertex.color, vertex.bounds);
-        let color = paint_color(paint, input.position.xy(), prepare_paint(paint));
+        let color = paint_color(paint, scene_position, prepare_paint(paint));
         premultiply(color, coverage * mask_coverage)
     }
 }
@@ -97,6 +105,8 @@ pub mod path {
     #[derive(Clone, Copy, Wgsl)]
     pub struct PathSprite {
         pub bounds: Bounds,
+        pub tile_info: [u32; 3],
+        pub padding: u32,
     }
     storage!(group(1), binding(0), PATH_SPRITES: RuntimeArray<PathSprite>);
     texture!(group(1), binding(1), PATH_TEXTURE: Texture2D<f32>);
@@ -117,9 +127,14 @@ pub mod path {
     ) -> PathVarying {
         let sprite = get!(PATH_SPRITES)[instance_id as usize];
         let vertex = rectangle_vertex(vertex_id, sprite.bounds);
+        let mut texture_coords = vertex.viewport_position / get!(GLOBALS).viewport_size;
+        if sprite.tile_info[2] != 0u32 {
+            let origin = vec2f(sprite.tile_info[0] as f32, sprite.tile_info[1] as f32);
+            texture_coords = (vertex.viewport_position - origin) / (sprite.tile_info[2] as f32);
+        }
         PathVarying {
             position: vertex.clip_position,
-            texture_coords: vertex.viewport_position / get!(GLOBALS).viewport_size,
+            texture_coords,
         }
     }
 

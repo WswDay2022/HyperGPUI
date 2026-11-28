@@ -1,7 +1,7 @@
 use crate::{CompositorGpuHint, WgpuAtlas, WgpuContext, WgpuDeviceRequirements};
 use bytemuck::{Pod, Zeroable};
 use hgpui::{
-    AtlasTextureId, BackdropFilter, Background, Bounds, ContentMask, DevicePixels,
+    AtlasTextureId, BackdropFilter, Bounds, ContentMask, DevicePixels,
     FilterBoundary, GpuSpecs, MonochromeSprite, PaintSurface, Path, Point, PolychromeSprite,
     PrimitiveBatch, Quad, ScaledFilter, ScaledPixels, Scene, Shadow, Size, SubpixelSprite,
     Underline, get_gamma_correction_ratios,
@@ -14,7 +14,8 @@ use hgpui_render::filter_matrix::{
 use log::warn;
 #[cfg(not(target_family = "wasm"))]
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
-use std::cell::RefCell;
+use hgpui_render::{PATH_TARGET_SLOTS, PathTarget, abi::PathSprite};
+use std::cell::{OnceCell, RefCell};
 use std::num::NonZeroU64;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -166,30 +167,6 @@ struct GammaParams {
     subpixel_enhanced_contrast: f32,
     is_bgr: u32,
     _pad: u32,
-}
-
-#[derive(Clone, Debug)]
-#[repr(C)]
-struct PathSprite {
-    bounds: Bounds<ScaledPixels>,
-}
-
-#[derive(Clone, Debug)]
-#[repr(C)]
-struct PathRasterizationVertex {
-    xy_position: Point<ScaledPixels>,
-    curve_position: Point<f32>,
-    color: Background,
-    /// The path's own bounds: the gradient box. (Used to be `clipped_bounds`, which made the
-    /// gradient shift/scale whenever an ancestor clip cut the path.)
-    bounds: Bounds<ScaledPixels>,
-    /// The content mask the path is painted under. The shader clips to the mask and evaluates
-    /// its distance field in the fragment, so rounded mask corners apply to vector paths too.
-    content_mask: Bounds<ScaledPixels>,
-    /// Packed reference into the frame's content-mask chain arena.
-    mask_chain: u32,
-    /// Pads the stride to 144 bytes.
-    padding: [u32; 3],
 }
 
 /// Clamp a requested surface size to the device's maximum 2D texture dimension and to at least
@@ -368,6 +345,12 @@ struct WgpuBindGroupLayouts {
 pub type GpuContext = Rc<RefCell<Option<WgpuContext>>>;
 
 /// GPU resources that must be dropped together during device recovery.
+struct WgpuPathTargets {
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    msaa: Option<(wgpu::Texture, wgpu::TextureView)>,
+}
+
 struct WgpuResources {
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
@@ -396,10 +379,7 @@ struct WgpuResources {
     /// capacity growth forces the next frame to upload.
     content_mask_uploaded: Option<(u64, usize)>,
     instance_buffer: wgpu::Buffer,
-    path_intermediate_texture: Option<wgpu::Texture>,
-    path_intermediate_view: Option<wgpu::TextureView>,
-    path_msaa_texture: Option<wgpu::Texture>,
-    path_msaa_view: Option<wgpu::TextureView>,
+    path_targets: [OnceCell<WgpuPathTargets>; PATH_TARGET_SLOTS],
     /// Blur offscreen targets. Allocated lazily (only when a frame actually uses a blur filter)
     /// so apps that never blur pay no extra VRAM. `None`/empty until first use.
     ///
@@ -425,10 +405,7 @@ struct WgpuResources {
 
 impl WgpuResources {
     fn invalidate_intermediate_textures(&mut self) {
-        self.path_intermediate_texture = None;
-        self.path_intermediate_view = None;
-        self.path_msaa_texture = None;
-        self.path_msaa_view = None;
+        self.path_targets = Default::default();
         self.scene_color_texture = None;
         self.scene_color_view = None;
         self.blur_ping_texture = None;
@@ -833,12 +810,7 @@ impl WgpuRenderer {
             content_mask_capacity,
             content_mask_uploaded: None,
             instance_buffer,
-            // Defer intermediate texture creation to first draw call via ensure_intermediate_textures().
-            // This avoids panics when the device/surface is in an invalid state during initialization.
-            path_intermediate_texture: None,
-            path_intermediate_view: None,
-            path_msaa_texture: None,
-            path_msaa_view: None,
+            path_targets: Default::default(),
             scene_color_texture: None,
             scene_color_view: None,
             blur_ping_texture: None,
@@ -1530,11 +1502,11 @@ impl WgpuRenderer {
             }
 
             // Destroy old textures before allocating new ones to avoid GPU memory spikes
-            if let Some(ref texture) = resources.path_intermediate_texture {
-                texture.destroy();
-            }
-            if let Some(ref texture) = resources.path_msaa_texture {
-                texture.destroy();
+            for targets in resources.path_targets.iter().filter_map(OnceCell::get) {
+                targets.texture.destroy();
+                if let Some((texture, _)) = &targets.msaa {
+                    texture.destroy();
+                }
             }
             for texture in [
                 &resources.scene_color_texture,
@@ -1561,32 +1533,15 @@ impl WgpuRenderer {
         }
     }
 
-    fn ensure_intermediate_textures(&mut self) {
-        if self.resources().path_intermediate_texture.is_some() {
-            return;
-        }
-
-        let format = self.surface_config.format;
-        let width = self.surface_config.width;
-        let height = self.surface_config.height;
-        let path_sample_count = self.rendering_params.path_sample_count;
-        let resources = self.resources_mut();
-
-        let (t, v) = Self::create_path_intermediate(&resources.device, format, width, height);
-        resources.path_intermediate_texture = Some(t);
-        resources.path_intermediate_view = Some(v);
-
-        let (path_msaa_texture, path_msaa_view) = Self::create_msaa_if_needed(
-            &resources.device,
-            format,
-            width,
-            height,
-            path_sample_count,
-        )
-        .map(|(t, v)| (Some(t), Some(v)))
-        .unwrap_or((None, None));
-        resources.path_msaa_texture = path_msaa_texture;
-        resources.path_msaa_view = path_msaa_view;
+    fn path_targets(&self, target: PathTarget) -> &WgpuPathTargets {
+        let resources = self.resources();
+        resources.path_targets[target.slot()].get_or_init(|| {
+            let [width, height] = target.size();
+            let format = self.surface_config.format;
+            let (texture, view) = Self::create_path_intermediate(&resources.device, format, width, height);
+            let msaa = Self::create_msaa_if_needed(&resources.device, format, width, height, self.rendering_params.path_sample_count);
+            WgpuPathTargets { texture, view, msaa }
+        })
     }
 
     /// Allocates the sampleable root without creating half-resolution scratch.
@@ -1791,12 +1746,6 @@ impl WgpuRenderer {
                 return false;
             }
         };
-
-        // Path intermediates are full-resolution (plus an MSAA target); only allocate them on
-        // frames that actually paint vector paths.
-        if !scene.paths.is_empty() {
-            self.ensure_intermediate_textures();
-        }
 
         let use_offscreen = hgpui_render::needs_sampleable_root(scene);
         if use_offscreen {
@@ -2016,9 +1965,11 @@ impl WgpuRenderer {
                             // Cull the batch for real: previously `paths` was passed here and
                             // to the sprite pass below, so off-viewport paths were still
                             // rasterized despite `visible_paths` being computed.
+                            let target = PathTarget::for_paths([self.surface_config.width, self.surface_config.height], &visible_paths);
                             let did_draw = self.draw_paths_to_intermediate(
                                 &mut encoder,
                                 &visible_paths,
+                                target,
                                 &mut instance_offset,
                             );
 
@@ -2040,6 +1991,7 @@ impl WgpuRenderer {
                             if did_draw {
                                 self.draw_paths_from_intermediate(
                                     &visible_paths,
+                                    target,
                                     &mut instance_offset,
                                     &mut pass,
                                 )
@@ -3003,6 +2955,7 @@ impl WgpuRenderer {
     fn draw_paths_from_intermediate(
         &self,
         paths: &[Path<ScaledPixels>],
+        target: PathTarget,
         instance_offset: &mut u64,
         pass: &mut wgpu::RenderPass<'_>,
     ) -> bool {
@@ -3011,20 +2964,18 @@ impl WgpuRenderer {
         {
             paths
                 .iter()
-                .map(|p| PathSprite {
-                    bounds: p.clipped_bounds(),
-                })
+                .map(|p| target.sprite(p.clipped_bounds()))
                 .collect()
         } else {
             let mut bounds = first_path.clipped_bounds();
             for path in paths.iter().skip(1) {
                 bounds = bounds.union(&path.clipped_bounds());
             }
-            vec![PathSprite { bounds }]
+            vec![target.sprite(bounds)]
         };
 
         let resources = self.resources();
-        let Some(path_intermediate_view) = resources.path_intermediate_view.as_ref() else {
+        let Some(path_targets) = resources.path_targets[target.slot()].get() else {
             return true;
         };
 
@@ -3032,7 +2983,7 @@ impl WgpuRenderer {
         self.draw_instances_with_texture(
             sprite_data,
             sprites.len() as u32,
-            path_intermediate_view,
+            &path_targets.view,
             &resources.pipelines.paths,
             instance_offset,
             pass,
@@ -3043,19 +2994,12 @@ impl WgpuRenderer {
         &self,
         encoder: &mut wgpu::CommandEncoder,
         paths: &[Path<ScaledPixels>],
+        target: PathTarget,
         instance_offset: &mut u64,
     ) -> bool {
         let mut vertices = Vec::new();
         for path in paths {
-            vertices.extend(path.vertices.iter().map(|v| PathRasterizationVertex {
-                xy_position: v.xy_position,
-                curve_position: v.st_position,
-                color: path.color,
-                bounds: path.bounds,
-                content_mask: path.content_mask.bounds,
-                mask_chain: path.mask_chain,
-                padding: [0; 3],
-            }));
+            vertices.extend(path.vertices.iter().map(|vertex| target.vertex(path, vertex)));
         }
 
         if vertices.is_empty() {
@@ -3081,14 +3025,11 @@ impl WgpuRenderer {
                 }],
             });
 
-        let Some(path_intermediate_view) = resources.path_intermediate_view.as_ref() else {
-            return true;
-        };
-
-        let (target_view, resolve_target) = if let Some(ref msaa_view) = resources.path_msaa_view {
-            (msaa_view, Some(path_intermediate_view))
+        let targets = self.path_targets(target);
+        let (target_view, resolve_target) = if let Some((_, msaa_view)) = &targets.msaa {
+            (msaa_view, Some(&targets.view))
         } else {
-            (path_intermediate_view, None)
+            (&targets.view, None)
         };
 
         {
@@ -3486,7 +3427,7 @@ impl RenderingParameters {
 
 #[cfg(test)]
 mod path_layout_tests {
-    use super::PathRasterizationVertex;
+    use hgpui_render::abi::PathRasterizationVertex;
     use std::mem::{offset_of, size_of};
 
     /// The WGSL `PathRasterizationVertex` must see the same field offsets as the Rust
@@ -3501,6 +3442,6 @@ mod path_layout_tests {
         assert_eq!(offset_of!(PathRasterizationVertex, bounds), 96);
         assert_eq!(offset_of!(PathRasterizationVertex, content_mask), 112);
         assert_eq!(offset_of!(PathRasterizationVertex, mask_chain), 128);
-        assert_eq!(offset_of!(PathRasterizationVertex, padding), 132);
+        assert_eq!(offset_of!(PathRasterizationVertex, tile_info), 132);
     }
 }

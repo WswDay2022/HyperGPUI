@@ -30,6 +30,9 @@ pub struct FontRasterizationUniforms {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct PathSprite {
     pub bounds: Bounds<ScaledPixels>,
+    /// Scene-space origin x/y and square texture edge; zero edge uses the full viewport.
+    pub tile_info: [u32; 3],
+    pub padding: u32,
 }
 
 /// One vertex of a rasterized vector path.
@@ -49,8 +52,9 @@ pub struct PathRasterizationVertex {
     /// Reference to the scene's content-mask chain arena (see `Scene::mask_chains`). The chain
     /// carries the mask's corner radii and fades, so they are not duplicated per vertex.
     pub mask_chain: u32,
-    /// Pads the stride to 144 bytes (16-byte-aligned D3D11 raw-view offsets).
-    pub padding: [u32; 3],
+    /// Scene-space origin x/y and square target edge. Zero edge is the original full target.
+    /// Reuses the former padding, keeping the D3D11 raw-view stride at 144 bytes.
+    pub tile_info: [u32; 3],
 }
 
 /// Parameters shared by the blur downsample / gaussian / composite passes.
@@ -109,7 +113,7 @@ pub struct SurfaceUniforms {
 const _: () = {
     assert!(std::mem::size_of::<GlobalUniforms>() == 16);
     assert!(std::mem::size_of::<FontRasterizationUniforms>() == 32);
-    assert!(std::mem::size_of::<PathSprite>() == 16);
+    assert!(std::mem::size_of::<PathSprite>() == 32);
     assert!(std::mem::size_of::<PathRasterizationVertex>() == 144);
     assert!(std::mem::size_of::<BlurUniforms>() == 208);
     assert!(std::mem::size_of::<SurfaceUniforms>() == 96);

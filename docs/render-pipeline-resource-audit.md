@@ -43,7 +43,7 @@
 
 共享渲染契约 **47 通过**，DX11 原生 **50 通过 / 2 忽略**；WGPU 可见性专项 **2 通过**，独立 shader 验证 **1 通过**。Windows `wgpu` feature、Windows 宿主 workspace `--all-targets`、Metal 源文件静态语法检查通过。未在 Mac 上编译、运行或测量；未启动 IshiTone，未新增整应用帧时/占用结论。
 
-后续优先给路径 MSAA 建立「极小路径 × 多批、4K viewport」的 GPU clear/resolve 基线，区分快速清除元数据与真正的写入/resolve 开销；同时测 WGPU 批次 bind group 创建量。暂不修改无证据的呈现节奏、清屏和资源退休。
+路径 MSAA 的 [DX11 实卡基线](render-path-msaa-baseline.md) 确认成本在全尺寸 resolve；已接入[三端局部附件与原路径回退](render-path-compact-targets.md)，保留 4× MSAA 和原清屏语义。WGPU 批次 bind group 创建量仍待测。暂不修改无证据的呈现节奏、清屏和资源退休。
 
 ```sh
 export CARGO_INCREMENTAL=0

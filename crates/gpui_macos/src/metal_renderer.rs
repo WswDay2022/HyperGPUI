@@ -7,12 +7,14 @@ use cocoa::{
     quartzcore::AutoresizingMask,
 };
 use hgpui_render::artifacts::NATIVE_SHADERS;
+use hgpui_render::{PATH_TARGET_SLOTS, PathTarget};
+pub use hgpui_render::abi::PathSprite;
 use hgpui_render::shaders::interface;
 use hgpui_render::blur_region::{blur_pass_plan, filter_copy_region};
 use hgpui_render::filter_matrix::{
     ColorFilterMatrix, color_filter_matrix, combined_blur_radius,
 };
-use hgpui_render::abi::{BlurUniforms as BlurUniform, FontRasterizationUniforms, GlobalUniforms, PathRasterizationVertex, SurfaceUniforms};
+use hgpui_render::abi::{BlurUniforms as BlurUniform, FontRasterizationUniforms, GlobalUniforms, SurfaceUniforms};
 use hgpui::{
     AtlasTextureId, Background, Bounds, ContentMask, Corners, DevicePixels, FilterBoundary,
     MonochromeSprite, PaintSurface, Path, Point, PolychromeSprite, PrimitiveBatch, Quad,
@@ -35,7 +37,7 @@ use metal::{
 use objc::{self, msg_send, sel, sel_impl};
 use parking_lot::Mutex;
 
-use std::{cell::Cell, ffi::c_void, mem, ptr, sync::Arc};
+use std::{cell::{Cell, OnceCell}, ffi::c_void, mem, ptr, sync::Arc};
 
 // Exported to metal
 pub(crate) type PointF = hgpui::Point<f32>;
@@ -142,8 +144,7 @@ pub(crate) struct MetalRenderer {
     instance_buffer_pool: Arc<Mutex<InstanceBufferPool>>,
     sprite_atlas: Arc<MetalAtlas>,
     core_video_texture_cache: core_video::metal_texture_cache::CVMetalTextureCache,
-    path_intermediate_texture: Option<metal::Texture>,
-    path_intermediate_msaa_texture: Option<metal::Texture>,
+    path_targets: [OnceCell<MetalPathTargets>; PATH_TARGET_SLOTS],
     // Offscreen scene target (the scene is rendered here, then blitted to the drawable, so blur
     // passes can sample already-painted content), the half-res ping/pong blur targets, and a
     // full-res target for content-filter groups.
@@ -428,8 +429,7 @@ impl MetalRenderer {
             instance_buffer_pool,
             sprite_atlas,
             core_video_texture_cache,
-            path_intermediate_texture: None,
-            path_intermediate_msaa_texture: None,
+            path_targets: Default::default(),
             scene_color_texture: None,
             blur_ping_texture: None,
             blur_pong_texture: None,
@@ -518,8 +518,7 @@ impl MetalRenderer {
     /// Drops all size-dependent offscreen targets. They are recreated lazily by the `ensure_*`
     /// helpers on the next frame that actually needs them.
     fn invalidate_render_targets(&mut self) {
-        self.path_intermediate_texture = None;
-        self.path_intermediate_msaa_texture = None;
+        self.path_targets = Default::default();
         self.scene_color_texture = None;
         self.blur_ping_texture = None;
         self.blur_pong_texture = None;
@@ -537,36 +536,27 @@ impl MetalRenderer {
         self.device.new_texture(&descriptor)
     }
 
-    /// Full-resolution path target + optional MSAA target. Allocated on the first path batch.
-    fn ensure_path_intermediate_textures(&mut self, size: Size<DevicePixels>) {
-        if self.path_intermediate_texture.is_some() {
-            return;
-        }
-        if size.width.0 <= 0 || size.height.0 <= 0 {
-            return;
-        }
-        let full_w = size.width.0 as u64;
-        let full_h = size.height.0 as u64;
-        self.path_intermediate_texture = Some(self.new_color_texture(full_w, full_h));
-
-        if self.path_sample_count > 1 {
-            // Rendering MSAA textures is done in a single pass, so Apple Silicon can use
-            // memory-less storage.
-            let descriptor = metal::TextureDescriptor::new();
-            descriptor.set_width(full_w);
-            descriptor.set_height(full_h);
-            descriptor.set_pixel_format(metal::MTLPixelFormat::BGRA8Unorm);
-            descriptor.set_texture_type(metal::MTLTextureType::D2Multisample);
-            descriptor.set_storage_mode(if self.is_apple_gpu {
-                metal::MTLStorageMode::Memoryless
-            } else {
-                metal::MTLStorageMode::Private
+    fn path_targets(&self, target: PathTarget) -> &MetalPathTargets {
+        self.path_targets[target.slot()].get_or_init(|| {
+            let [width, height] = target.size().map(u64::from);
+            let resolved = self.new_color_texture(width, height);
+            let msaa = (self.path_sample_count > 1).then(|| {
+                // Memoryless storage keeps Apple GPU MSAA tiles off the backing store.
+                let descriptor = metal::TextureDescriptor::new();
+                descriptor.set_width(width);
+                descriptor.set_height(height);
+                descriptor.set_pixel_format(metal::MTLPixelFormat::BGRA8Unorm);
+                descriptor.set_texture_type(metal::MTLTextureType::D2Multisample);
+                descriptor.set_storage_mode(if self.is_apple_gpu {
+                    metal::MTLStorageMode::Memoryless
+                } else {
+                    metal::MTLStorageMode::Private
+                });
+                descriptor.set_sample_count(self.path_sample_count as _);
+                self.device.new_texture(&descriptor)
             });
-            descriptor.set_sample_count(self.path_sample_count as _);
-            self.path_intermediate_msaa_texture = Some(self.device.new_texture(&descriptor));
-        } else {
-            self.path_intermediate_msaa_texture = None;
-        }
+            MetalPathTargets { resolved, msaa }
+        })
     }
 
     /// Allocates the sampleable full-resolution scene target independently of blur scratch.
@@ -1011,10 +1001,6 @@ impl MetalRenderer {
         viewport_size: Size<DevicePixels>,
     ) -> Result<metal::CommandBuffer> {
         self.upload_content_masks(&scene.mask_chains, scene.mask_chains_fingerprint());
-        // Expensive full-resolution targets are allocated on demand.
-        if !scene.paths.is_empty() {
-            self.ensure_path_intermediate_textures(viewport_size);
-        }
         let use_offscreen = hgpui_render::needs_sampleable_root(scene);
         if use_offscreen {
             self.ensure_scene_color(viewport_size);
@@ -1090,8 +1076,10 @@ impl MetalRenderer {
                     let paths = &scene.paths[range];
                     command_encoder.end_encoding();
 
+                    let target = PathTarget::for_paths([viewport_size.width.0.max(1) as u32, viewport_size.height.0.max(1) as u32], paths);
                     let did_draw = self.draw_paths_to_intermediate(
                         paths,
+                        target,
                         instance_buffer,
                         &mut instance_offset,
                         viewport_size,
@@ -1110,6 +1098,7 @@ impl MetalRenderer {
                     if did_draw {
                         self.draw_paths_from_intermediate(
                             paths,
+                            target,
                             instance_buffer,
                             &mut instance_offset,
                             viewport_size,
@@ -1641,6 +1630,7 @@ impl MetalRenderer {
     fn draw_paths_to_intermediate(
         &self,
         paths: &[Path<ScaledPixels>],
+        target: PathTarget,
         instance_buffer: &mut InstanceBuffer,
         instance_offset: &mut usize,
         viewport_size: Size<DevicePixels>,
@@ -1649,9 +1639,8 @@ impl MetalRenderer {
         if paths.is_empty() {
             return true;
         }
-        let Some(intermediate_texture) = &self.path_intermediate_texture else {
-            return false;
-        };
+        let targets = self.path_targets(target);
+        let intermediate_texture = &targets.resolved;
 
         let render_pass_descriptor = metal::RenderPassDescriptor::new();
         let color_attachment = render_pass_descriptor
@@ -1661,7 +1650,7 @@ impl MetalRenderer {
         color_attachment.set_load_action(metal::MTLLoadAction::Clear);
         color_attachment.set_clear_color(metal::MTLClearColor::new(0., 0., 0., 0.));
 
-        if let Some(msaa_texture) = &self.path_intermediate_msaa_texture {
+        if let Some(msaa_texture) = &targets.msaa {
             color_attachment.set_texture(Some(msaa_texture));
             color_attachment.set_resolve_texture(Some(intermediate_texture));
             color_attachment.set_store_action(metal::MTLStoreAction::MultisampleResolve);
@@ -1677,15 +1666,7 @@ impl MetalRenderer {
         align_offset(instance_offset);
         let mut vertices = Vec::new();
         for path in paths {
-            vertices.extend(path.vertices.iter().map(|v| PathRasterizationVertex {
-                xy_position: v.xy_position,
-                curve_position: v.st_position,
-                color: path.color,
-                bounds: path.bounds,
-                content_mask: path.content_mask.bounds,
-                mask_chain: path.mask_chain,
-                padding: [0; 3],
-            }));
+            vertices.extend(path.vertices.iter().map(|vertex| target.vertex(path, vertex)));
         }
         let vertices_bytes_len = mem::size_of_val(vertices.as_slice());
         bind_instance_sizes(command_encoder, vertices_bytes_len);
@@ -1843,6 +1824,7 @@ impl MetalRenderer {
     fn draw_paths_from_intermediate(
         &self,
         paths: &[Path<ScaledPixels>],
+        target: PathTarget,
         instance_buffer: &mut InstanceBuffer,
         instance_offset: &mut usize,
         viewport_size: Size<DevicePixels>,
@@ -1852,9 +1834,7 @@ impl MetalRenderer {
             return true;
         };
 
-        let Some(ref intermediate_texture) = self.path_intermediate_texture else {
-            return false;
-        };
+        let intermediate_texture = &self.path_targets(target).resolved;
 
         command_encoder.set_render_pipeline_state(&self.path_sprites_pipeline_state);
         bind_global_uniforms(command_encoder, viewport_size, &self.mask_buffer);
@@ -1876,16 +1856,14 @@ impl MetalRenderer {
         if paths.last().unwrap().order == first_path.order {
             sprites = paths
                 .iter()
-                .map(|path| PathSprite {
-                    bounds: path.clipped_bounds(),
-                })
+                .map(|path| target.sprite(path.clipped_bounds()))
                 .collect();
         } else {
             let mut bounds = first_path.clipped_bounds();
             for path in paths.iter().skip(1) {
                 bounds = bounds.union(&path.clipped_bounds());
             }
-            sprites = vec![PathSprite { bounds }];
+            sprites = vec![target.sprite(bounds)];
         }
 
         align_offset(instance_offset);
@@ -2458,10 +2436,9 @@ enum PathRasterizationInputIndex {
     Vertices = 2,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[repr(C)]
-pub struct PathSprite {
-    pub bounds: Bounds<ScaledPixels>,
+struct MetalPathTargets {
+    resolved: metal::Texture,
+    msaa: Option<metal::Texture>,
 }
 
 #[cfg(any(test, feature = "test-support"))]
