@@ -347,7 +347,7 @@ struct WgpuResources {
     blur_pong_view: Option<wgpu::TextureView>,
     /// Full-resolution offscreen targets a content-filter (`filter`) group renders into before
     /// being blurred and composited back. One per nesting level (indexed by depth) so nested
-    /// content blurs isolate correctly, up to [`MAX_FILTER_DEPTH`]; deeper nests render inline.
+    /// content blurs isolate correctly, up to [`hgpui::MAX_FILTER_GROUP_DEPTH`]; deeper nests render inline.
     group_textures: Vec<wgpu::Texture>,
     group_views: Vec<wgpu::TextureView>,
     /// Full-resolution snapshot used by color-only backdrop filters, which read and write the
@@ -374,11 +374,6 @@ impl WgpuResources {
         self.filter_scratch_view = None;
     }
 }
-
-/// Number of content-filter (`filter`) nesting levels that get their own isolated group texture.
-/// Two covers the realistic "a blurred element inside another blurred element" case; deeper nests
-/// render inline (unblurred at the inner level) rather than allocating unbounded VRAM.
-const MAX_FILTER_DEPTH: usize = 2;
 
 /// Number of [`BlurParams`] slots in one blur-params buffer (one per blur pass per frame).
 /// Each frame uses 4 passes per backdrop/group plus one blit; 256 covers dozens of filters.
@@ -1744,12 +1739,9 @@ impl WgpuRenderer {
             }) {
                 self.ensure_filter_scratch();
             }
-            let required_groups = scene
-                .filter_boundaries
-                .iter()
-                .filter(|boundary| boundary.is_start)
-                .count()
-                .min(MAX_FILTER_DEPTH);
+            let required_groups = hgpui_render::filter_group_depth(
+                scene.filter_boundaries.iter().map(|boundary| boundary.is_start),
+            );
             if required_groups > 0 {
                 self.ensure_group_textures(required_groups);
             }
@@ -2088,7 +2080,7 @@ impl WgpuRenderer {
                             if boundary.is_start {
                                 // Each isolated nesting level uses its own group texture from the
                                 // pool (indexed by current isolation depth). Beyond the pool size
-                                // (MAX_FILTER_DEPTH) deeper filters render inline without isolation
+                                // (hgpui::MAX_FILTER_GROUP_DEPTH) deeper filters render inline without isolation
                                 // rather than corrupting an outer group.
                                 let depth = filter_stack.iter().filter(|entry| entry.3).count();
                                 if depth < group_views.len() {

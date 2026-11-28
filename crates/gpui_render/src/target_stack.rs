@@ -1,6 +1,24 @@
 use hgpui::MAX_FILTER_GROUP_DEPTH;
 use smallvec::SmallVec;
 
+/// Counts the isolation targets required by filter markers in paint order.
+pub fn filter_group_depth(boundaries: impl IntoIterator<Item = bool>) -> usize {
+    let mut depth = 0usize;
+    let mut peak = 0;
+    for start in boundaries {
+        if start {
+            depth += 1;
+            if depth == MAX_FILTER_GROUP_DEPTH {
+                return depth;
+            }
+            peak = peak.max(depth);
+        } else {
+            depth = depth.saturating_sub(1);
+        }
+    }
+    peak
+}
+
 /// Active render target and the parents visible to backdrop filters.
 pub struct TargetStack<Target> {
     current: Target,
@@ -71,6 +89,15 @@ impl<Target> TargetStack<Target> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sequential_filter_groups_share_one_target_but_nested_groups_need_two() {
+        // Same number of markers; only their actual lifetimes determine allocation.
+        assert_eq!(filter_group_depth([true, false, true, false]), 1);
+        assert_eq!(filter_group_depth([true, true, false, false]), 2);
+        assert_eq!(filter_group_depth([true, true, true, false, false, false]), 2);
+        assert_eq!(filter_group_depth([]), 0);
+    }
 
     #[test]
     fn nested_groups_inherit_backdrops_until_a_content_filter_and_restore_parents() {

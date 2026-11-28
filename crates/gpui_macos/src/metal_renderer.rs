@@ -43,12 +43,6 @@ pub(crate) type PointF = hgpui::Point<f32>;
 // https://developer.apple.com/documentation/metal/mtldevice/1433355-supportstexturesamplecount
 const PATH_SAMPLE_COUNT: u32 = 4;
 
-/// Number of content-filter (`filter`) nesting levels that get their own isolated group texture.
-/// Two covers the realistic "a blurred element inside another blurred element" case; deeper nests
-/// render inline (unblurred at the inner level) rather than allocating unbounded VRAM. Must match
-/// the wgpu backend's `MAX_FILTER_DEPTH` so nested blur renders consistently across platforms.
-const MAX_FILTER_DEPTH: usize = 2;
-
 pub(crate) type Context = Arc<Mutex<InstanceBufferPool>>;
 pub(crate) type Renderer = MetalRenderer;
 
@@ -157,7 +151,7 @@ pub(crate) struct MetalRenderer {
     blur_pong_texture: Option<metal::Texture>,
     /// Full-resolution offscreen targets a content-filter (`filter`) group renders into before
     /// being blurred and composited back. One per nesting level (indexed by isolation depth) so
-    /// nested content blurs isolate correctly, up to [`MAX_FILTER_DEPTH`]; deeper nests render
+    /// nested content blurs isolate correctly, up to [`hgpui::MAX_FILTER_GROUP_DEPTH`]; deeper nests render
     /// inline.
     group_textures: Vec<metal::Texture>,
     /// Full-resolution snapshot used by color-only backdrop filters, which read and write the
@@ -1025,12 +1019,9 @@ impl MetalRenderer {
             }) {
                 self.ensure_filter_scratch(viewport_size);
             }
-            let required_groups = scene
-                .filter_boundaries
-                .iter()
-                .filter(|boundary| boundary.is_start)
-                .count()
-                .min(MAX_FILTER_DEPTH);
+            let required_groups = hgpui_render::filter_group_depth(
+                scene.filter_boundaries.iter().map(|boundary| boundary.is_start),
+            );
             if required_groups > 0 {
                 self.ensure_group_textures(viewport_size, required_groups);
             }
@@ -1225,7 +1216,7 @@ impl MetalRenderer {
                     if boundary.is_start {
                         // Each isolated nesting level uses its own group texture from the pool
                         // (indexed by current isolation depth). Beyond the pool size
-                        // (MAX_FILTER_DEPTH) deeper filters render inline without isolation rather
+                        // (hgpui::MAX_FILTER_GROUP_DEPTH) deeper filters render inline without isolation rather
                         // than corrupting an outer group.
                         let depth = filter_stack.iter().filter(|entry| entry.2).count();
                         if depth < group_owned.len() {

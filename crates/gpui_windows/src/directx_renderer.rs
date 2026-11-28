@@ -33,12 +33,6 @@ const RENDER_TARGET_FORMAT: DXGI_FORMAT = DXGI_FORMAT_B8G8R8A8_UNORM;
 // This configuration is used for MSAA rendering on paths only, and it's guaranteed to be supported by DirectX 11.
 const PATH_MULTISAMPLE_COUNT: u32 = 4;
 
-/// Number of content-filter (`filter`) nesting levels that get their own isolated group target.
-/// Two covers the realistic "a blurred element inside another blurred element" case; deeper nests
-/// render inline (unblurred at the inner level) rather than allocating unbounded VRAM. Must match
-/// the wgpu backend's `MAX_FILTER_DEPTH` so nested blur renders consistently across platforms.
-const MAX_FILTER_DEPTH: usize = 2;
-
 pub(crate) struct FontInfo {
     pub gamma_ratios: [f32; 4],
     pub grayscale_enhanced_contrast: f32,
@@ -117,7 +111,7 @@ struct FilterScratch {
 /// Offscreen render targets used by the blur filters. The scene is rendered into `scene_color`
 /// (so filters can sample it), `ping`/`pong` are half-resolution scratch for the separable
 /// gaussian, and `groups` isolate content-filter (`filter`) subtrees — one per nesting level
-/// (indexed by isolation depth), up to [`MAX_FILTER_DEPTH`], so nested content blurs isolate
+/// (indexed by isolation depth), up to [`hgpui::MAX_FILTER_GROUP_DEPTH`], so nested content blurs isolate
 /// correctly; deeper nests render inline.
 struct BlurResources {
     scene_color: Option<ID3D11Texture2D>,
@@ -550,12 +544,9 @@ impl DirectXRenderer {
         // full-resolution color target; reserving the maximum depth for every window was a
         // significant fixed VRAM cost for apps that only use backdrop filters.
         if use_offscreen {
-            let required_groups = scene
-                .filter_boundaries
-                .iter()
-                .filter(|boundary| boundary.is_start)
-                .count()
-                .min(MAX_FILTER_DEPTH);
+            let required_groups = hgpui_render::filter_group_depth(
+                scene.filter_boundaries.iter().map(|boundary| boundary.is_start),
+            );
             if required_groups > 0 {
                 let device = self
                     .devices
@@ -724,7 +715,7 @@ impl DirectXRenderer {
                     if boundary.is_start {
                         // Each isolated nesting level uses its own group target from the pool
                         // (indexed by current isolation depth). Beyond the pool size
-                        // (MAX_FILTER_DEPTH) deeper filters render inline without isolation rather
+                        // (hgpui::MAX_FILTER_GROUP_DEPTH) deeper filters render inline without isolation rather
                         // than corrupting an outer group.
                         let depth = filter_stack.iter().filter(|entry| entry.3).count();
                         if depth < group_rtvs.len() {
@@ -6172,6 +6163,29 @@ mod tests {
         assert!(blur.scene_color_srv.is_some());
         assert!(blur.ping_rtv.is_some());
         assert!(blur.pong_rtv.is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn sequential_filter_groups_allocate_one_native_target() -> Result<()> {
+        let (device, _) = create_warp_device().expect("WARP is required to audit group targets");
+        let mut resources = super::BlurResources::new();
+        for (markers, expected) in [
+            ([true, false, true, false], 1),
+            ([true, true, false, false], 2),
+        ] {
+            let depth = hgpui_render::filter_group_depth(markers);
+            resources.ensure_group_targets(&device, 384, 216, depth)?;
+            assert_eq!(resources.groups.len(), expected);
+            assert_eq!(resources.group_rtvs.len(), expected);
+            assert_eq!(resources.group_srvs.len(), expected);
+            for target in &resources.groups {
+                let mut desc = D3D11_TEXTURE2D_DESC::default();
+                unsafe { target.GetDesc(&mut desc) };
+                assert_eq!((desc.Width, desc.Height), (384, 216));
+                assert_eq!(desc.Format, super::RENDER_TARGET_FORMAT);
+            }
+        }
         Ok(())
     }
 
