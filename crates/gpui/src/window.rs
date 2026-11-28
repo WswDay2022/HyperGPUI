@@ -3303,15 +3303,15 @@ impl Window {
         let should_send_a11y_update = a11y_active_start_of_frame && a11y_active_end_of_frame;
 
         if a11y_active_start_of_frame {
-            // Harvest frame metadata for the debug dump while the live window
-            // and frame are still in scope.
-            let frame_info = crate::window::a11y::debug::FrameDebugInfo {
-                viewport_size: self.viewport_size,
-                scale_factor: self.scale_factor,
-                tab_stop_count: self.next_frame.tab_stops.tab_stop_count(),
-            };
-            // clear the builder state regardless
-            let tree_update = self.a11y.end_frame(frame_info);
+            // Always finalize the platform tree. Frame metadata is only for the inspector.
+            let tree_update = self.a11y.end_frame(
+                #[cfg(any(debug_assertions, feature = "inspector"))]
+                crate::window::a11y::debug::FrameDebugInfo {
+                    viewport_size: self.viewport_size,
+                    scale_factor: self.scale_factor,
+                    tab_stop_count: self.next_frame.tab_stops.tab_stop_count(),
+                },
+            );
 
             if should_send_a11y_update {
                 log::debug!(
@@ -6803,8 +6803,18 @@ impl Window {
     }
 
     /// Debug representation of the last frame's accessibility information.
+    ///
+    /// Available in debug builds or with the `inspector` feature. Otherwise returns `None`;
+    /// the platform accessibility tree and actions are unaffected.
     pub fn debug_a11y_tree_json(&self) -> Option<String> {
-        self.a11y.debug_tree_json()
+        #[cfg(any(debug_assertions, feature = "inspector"))]
+        {
+            self.a11y.debug_tree_json()
+        }
+        #[cfg(not(any(debug_assertions, feature = "inspector")))]
+        {
+            None
+        }
     }
 
     /// Register a listener for an accessibility action on a specific node.

@@ -100,6 +100,7 @@
 
 use crate::*;
 
+#[cfg(any(debug_assertions, feature = "inspector"))]
 pub(crate) mod debug;
 
 use crate::{App, Bounds, FocusId, Pixels, SharedString, Window};
@@ -157,6 +158,7 @@ pub(crate) struct A11y {
     last_focus_without_node: Option<FocusId>,
     /// Retains the last tree update (and, in debug builds, per-node provenance)
     /// so it can be dumped via [`crate::Window::debug_a11y_tree_json`].
+    #[cfg(any(debug_assertions, feature = "inspector"))]
     debug: debug::A11yDebug,
     /// Maps a view's [`EntityId`] to its `Render` type name
     #[cfg(debug_assertions)]
@@ -179,6 +181,7 @@ impl A11y {
             action_listeners: FxHashMap::default(),
             window_title,
             last_focus_without_node: None,
+            #[cfg(any(debug_assertions, feature = "inspector"))]
             debug: debug::A11yDebug::default(),
             #[cfg(debug_assertions)]
             view_type_names: FxHashMap::default(),
@@ -278,8 +281,12 @@ impl A11y {
     }
 
     /// Finalize the tree and produce a [`TreeUpdate`] for the platform adapter.
-    pub(crate) fn end_frame(&mut self, frame: debug::FrameDebugInfo) -> TreeUpdate {
+    pub(crate) fn end_frame(
+        &mut self,
+        #[cfg(any(debug_assertions, feature = "inspector"))] frame: debug::FrameDebugInfo,
+    ) -> TreeUpdate {
         let update = self.nodes.finalize();
+        #[cfg(any(debug_assertions, feature = "inspector"))]
         self.debug.capture(
             &update,
             self.nodes.focus,
@@ -292,6 +299,7 @@ impl A11y {
         update
     }
 
+    #[cfg(any(debug_assertions, feature = "inspector"))]
     pub(crate) fn debug_tree_json(&self) -> Option<String> {
         self.debug.to_json()
     }
@@ -705,20 +713,16 @@ mod tests {
         window.update(cx, |_, window, _| window.refresh()).unwrap();
         cx.run_until_parked();
         let node_id = |cx: &mut crate::TestAppContext| {
-            window
-                .update(cx, |_, window, _| {
-                    let dump = window
-                        .debug_a11y_tree_json()
-                        .expect("no active accessibility tree");
-                    let tree: serde_json::Value = serde_json::from_str(&dump).unwrap();
-                    tree["nodes"]
-                        .as_object()
-                        .unwrap()
-                        .values()
-                        .find(|node| node["aria"]["label"].as_str() == Some("Cached action probe"))
-                        .map(|node| NodeId(node["accesskit_id"].as_str().unwrap().parse().unwrap()))
-                })
-                .unwrap()
+            let test_window = cx.test_window(window.into());
+            let state = test_window.0.lock();
+            state
+                .last_a11y_tree
+                .as_ref()
+                .expect("the platform must receive the accessibility tree")
+                .nodes
+                .iter()
+                .find(|(_, node)| node.label() == Some("Cached action probe"))
+                .map(|(id, _)| *id)
         };
         let original_id = node_id(cx).expect("button missing on the first accessible frame");
         redraw_parent(cx);
@@ -744,6 +748,15 @@ mod tests {
             })
             .unwrap();
         assert_eq!(clicks.get(), 1, "the same node must still route its action");
+        window
+            .update(cx, |_, window, _| {
+                assert_eq!(
+                    window.debug_a11y_tree_json().is_some(),
+                    cfg!(any(debug_assertions, feature = "inspector")),
+                    "default Release must deliver the tree without retaining a debug snapshot"
+                );
+            })
+            .unwrap();
 
         active.store(false, Ordering::SeqCst);
         window.update(cx, |_, window, _| window.refresh()).unwrap();
@@ -751,6 +764,67 @@ mod tests {
         let rendered = renders.get();
         redraw_parent(cx);
         assert_eq!(renders.get(), rendered, "deactivating accessibility must restore reuse");
+    }
+
+    #[cfg(feature = "inspector")]
+    #[test]
+    #[ignore = "compare the platform finalizer and inspector snapshot in Release"]
+    fn accessibility_snapshot_benchmark() {
+        use crate::elements::test_allocations::measure;
+        use std::{hint::black_box, time::{Duration, Instant}};
+
+        const NODES: usize = 256;
+        const FRAMES: usize = 100;
+        let run = |capture: bool| {
+            let mut a11y = new_a11y();
+            let mut elapsed = Duration::ZERO;
+            let mut requests = 0;
+            let mut bytes = 0;
+            for _ in 0..FRAMES {
+                a11y.begin_frame();
+                for id in 1..=NODES {
+                    let mut node = test_node();
+                    node.set_label(format!("Workspace action {id}"));
+                    assert!(a11y.nodes.push(NodeId(id as u64), node));
+                    a11y.nodes.pop();
+                }
+                let (update, allocations) = measure(|| {
+                    let start = Instant::now();
+                    let update = if capture {
+                        a11y.end_frame(Default::default())
+                    } else {
+                        a11y.nodes.finalize()
+                    };
+                    elapsed += start.elapsed();
+                    black_box(update)
+                });
+                assert_eq!(update.nodes.len(), NODES + 1);
+                requests += allocations.count;
+                bytes += allocations.requested_bytes;
+            }
+            (elapsed, requests, bytes)
+        };
+        let mut with_snapshot = Vec::new();
+        let mut platform_only = Vec::new();
+        for round in 0..7 {
+            if round % 2 == 0 {
+                with_snapshot.push(run(true));
+                platform_only.push(run(false));
+            } else {
+                platform_only.push(run(false));
+                with_snapshot.push(run(true));
+            }
+        }
+        with_snapshot.sort_by_key(|run| run.0);
+        platform_only.sort_by_key(|run| run.0);
+        let (old, new) = (with_snapshot[3], platform_only[3]);
+        assert!(old.1 > new.1 && old.2 > new.2);
+        eprintln!(
+            "AccessKit {NODES} nodes x {FRAMES} frames: requests {}->{}, bytes {}->{}, median us/frame {:.2}->{:.2}",
+            old.1, new.1, old.2, new.2,
+            old.0.as_secs_f64() * 1e6 / FRAMES as f64,
+            new.0.as_secs_f64() * 1e6 / FRAMES as f64,
+        );
     }
 
     fn test_node() -> accesskit::Node {
@@ -997,7 +1071,10 @@ mod tests {
         a11y.nodes.pop(); // c
         a11y.nodes.pop(); // b
 
-        let update = a11y.end_frame(Default::default());
+        let update = a11y.end_frame(
+            #[cfg(any(debug_assertions, feature = "inspector"))]
+            Default::default(),
+        );
         assert_eq!(update.focus, a);
     }
 }

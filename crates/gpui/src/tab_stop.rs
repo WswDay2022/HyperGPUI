@@ -197,6 +197,7 @@ impl TabStopMap {
         self.insertion_history.len()
     }
 
+    #[cfg(any(debug_assertions, feature = "inspector"))]
     pub(crate) fn tab_stop_count(&self) -> usize {
         self.by_id.values().filter(|node| node.tab_stop).count()
     }

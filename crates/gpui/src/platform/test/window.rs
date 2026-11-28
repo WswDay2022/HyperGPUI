@@ -17,6 +17,8 @@ use std::{
 };
 
 pub(crate) struct TestWindowState {
+    #[cfg(test)]
+    pub(crate) last_a11y_tree: Option<accesskit::TreeUpdate>,
     pub(crate) bounds: Bounds<Pixels>,
     pub(crate) handle: AnyWindowHandle,
     display: Rc<dyn PlatformDisplay>,
@@ -74,6 +76,8 @@ impl TestWindow {
             None => Arc::new(TestAtlas::new()),
         };
         Self(Rc::new(Mutex::new(TestWindowState {
+            #[cfg(test)]
+            last_a11y_tree: None,
             bounds: params.bounds,
             display,
             platform,
@@ -324,6 +328,11 @@ impl PlatformWindow for TestWindow {
 
     fn on_appearance_changed(&self, callback: Box<dyn FnMut()>) {
         self.0.lock().appearance_change_callback = Some(callback);
+    }
+
+    #[cfg(test)]
+    fn a11y_tree_update(&self, update: accesskit::TreeUpdate) {
+        self.0.lock().last_a11y_tree = Some(update);
     }
 
     fn draw(&self, scene: &Scene) {
