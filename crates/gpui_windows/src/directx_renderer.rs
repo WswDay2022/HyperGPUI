@@ -1,6 +1,7 @@
 use std::{
     slice,
     sync::{Arc, OnceLock},
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result};
@@ -15,6 +16,7 @@ use windows::{
             DirectWrite::*,
             Dxgi::{Common::*, *},
         },
+        UI::WindowsAndMessaging::{KillTimer, SetTimer},
     },
     core::{HSTRING, Interface},
 };
@@ -32,6 +34,8 @@ use hgpui_render::filter_matrix::{
 };
 
 pub(crate) const DISABLE_DIRECT_COMPOSITION: &str = "GPUI_DISABLE_DIRECT_COMPOSITION";
+pub(crate) const RESIZE_TRIM_TIMER_ID: usize = 2;
+const RESIZE_TRIM_INTERVAL_MS: u32 = 250;
 const RENDER_TARGET_FORMAT: DXGI_FORMAT = DXGI_FORMAT_B8G8R8A8_UNORM;
 // This configuration is used for MSAA rendering on paths only, and it's guaranteed to be supported by DirectX 11.
 const PATH_MULTISAMPLE_COUNT: u32 = 4;
@@ -67,6 +71,7 @@ pub(crate) struct DirectXRenderer {
     /// group, or the swapchain otherwise). `draw_paths_to_intermediate` restores to this after
     /// its own pass so paths land on the correct target.
     active_render_target: Option<ID3D11RenderTargetView>,
+    resize_trim_at: Option<Instant>,
 }
 
 /// Direct3D objects
@@ -342,6 +347,7 @@ impl DirectXRenderer {
             height: 1,
             skip_draws: false,
             active_render_target: None,
+            resize_trim_at: None,
         })
     }
 
@@ -421,6 +427,7 @@ impl DirectXRenderer {
     }
 
     fn handle_device_lost_impl(&mut self, directx_devices: &DirectXDevices) -> Result<()> {
+        self.cancel_resize_trim();
         let disable_direct_composition = self.direct_composition.is_none();
 
         unsafe {
@@ -798,12 +805,25 @@ impl DirectXRenderer {
         self.width = width;
         self.height = height;
 
-        // Clear the render target before resizing
         let devices = self.devices.as_ref().context("devices missing")?;
-        unsafe { devices.device_context.OMSetRenderTargets(None, None) };
+        let context = &devices.device_context;
         let resources = self.resources.as_mut().context("resources missing")?;
-        resources.render_target.take();
-        resources.render_target_view.take();
+        self.active_render_target = None;
+        unsafe { context.OMSetRenderTargets(None, None) };
+        resources.render_target_view = None;
+        resources.render_target = None;
+
+        // Retire the old offscreen targets before allocating the resized swap chain. Blur and
+        // paths use t3; unbind it as well, including when the last draw aborted mid-pass.
+        let retired_offscreen = resources.has_offscreen_targets();
+        if retired_offscreen {
+            let empty = [None];
+            unsafe {
+                context.VSSetShaderResources(3, Some(&empty));
+                context.PSSetShaderResources(3, Some(&empty));
+            }
+            resources.invalidate_offscreen_targets();
+        }
 
         // Resizing the swap chain requires a call to the underlying DXGI adapter, which can return the device removed error.
         // The app might have moved to a monitor that's attached to a different graphics device.
@@ -835,7 +855,51 @@ impl DirectXRenderer {
                 .OMSetRenderTargets(Some(slice::from_ref(&resources.render_target_view)), None);
         }
 
+        if retired_offscreen || self.resize_trim_at.is_some() {
+            self.defer_resize_trim();
+        }
         Ok(())
+    }
+
+    fn defer_resize_trim(&mut self) {
+        // Keep one timer across the entire resize burst. Moving the deadline is enough;
+        // don't flush or ask the driver to release its reusable allocations on each WM_SIZE.
+        if self.resize_trim_at.is_none()
+            && unsafe {
+                SetTimer(Some(self.hwnd), RESIZE_TRIM_TIMER_ID, RESIZE_TRIM_INTERVAL_MS, None)
+            } == 0
+        {
+            log::warn!(
+                "Could not schedule DXGI resize trim: {}",
+                std::io::Error::last_os_error()
+            );
+            return;
+        }
+        self.resize_trim_at =
+            Some(Instant::now() + Duration::from_millis(u64::from(RESIZE_TRIM_INTERVAL_MS)));
+    }
+
+    fn cancel_resize_trim(&mut self) {
+        if self.resize_trim_at.take().is_some() {
+            unsafe { KillTimer(Some(self.hwnd), RESIZE_TRIM_TIMER_ID) }.log_err();
+        }
+    }
+
+    pub(crate) fn trim_after_resize(&mut self) {
+        if !self.resize_trim_at.is_some_and(|deadline| Instant::now() >= deadline) {
+            return;
+        }
+        self.cancel_resize_trim();
+        if let Some(devices) = &self.devices
+            && let Ok(dxgi_device) = devices.device.cast::<IDXGIDevice3>()
+        {
+            // Submit any outstanding releases, then let DXGI reclaim unused driver allocations.
+            // Neither the image atlas nor the new window-sized render targets are dropped.
+            unsafe {
+                devices.device_context.Flush();
+                dxgi_device.Trim();
+            }
+        }
     }
 
     fn upload_scene_buffers(&mut self, scene: &Scene) -> Result<()> {
@@ -1606,12 +1670,23 @@ impl DirectXResources {
             create_resources(devices, &self.swap_chain, width, height)?;
         self.render_target = Some(render_target);
         self.render_target_view = render_target_view;
-        // Lazily recreated at the new size on the next path batch.
+        self.viewport = viewport;
+        Ok(())
+    }
+
+    fn has_offscreen_targets(&self) -> bool {
+        self.blur.scene_color.is_some()
+            || self.blur.ping.is_some()
+            || !self.blur.groups.is_empty()
+            || self.filter_scratch.is_some()
+            || self.path_targets.iter().any(Option::is_some)
+    }
+
+    fn invalidate_offscreen_targets(&mut self) {
+        // Recreated lazily when the next scene actually needs each target.
         self.path_targets = Default::default();
         self.filter_scratch = None;
         self.blur = BlurResources::new();
-        self.viewport = viewport;
-        Ok(())
     }
 }
 

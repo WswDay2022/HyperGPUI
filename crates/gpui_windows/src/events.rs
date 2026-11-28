@@ -318,6 +318,13 @@ impl WindowsWindowInner {
     }
 
     fn handle_timer_msg(&self, handle: HWND, wparam: WPARAM) -> Option<isize> {
+        #[cfg(not(feature = "wgpu"))]
+        if wparam.0 == crate::directx_renderer::RESIZE_TRIM_TIMER_ID {
+            if let Ok(mut renderer) = self.state.renderer.try_borrow_mut() {
+                renderer.trim_after_resize();
+            }
+            return Some(0);
+        }
         if wparam.0 == SIZE_MOVE_LOOP_TIMER_ID {
             let mut runnables = self.main_receiver.clone().try_iter();
             while let Some(Ok(runnable)) = runnables.next() {
