@@ -4,7 +4,7 @@ use hgpui::{
     AtlasTextureId, BackdropFilter, Bounds, ContentMask, DevicePixels,
     FilterBoundary, GpuSpecs, MonochromeSprite, PaintSurface, Path, Point, PolychromeSprite,
     PrimitiveBatch, Quad, ScaledFilter, ScaledPixels, Scene, Shadow, Size, SubpixelSprite,
-    Underline, get_gamma_correction_ratios,
+    TransformationMatrix, Underline, get_gamma_correction_ratios,
 };
 use hgpui_render::blur_region::{blur_pass_plan, filter_copy_region};
 use hgpui_render::shaders::interface;
@@ -241,9 +241,25 @@ where
     Cow::Owned(visible)
 }
 
+fn visible_transformed_items<'a, T: Clone>(
+    items: &'a [T],
+    viewport: &Bounds<ScaledPixels>,
+    geometry: impl Fn(&T) -> (Bounds<ScaledPixels>, &TransformationMatrix),
+) -> std::borrow::Cow<'a, [T]> {
+    // Use the same scene-space rectangle as the shared Scene's ordering/culling.
+    visible_items(items, viewport, |item| {
+        let (bounds, transform) = geometry(item);
+        if *transform == TransformationMatrix::unit() {
+            bounds
+        } else {
+            transform.aabb_of_rect(bounds)
+        }
+    })
+}
+
 #[cfg(test)]
 mod visibility_tests {
-    use super::visible_items;
+    use super::{Quad, TransformationMatrix, visible_items, visible_transformed_items};
     use hgpui::{Bounds, ScaledPixels, bounds, point, size};
     use std::cell::Cell;
 
@@ -252,6 +268,36 @@ mod visibility_tests {
             point(ScaledPixels(x), ScaledPixels(0.0)),
             size(ScaledPixels(width), ScaledPixels(2.0)),
         )
+    }
+
+    #[test]
+    fn viewport_culling_keeps_quads_moved_into_view_and_borrows_the_source_batch() {
+        let viewport = rect(0.0, 100.0);
+        let translate_x = |x| {
+            TransformationMatrix::unit().translate(point(ScaledPixels(x), ScaledPixels(0.0)))
+        };
+        let quads = [
+            Quad {
+                bounds: rect(8.0, 3.0),
+                transformation: translate_x(120.0),
+                ..Default::default()
+            },
+            Quad {
+                bounds: rect(-24.0, 16.0),
+                transformation: translate_x(40.0),
+                ..Default::default()
+            },
+            Quad {
+                bounds: rect(20.0, 6.0),
+                ..Default::default()
+            },
+        ];
+        let visible = visible_transformed_items(&quads, &viewport, |quad| {
+            (quad.bounds, &quad.transformation)
+        });
+        assert_eq!(visible.len(), 2);
+        assert_eq!(visible[0].bounds, quads[1].bounds, "the translated-in quad must be first");
+        assert_eq!(visible.as_ptr(), quads[1..].as_ptr());
     }
 
     #[test]
@@ -1932,7 +1978,9 @@ impl WgpuRenderer {
                     let ok = match batch {
                         PrimitiveBatch::Quads { range, smoothed } => {
                             let quads = &scene.quads[range];
-                            let visible_quads = visible_items(quads, &viewport_bounds, |q| q.bounds);
+                            let visible_quads = visible_transformed_items(quads, &viewport_bounds, |q| {
+                                (q.bounds, &q.transformation)
+                            });
                             self.frame_stats.quads += visible_quads.len();
                             if !visible_quads.is_empty() {
                                 self.draw_quads(&visible_quads, smoothed, &mut instance_offset, &mut pass)
@@ -2002,7 +2050,9 @@ impl WgpuRenderer {
                         PrimitiveBatch::Underlines(range) => {
                             let underlines = &scene.underlines[range];
                             let visible_underlines =
-                                visible_items(underlines, &viewport_bounds, |u| u.bounds);
+                                visible_transformed_items(underlines, &viewport_bounds, |u| {
+                                    (u.bounds, &u.transformation)
+                                });
                             self.frame_stats.underlines += visible_underlines.len();
                             if !visible_underlines.is_empty() {
                                 self.draw_underlines(&visible_underlines, &mut instance_offset, &mut pass)
@@ -2013,7 +2063,9 @@ impl WgpuRenderer {
                         PrimitiveBatch::MonochromeSprites { texture_id, range } => {
                             let sprites = &scene.monochrome_sprites[range];
                             let visible_sprites =
-                                visible_items(sprites, &viewport_bounds, |s| s.bounds);
+                                visible_transformed_items(sprites, &viewport_bounds, |s| {
+                                    (s.bounds, &s.transformation)
+                                });
                             self.frame_stats.monochrome_sprites += visible_sprites.len();
                             if !visible_sprites.is_empty() {
                                 self.draw_monochrome_sprites(&visible_sprites, texture_id, &mut instance_offset, &mut pass)
@@ -2024,7 +2076,9 @@ impl WgpuRenderer {
                         PrimitiveBatch::SubpixelSprites { texture_id, range } => {
                             let sprites = &scene.subpixel_sprites[range];
                             let visible_sprites =
-                                visible_items(sprites, &viewport_bounds, |s| s.bounds);
+                                visible_transformed_items(sprites, &viewport_bounds, |s| {
+                                    (s.bounds, &s.transformation)
+                                });
                             self.frame_stats.subpixel_sprites += visible_sprites.len();
                             if !visible_sprites.is_empty() {
                                 self.draw_subpixel_sprites(&visible_sprites, texture_id, &mut instance_offset, &mut pass)
@@ -2035,7 +2089,9 @@ impl WgpuRenderer {
                         PrimitiveBatch::PolychromeSprites { texture_id, range, smoothed } => {
                             let sprites = &scene.polychrome_sprites[range];
                             let visible_sprites =
-                                visible_items(sprites, &viewport_bounds, |s| s.bounds);
+                                visible_transformed_items(sprites, &viewport_bounds, |s| {
+                                    (s.bounds, &s.transformation)
+                                });
                             self.frame_stats.polychrome_sprites += visible_sprites.len();
                             if !visible_sprites.is_empty() {
                                 self.draw_polychrome_sprites(&visible_sprites, texture_id, smoothed, &mut instance_offset, &mut pass)
