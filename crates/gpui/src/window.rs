@@ -941,10 +941,7 @@ pub(crate) struct DeferredDraw {
     parent_node: DispatchNodeId,
     element_id_stack: SmallVec<[ElementId; 32]>,
     text_style_stack: Vec<TextStyleRefinement>,
-    content_mask: Option<ContentMask<Pixels>>,
-    /// The raw clip masks active where the draw was deferred. The deferred element is replayed
-    /// after the main tree has unwound, so its exact clip chain has to be restored explicitly.
-    raw_content_masks: Vec<ContentMask<Pixels>>,
+    clip: DeferredClip,
     /// The composite CSS transform of the deferred element's styled ancestors,
     /// captured at the moment the draw was deferred. The element is reprepainted
     /// and painted under this matrix, since it leaves its ancestor stack once
@@ -955,6 +952,14 @@ pub(crate) struct DeferredDraw {
     absolute_offset: Point<Pixels>,
     prepaint_range: Range<PrepaintStateIndex>,
     paint_range: Range<PaintIndex>,
+}
+
+#[derive(Clone, Default)]
+struct DeferredClip {
+    /// The effective clip used by primitive bounds, hitboxes and nested clip scopes.
+    mask: Option<ContentMask<Pixels>>,
+    /// The original masks, before folding, for an exact rounded/faded clip chain.
+    raw_masks: Vec<ContentMask<Pixels>>,
 }
 
 pub(crate) struct Frame {
@@ -3343,7 +3348,7 @@ impl Window {
             traversal_order.sort_by_key(|ix| self.next_frame.deferred_draws[*ix].priority);
 
             for deferred_draw_ix in traversal_order {
-                let (element, parent_node, current_view, transform, rem_size, absolute_offset, prepaint_range) = {
+                let (element, parent_node, current_view, transform, clip, rem_size, absolute_offset, prepaint_range) = {
                     let deferred_draw = &mut self.next_frame.deferred_draws[deferred_draw_ix];
                     self.element_id_stack
                         .clone_from(&deferred_draw.element_id_stack);
@@ -3354,6 +3359,7 @@ impl Window {
                         deferred_draw.parent_node,
                         deferred_draw.current_view,
                         deferred_draw.transform,
+                        mem::take(&mut deferred_draw.clip),
                         deferred_draw.rem_size,
                         deferred_draw.absolute_offset,
                         deferred_draw.prepaint_range.clone(),
@@ -3367,10 +3373,12 @@ impl Window {
                         // Re-prepaint under the composite transform captured at defer time, so
                         // nested deferred draws prepainted here inherit the same matrix they
                         // were captured with.
-                        window.with_transform(transform, |window| {
-                            window.with_rem_size(Some(rem_size), |window| {
-                                window.with_absolute_element_offset(absolute_offset, |window| {
-                                    element.prepaint(window, cx);
+                        window.with_deferred_clip(&clip, |window| {
+                            window.with_transform(transform, |window| {
+                                window.with_rem_size(Some(rem_size), |window| {
+                                    window.with_absolute_element_offset(absolute_offset, |window| {
+                                        element.prepaint(window, cx);
+                                    });
                                 });
                             });
                         });
@@ -3380,8 +3388,9 @@ impl Window {
                     self.reuse_prepaint(prepaint_range);
                 }
                 let prepaint_end = self.prepaint_index();
-                self.next_frame.deferred_draws[deferred_draw_ix].prepaint_range =
-                    prepaint_start..prepaint_end;
+                let draw = &mut self.next_frame.deferred_draws[deferred_draw_ix];
+                draw.clip = clip;
+                draw.prepaint_range = prepaint_start..prepaint_end;
             }
 
             self.element_id_stack.clear();
@@ -3415,20 +3424,15 @@ impl Window {
                 .set_active_node(deferred_draw.parent_node);
 
             let paint_start = self.paint_index();
-            let content_mask = deferred_draw.content_mask;
-            let transform = deferred_draw.transform;
-            let raw_content_masks = deferred_draw.raw_content_masks.clone();
             if let Some(element) = deferred_draw.element.as_mut() {
                 self.with_rendered_view(deferred_draw.current_view, |window| {
-                    // The main tree's transform stack has unwound by the time deferred draws
-                    // are painted, so replay under the matrix captured at defer time.
-                    window.with_restored_raw_masks(&raw_content_masks, |window| {
-                        window.with_transform(transform, |window| {
-                            window.with_content_mask(content_mask, |window| {
-                                window.with_rem_size(Some(deferred_draw.rem_size), |window| {
-                                    element.paint(window, cx);
-                                });
-                            })
+                    // The main tree's transform and clip have unwound. Restore the same
+                    // context used for deferred prepaint before painting these primitives.
+                    window.with_deferred_clip(&deferred_draw.clip, |window| {
+                        window.with_transform(deferred_draw.transform, |window| {
+                            window.with_rem_size(Some(deferred_draw.rem_size), |window| {
+                                element.paint(window, cx);
+                            });
                         })
                     })
                 })
@@ -3493,8 +3497,7 @@ impl Window {
                     parent_node: reused_subtree.refresh_node_id(deferred_draw.parent_node),
                     element_id_stack: deferred_draw.element_id_stack.clone(),
                     text_style_stack: deferred_draw.text_style_stack.clone(),
-                    content_mask: deferred_draw.content_mask,
-                    raw_content_masks: deferred_draw.raw_content_masks.clone(),
+                    clip: deferred_draw.clip.clone(),
                     transform: deferred_draw.transform,
                     rem_size: deferred_draw.rem_size,
                     priority: deferred_draw.priority,
@@ -3786,24 +3789,22 @@ impl Window {
             || mask.fade_out.left.0 > 0.0
     }
 
-    /// Replays a deferred draw under the raw clip masks captured when it was deferred. The main
-    /// tree's clip scopes have already unwound by then, so the chain has to be restored for the
-    /// element's primitives (and for any further `with_content_mask` calls it makes).
-    fn with_restored_raw_masks<R>(
-        &mut self,
-        masks: &[ContentMask<Pixels>],
-        f: impl FnOnce(&mut Self) -> R,
-    ) -> R {
-        if masks.is_empty() {
+    /// Restores the captured clip after the main tree's clip scopes have unwound.
+    /// Install the effective mask separately so it does not enter the chain as an extra raw mask.
+    fn with_deferred_clip<R>(&mut self, clip: &DeferredClip, f: impl FnOnce(&mut Self) -> R) -> R {
+        let Some(mask) = clip.mask else {
             return f(self);
-        }
-        let base = self.raw_content_mask_stack.len();
-        self.raw_content_mask_stack.extend_from_slice(masks);
-        let chain = self.intern_current_mask_chain(None);
+        };
+        debug_assert!(self.content_mask_stack.is_empty() && self.raw_content_mask_stack.is_empty());
+        self.content_mask_stack.push(mask);
+        self.raw_content_mask_stack.extend_from_slice(&clip.raw_masks);
+        let snapped_mask = self.snapped_mask(&mask);
+        let chain = self.intern_current_mask_chain(Some(snapped_mask));
         self.mask_chain_stack.push(chain);
         let result = f(self);
         self.mask_chain_stack.pop();
-        self.raw_content_mask_stack.truncate(base);
+        self.raw_content_mask_stack.clear();
+        self.content_mask_stack.pop();
         result
     }
 
@@ -4188,8 +4189,8 @@ impl Window {
     /// at a later time. The `priority` parameter determines the drawing order relative to other deferred elements,
     /// with higher values being drawn on top.
     ///
-    /// When `content_mask` is provided, the deferred element will be clipped to that region during
-    /// both prepaint and paint. When `None`, no additional clipping is applied.
+    /// The deferred element inherits the current clip during both prepaint and paint. When
+    /// `content_mask` is provided, it further restricts that clip.
     ///
     /// This method should only be called as part of the prepaint phase of element drawing.
     pub fn defer_draw(
@@ -4199,13 +4200,15 @@ impl Window {
         priority: usize,
         content_mask: Option<ContentMask<Pixels>>,
     ) {
-        self.defer_draw_with_context_mask(
-            element,
-            absolute_offset,
-            priority,
-            content_mask,
-            true,
-        );
+        let mut clip = DeferredClip {
+            mask: self.content_mask_stack.last().copied(),
+            raw_masks: self.raw_content_mask_stack.clone(),
+        };
+        if let Some(mask) = content_mask {
+            clip.mask = Some(mask.intersect(&self.content_mask()));
+            clip.raw_masks.push(mask);
+        }
+        self.defer_draw_with_clip(element, absolute_offset, priority, clip);
     }
 
     pub(crate) fn defer_draw_ignoring_context_mask(
@@ -4214,16 +4217,15 @@ impl Window {
         absolute_offset: Point<Pixels>,
         priority: usize,
     ) {
-        self.defer_draw_with_context_mask(element, absolute_offset, priority, None, false);
+        self.defer_draw_with_clip(element, absolute_offset, priority, DeferredClip::default());
     }
 
-    fn defer_draw_with_context_mask(
+    fn defer_draw_with_clip(
         &mut self,
         element: AnyElement,
         absolute_offset: Point<Pixels>,
         priority: usize,
-        content_mask: Option<ContentMask<Pixels>>,
-        inherit_context_mask: bool,
+        clip: DeferredClip,
     ) {
         self.invalidator.debug_assert_prepaint();
         let parent_node = self.next_frame.dispatch_tree.active_node_id().unwrap();
@@ -4232,12 +4234,7 @@ impl Window {
             parent_node,
             element_id_stack: self.element_id_stack.clone(),
             text_style_stack: self.text_style_stack.clone(),
-            content_mask,
-            raw_content_masks: if inherit_context_mask {
-                self.raw_content_mask_stack.clone()
-            } else {
-                Vec::new()
-            },
+            clip,
             transform: self.transform_stack.last().copied(),
             rem_size: self.rem_size(),
             priority,

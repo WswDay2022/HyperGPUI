@@ -29,10 +29,9 @@ impl Deferred {
         self
     }
 
-    /// Paints this deferred element without the inherited `context_mask`.
+    /// Lets this deferred element paint and receive pointer events outside ancestor clips.
     ///
-    /// This allows deferred content such as popovers to escape clipping from
-    /// ancestor elements. The window's viewport clipping still applies.
+    /// The window's viewport clipping and clips inside the deferred element still apply.
     pub fn ignore_mask(mut self) -> Self {
         self.ignore_mask = true;
         self
@@ -118,6 +117,65 @@ mod tests {
     };
 
     #[hgpui::test]
+    fn deferred_popup_uses_the_same_rectangular_clip_for_paint_and_clicks(cx: &mut TestAppContext) {
+        use crate::{Modifiers, VisualTestContext};
+        use std::{cell::Cell, rc::Rc};
+
+        const POPUP: u32 = 0x336699;
+        struct ClipProbe {
+            escape: bool,
+            clicks: Rc<Cell<usize>>,
+        }
+        impl Render for ClipProbe {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                let clicks = self.clicks.clone();
+                let popup = deferred(
+                    div()
+                        .id("popup")
+                        .absolute()
+                        .left(px(80.))
+                        .top(px(10.))
+                        .size(px(60.))
+                        .background(crate::rgb(POPUP))
+                        .on_click(move |_, _, _| clicks.set(clicks.get() + 1)),
+                );
+                div().relative().size(px(100.)).overflow_hidden().child(
+                    if self.escape { popup.ignore_mask() } else { popup },
+                )
+            }
+        }
+
+        for (escape, clip_right, expected_clicks) in [(false, 100., 1), (true, 120., 2)] {
+            let clicks = Rc::new(Cell::new(0));
+            let view_clicks = clicks.clone();
+            let window = cx.open_window(size(px(120.), px(120.)), move |_, _| ClipProbe {
+                escape,
+                clicks: view_clicks,
+            });
+            let mut visual = VisualTestContext::from_window(window.into(), cx);
+            visual.run_until_parked();
+            visual.simulate_click(point(px(90.), px(25.)), Modifiers::default());
+            visual.simulate_click(point(px(110.), px(25.)), Modifiers::default());
+            let right = visual.update(|window, _| {
+                let solid = crate::Background::from(crate::rgb(POPUP)).solid;
+                let popup = window
+                    .rendered_frame
+                    .scene
+                    .quads
+                    .iter()
+                    .find(|quad| quad.background.solid == solid)
+                    .expect("popup quad missing");
+                popup.content_mask.bounds.right().0 / window.scale_factor()
+            });
+            assert_eq!(
+                (right, clicks.get()),
+                (clip_right, expected_clicks),
+                "escape={escape}"
+            );
+        }
+    }
+
+    #[hgpui::test]
     fn deferred_can_opt_out_of_ancestor_clip_masks(cx: &mut TestAppContext) {
         struct ClipProbe {
             ignore_mask: bool,
@@ -157,7 +215,9 @@ mod tests {
                 assert!(!quads.is_empty(), "the deferred popup should be painted");
                 if expect_clipped {
                     assert!(
-                        quads.iter().any(|quad| quad.mask_chain != 0),
+                        quads.iter().any(|quad| {
+                            quad.mask_chain != 0 || quad.content_mask.corner_radii.top_left.0 > 0.
+                        }),
                         "default deferred draws must retain the ancestor rounded clip"
                     );
                 } else {
