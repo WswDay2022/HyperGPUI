@@ -8,6 +8,7 @@ pub fn deferred(child: impl IntoElement) -> Deferred {
     Deferred {
         child: Some(child.into_any_element()),
         priority: 0,
+        ignore_mask: false,
     }
 }
 
@@ -16,6 +17,7 @@ pub fn deferred(child: impl IntoElement) -> Deferred {
 pub struct Deferred {
     child: Option<AnyElement>,
     priority: usize,
+    ignore_mask: bool,
 }
 
 impl Deferred {
@@ -24,6 +26,15 @@ impl Deferred {
     /// with higher values being drawn on top.
     pub fn with_priority(mut self, priority: usize) -> Self {
         self.priority = priority;
+        self
+    }
+
+    /// Paints this deferred element without the inherited `context_mask`.
+    ///
+    /// This allows deferred content such as popovers to escape clipping from
+    /// ancestor elements. The window's viewport clipping still applies.
+    pub fn ignore_mask(mut self) -> Self {
+        self.ignore_mask = true;
         self
     }
 }
@@ -62,7 +73,11 @@ impl Element for Deferred {
     ) {
         let child = self.child.take().unwrap();
         let element_offset = window.element_offset();
-        window.defer_draw(child, element_offset, self.priority, None)
+        if self.ignore_mask {
+            window.defer_draw_ignoring_context_mask(child, element_offset, self.priority)
+        } else {
+            window.defer_draw(child, element_offset, self.priority, None)
+        }
     }
 
     fn paint(
@@ -101,6 +116,60 @@ mod tests {
         Context, Entity, StyleRefinement, TestAppContext, Window, anchored, deferred, div, point,
         prelude::*, px, size,
     };
+
+    #[hgpui::test]
+    fn deferred_can_opt_out_of_ancestor_clip_masks(cx: &mut TestAppContext) {
+        struct ClipProbe {
+            ignore_mask: bool,
+        }
+
+        impl Render for ClipProbe {
+            fn render(
+                &mut self,
+                _window: &mut Window,
+                _cx: &mut Context<Self>,
+            ) -> impl IntoElement {
+                let popup = deferred(
+                    anchored()
+                        .position(point(px(80.), px(0.)))
+                        .child(div().size(px(60.)).background(crate::rgb(0x336699))),
+                );
+                let popup = if self.ignore_mask {
+                    popup.ignore_mask()
+                } else {
+                    popup
+                };
+
+                div()
+                    .size(px(100.))
+                    .overflow_hidden()
+                    .rounded(px(20.))
+                    .child(popup)
+            }
+        }
+
+        for (ignore_mask, expect_clipped) in [(false, true), (true, false)] {
+            let window = cx.add_window(move |_, _| ClipProbe { ignore_mask });
+            let window: crate::AnyWindowHandle = window.into();
+            cx.update_window(window, |_, window, cx| {
+                window.draw(cx).clear(cx);
+                let quads = &window.rendered_frame.scene.quads;
+                assert!(!quads.is_empty(), "the deferred popup should be painted");
+                if expect_clipped {
+                    assert!(
+                        quads.iter().any(|quad| quad.mask_chain != 0),
+                        "default deferred draws must retain the ancestor rounded clip"
+                    );
+                } else {
+                    assert!(
+                        quads.iter().all(|quad| quad.mask_chain == 0),
+                        "ignore_mask must omit ancestor masks from deferred primitives"
+                    );
+                }
+            })
+            .unwrap();
+        }
+    }
 
     /// A stand-in for a dock panel hosting a popover (deferred draw) whose
     /// content opens another popover (a deferred draw created while

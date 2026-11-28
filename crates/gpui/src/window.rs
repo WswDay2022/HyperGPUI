@@ -4272,6 +4272,32 @@ impl Window {
         priority: usize,
         content_mask: Option<ContentMask<Pixels>>,
     ) {
+        self.defer_draw_with_context_mask(
+            element,
+            absolute_offset,
+            priority,
+            content_mask,
+            true,
+        );
+    }
+
+    pub(crate) fn defer_draw_ignoring_context_mask(
+        &mut self,
+        element: AnyElement,
+        absolute_offset: Point<Pixels>,
+        priority: usize,
+    ) {
+        self.defer_draw_with_context_mask(element, absolute_offset, priority, None, false);
+    }
+
+    fn defer_draw_with_context_mask(
+        &mut self,
+        element: AnyElement,
+        absolute_offset: Point<Pixels>,
+        priority: usize,
+        content_mask: Option<ContentMask<Pixels>>,
+        inherit_context_mask: bool,
+    ) {
         self.invalidator.debug_assert_prepaint();
         let parent_node = self.next_frame.dispatch_tree.active_node_id().unwrap();
         self.next_frame.deferred_draws.push(DeferredDraw {
@@ -4280,7 +4306,11 @@ impl Window {
             element_id_stack: self.element_id_stack.clone(),
             text_style_stack: self.text_style_stack.clone(),
             content_mask,
-            raw_content_masks: self.raw_content_mask_stack.clone(),
+            raw_content_masks: if inherit_context_mask {
+                self.raw_content_mask_stack.clone()
+            } else {
+                Vec::new()
+            },
             transform: self.transform_stack.last().copied(),
             rem_size: self.rem_size(),
             priority,
