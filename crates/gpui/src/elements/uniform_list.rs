@@ -754,42 +754,75 @@ mod test {
     use crate::TestAppContext;
 
     #[hgpui::test]
-    fn infer_reuses_the_layout_measurement_during_prepaint(cx: &mut TestAppContext) {
-        use crate::{Context, ListSizingBehavior, Render, Window, div, prelude::*, px, size, uniform_list};
-        use std::cell::Cell;
-        use std::rc::Rc;
+    fn uniform_list_measures_once_per_frame_in_auto_and_infer(cx: &mut TestAppContext) {
+        use crate::{
+            Context, ListSizingBehavior, Pixels, Render, UniformListScrollHandle, Window, div,
+            prelude::*, px, size, uniform_list,
+        };
+        use std::{cell::Cell, rc::Rc};
 
-        struct Probe(Rc<Cell<usize>>);
+        struct Probe {
+            calls: Rc<Cell<usize>>,
+            row_height: Pixels,
+            sizing: ListSizingBehavior,
+            scroll: UniformListScrollHandle,
+        }
         impl Render for Probe {
             fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-                let calls = self.0.clone();
+                let calls = self.calls.clone();
+                let row_height = self.row_height;
                 div().size_full().child(
-                    uniform_list("infer-measurement", 100, move |range, _, _| {
+                    uniform_list("measurement", 100, move |range, _, _| {
                         calls.set(calls.get() + 1);
-                        range.map(|_| div().h(px(20.)).child("row")).collect()
+                        range.map(|_| div().h(row_height).child("row")).collect()
                     })
-                    .with_sizing_behavior(ListSizingBehavior::Infer)
+                    .with_sizing_behavior(self.sizing)
+                    .track_scroll(&self.scroll)
                     .h(px(200.)),
                 )
             }
         }
 
-        let calls = Rc::new(Cell::new(0));
-        let window = cx.open_window(size(px(400.), px(300.)), {
-            let calls = calls.clone();
-            move |_, _| Probe(calls)
-        });
-        cx.run_until_parked();
-        let before = calls.get();
-        window.update(cx, |_, _, cx| cx.notify()).unwrap();
-        cx.run_until_parked();
+        for sizing in [ListSizingBehavior::Auto, ListSizingBehavior::Infer] {
+            let calls = Rc::new(Cell::new(0));
+            let scroll = UniformListScrollHandle::new();
+            let window = cx.open_window(size(px(400.), px(300.)), {
+                let calls = calls.clone();
+                let scroll = scroll.clone();
+                move |_, _| Probe {
+                    calls,
+                    row_height: px(20.),
+                    sizing,
+                    scroll,
+                }
+            });
+            cx.run_until_parked();
+            assert_eq!(
+                scroll.0.borrow().last_item_size.unwrap().contents.height,
+                px(2000.)
+            );
 
-        let calls_this_frame = calls.get() - before;
-        eprintln!("Infer representative-row render callbacks per frame: {calls_this_frame}");
-        assert_eq!(
-            calls_this_frame, 2,
-            "Infer should render once for measurement and once for the visible range"
-        );
+            let before = calls.get();
+            window
+                .update(cx, |probe, _, cx| {
+                    probe.row_height = px(30.);
+                    cx.notify();
+                })
+                .unwrap();
+            cx.run_until_parked();
+
+            let calls_this_frame = calls.get() - before;
+            eprintln!("{sizing:?} row-builder callbacks per frame: {calls_this_frame}");
+            assert_eq!(
+                calls_this_frame, 2,
+                "one measurement and one visible-range build"
+            );
+            assert_eq!(
+                scroll.0.borrow().last_item_size.unwrap().contents.height,
+                px(3000.),
+                "a new frame must measure the changed row height instead of retaining a stale size"
+            );
+        }
     }
 
     #[hgpui::test]

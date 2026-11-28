@@ -15,8 +15,8 @@
 
 ### 核心组件轮次（2026-11-22 至 2026-11-26；已停止）
 
-- 基线 `f057c297a4`，工作分支 `perf/core-elements-hotpaths`，从已有 G09/核验成果创建，未合旧 main；截至2026-11-26，HEAD `5518043d00`。
-- C01–C10记录了本轮实际完成的修复；其中Canvas、div交互/状态、AnimatedDiv滚动缓冲、animated_uniform_list跟踪表、uniform_list Infer测量、animated_list行ID等分别提交。四类List专项最近67 passed / 1 ignored，hgpui全库476 passed / 5 ignored，workspace all-targets检查通过；具体数据与边界见核心组件账本。
+- 基线 `f057c297a4`，工作分支 `perf/core-elements-hotpaths`，从已有 G09/核验成果创建，未合旧 main。最后一个优化提交为 `5518043d00`，收尾文档提交为 `835fe6502b`；之后 `4796b71dbb` 增加了 `Deferred::ignore_mask()`。当前 HEAD 以 Git 为准。
+- C01–C10记录了该轮实际完成的修复；其中Canvas、div交互/状态、AnimatedDiv滚动缓冲、animated_uniform_list跟踪表、uniform_list Infer测量、animated_list行ID等分别提交。11 月 26 日收尾时，四类List专项67 passed / 1 ignored，hgpui全库476 passed / 5 ignored，workspace all-targets检查通过；11 月 28 日的数据见[单独验收记录](acceptance-2026-11-24-to-28.md)。
 - 这不代表17个模块全部完成或每个都已优化：账本仍标未量化/未完成的模块仅作为历史状态，不因本次闭环自动继续。变高 `list` 未做猜测性重构；独立 `crates/gpui_elements` 未查看/修改。
 - 用户已要求组件优化到此为止；后续优化待新指示。保留用户 `.idea/Hgpui.iml`；实现均为独立本地提交，不发布或自动合并。
 
@@ -24,7 +24,7 @@
 
 - 已用 Git 确认 main 在 `bcdceb7b4e` 合入第 3 组及交接文档；相对本地 origin/main 跟踪引用领先 6 个提交，未重新查询服务器。
 - G09 工作分支：`fix/shadow-cache-cooldown`，从上述 main 创建；不自动发布或合并。
-- 用户要求 G09 后停止其他 ID、先核验前四阶段；本机核验现已完成，最终记录为 `first-four-stages-verification.md`。旧引擎路线保持停止；当前执行上述核心组件新任务，Mac/整应用A/B限制保留。
+- 用户要求 G09 后停止其他 ID、先核验前四阶段；本机核验已完成，最终记录为 `first-four-stages-verification.md`。旧引擎路线保持停止；后续核心组件轮次也已收尾，Mac/整应用 A/B 限制保留。
 
 ### 整理前历史快照（不代表当前分支；先用 Git 复查）
 
@@ -32,7 +32,7 @@
 - 本地 `origin/fix/core-quadratic-hotpaths` 跟踪引用也是 `4ab93d3ce5`；说明本地记录已有远端跟踪。2026-11-22 实时 `ls-remote` 返回 RPC/curl 52 Empty reply，未重新证明服务器状态，也没有重试/推送。
 - `main` 与本地 `origin/main` 为 `d7aed1aa7b`，包含 Grid 与审计第 1、2 组；**第 3 组尚不在 main**。开始 G09 时保留第 3 组提交作为代码基础，或在用户授权后正确整合，不直接在旧 main 重做 R01/G01/R02。
 - `feature/taffy-style-parity`、`fix/perf-ownership-render-wiring` 曾按用户要求推送、no-ff 合入 main，随后本地与远端临时引用删除。保留备份/历史分支，未授权批量推送/删除它们。
-- 保护用户已有 `.idea/Hgpui.iml` 改动；它未纳入任何实现提交。IshiTone 有多处用户未提交工作，不覆盖、不回退、不代为提交。
+- 保护用户已有 `.idea/Hgpui.iml` 改动：第1–4阶段的实现未纳入该文件；之后的 `b472ed6ded` amend 已提交一行测试源目录配置，11 月 28 日验收时该文件无未提交改动。IshiTone 工作不覆盖、不回退、不代为提交。
 - 本次交接文档提交会让当前 HEAD 超过上面的整理前快照；最终整理提交以 Git 日志为准，不维护文档对自身提交 hash 的循环引用。
 
 ### 环境与已知限制
@@ -56,6 +56,7 @@ D 盘曾 ENOSPC=0，暂停后用户清理至约123GB；2026-11-22 查询仍约82
 | [第3组核心优化证据](core-hotpath-optimizations.md) | FocusMap释放、空间树平衡/精确端点、cached-view依赖捕获及夹具数据时读。 |
 | [G09缓存回落修复](shadow-cache-cooldown-fix.md) | 无新insert/空闲回落、cached replay保护、三端atlas retirement与真实缓冲/页释放证据。 |
 | [前四阶段正确性与收益核验](first-four-stages-verification.md) | 八个ID的源码边界、本机复测、同机机制对照、G09全热成本修正与实机验证限制。 |
+| [11 月 24–28 日验收](acceptance-2026-11-24-to-28.md) | 日期范围与 amend 净差异、组件优化与新增 API 的复测、回归强化及验证边界。 |
 
 原始完整报告最初在 `D:/WswDay2022/tmp/Hgpui_Performance_Memory_Audit_2026-11-15_e484.md`。仓库中的基线副本在本次整理前已存在且未跟踪，SHA-256与原件一致：`c9e46f5833417bfeb0a373af8fa69388f413f94a0cb3430de9cd2de3dedb77ae`。纳入版本管理时保留原文，不把“报告在仓库外/未修”等历史描述改为当前结论。原行号按基线查，当前源码重新定位。
 

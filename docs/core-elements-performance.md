@@ -4,7 +4,7 @@
 
 用户要求高强度优化 `crates/gpui/src/elements` 全部组件，特别是 div；暂不查看或修改独立 `crates/gpui_elements`。2026-11-26用户明确要求组件优化到此为止，故本账本转为交接记录：不自动优化下列尚未量化/未完成模块，也不恢复旧38项引擎计划；等待用户新指示。C01–C10仅表示实际完成项，不声称17个组件模块均已全盘优化。
 
-- 基线：`f057c297a4`；工作分支：`perf/core-elements-hotpaths`。
+- 基线：`f057c297a4`；工作分支：`perf/core-elements-hotpaths`。11 月 24–28 日的 [成果验收与回归强化](acceptance-2026-11-24-to-28.md) 单独记录，不改变停止门。
 - 分支保留 G09 与前四阶段核验成果，未切旧 main。
 - 保护用户 `.idea/Hgpui.iml`；不改 IshiTone 用户工作，不 push/合并/删分支。
 - 单 agent 直接执行；每个独立修复先建立确定性反馈、记录旧结果，再修复/功能回归/本地提交。
@@ -156,7 +156,8 @@ target/core-element-bench/release/core-element-bench.exe
 - 在 `ListState::advance` 中，原 `mem::take(&mut self.tracked)` 将旧 HashMap 带容量移出；本帧将 tracked keys 插入默认空表，下一帧旧表销毁，暖机后仍重复申请桶。
 - 修改前 red：固定 Harness/key 集合预热两帧，再计量100帧；稳定窗口出现400次、156,400B allocation/reallocation requests（约4次/帧）。计量仅覆盖每帧 `advance`，计数器为测试线程局部；不含 Harness 初始化。
 - 增加 `previous_tracked` 作为双缓冲，与 `tracked` 每帧交换角色并清空待写表。读前一帧索引与构造当前帧索引仍分属两表；key查找、可见跟踪区间、动画判定及绘制位置逻辑不变。两张表的桶容量都保留，稳定帧不再反复申请。
-- 修改后 green：同一100帧反馈为0次、0B请求。代价是稳定窗口缓存两张 HashMap 的有界桶容量（当前帧与上一帧各一份）；这不是总 live-heap 减少，改进点是消除持续分配/释放。
+- 修改后 green：同一100帧反馈为0次、0B请求。代价是稳定窗口缓存两张 HashMap 的桶容量；这不是总 live-heap 减少，改进点是消除持续分配/释放。
+- 11 月 28 日验收另发现：旧表等到下一帧才清理会在空闲时滞留已删除行键。修正为当帧用完就清空旧条目，只复用桶。证据见[验收记录](acceptance-2026-11-24-to-28.md#c08-验收发现空闲前释放已删除行键)。
 - `animated_uniform_list` 19项回归通过，覆盖插入/删除滑动、anchor、scroll snap、enter/leave、reduce motion和新分配回归；四列表中的变高list、uniform_list、animated_list、animated_uniform_list专项回归均通过；hgpui全库474 passed / 5 ignored，workspace all-targets检查通过。GPU/平台资源未涉及。
 - 其他三类本轮审阅结论：普通 `uniform_list` Auto已经避免布局阶段冷测量；变高 `list` 的可见测量/SumTree/宽度失效/focus语义耦合，不能猜缓存；`animated_list` 每行构建是其非虚拟语义，painted map清空时已保留容量。暂不为无量化收益扩大改动。
 

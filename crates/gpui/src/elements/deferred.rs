@@ -171,6 +171,95 @@ mod tests {
         }
     }
 
+    #[hgpui::test]
+    fn deferred_mask_escape_keeps_viewport_and_local_clip_on_cached_replay(cx: &mut TestAppContext) {
+        use std::{cell::Cell, rc::Rc};
+
+        const POPUP: u32 = 0x336699;
+        const CONTENT: u32 = 0x669933;
+
+        struct ClipProbe(Rc<Cell<usize>>);
+        impl Render for ClipProbe {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                self.0.set(self.0.get() + 1);
+                div()
+                    .relative()
+                    .size(px(100.))
+                    .rounded(px(12.))
+                    .overflow_hidden()
+                    .child(
+                        deferred(
+                            div()
+                                .absolute()
+                                .left(px(80.))
+                                .top(px(5.))
+                                .size(px(60.))
+                                .background(crate::rgb(POPUP))
+                                .child(div().size(px(20.)).rounded(px(5.)).overflow_hidden().child(
+                                    div().flex_none().size(px(40.)).background(crate::rgb(CONTENT)),
+                                )),
+                        )
+                        .ignore_mask(),
+                    )
+            }
+        }
+
+        struct CachedRoot(Entity<ClipProbe>);
+        impl Render for CachedRoot {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div().size_full().child(self.0.clone().cached(StyleRefinement::default().size_full()))
+            }
+        }
+
+        let renders = Rc::new(Cell::new(0));
+        let window = cx.open_window(size(px(120.), px(120.)), {
+            let renders = renders.clone();
+            move |_, cx| CachedRoot(cx.new(|_| ClipProbe(renders)))
+        });
+        cx.run_until_parked();
+
+        let check_scene = |cx: &mut TestAppContext| {
+            window.update(cx, |_, window, _| {
+                let quad = |rgb| {
+                    let solid = crate::Background::from(crate::rgb(rgb)).solid;
+                    window
+                        .rendered_frame
+                        .scene
+                        .quads
+                        .iter()
+                        .find(|quad| quad.background.solid == solid)
+                        .expect("popup quad missing")
+                };
+                let popup = quad(POPUP);
+                let viewport_right = window.viewport_size().width.scale(window.scale_factor());
+                assert!(
+                    popup.bounds.right() > viewport_right,
+                    "probe must extend past the viewport"
+                );
+                assert_eq!(popup.content_mask.bounds.right(), viewport_right);
+                assert_eq!(popup.mask_chain, 0, "no inherited clip on the escaped popup");
+
+                let content = quad(CONTENT);
+                assert_eq!(
+                    content.content_mask.bounds.size.width,
+                    px(20.).scale(window.scale_factor())
+                );
+                assert!(content.bounds.size.width > content.content_mask.bounds.size.width);
+                assert!(
+                    content.content_mask.corner_radii.top_left.0 > 0.,
+                    "the popup's own clip must remain rounded"
+                );
+            }).unwrap();
+        };
+        check_scene(cx);
+        let before = renders.get();
+        assert!(before > 0);
+        window.update(cx, |_, _, cx| cx.notify()).unwrap();
+        cx.run_until_parked();
+        assert_eq!(renders.get(), before, "the second frame must replay the cached subtree");
+        check_scene(cx);
+    }
+
     /// A stand-in for a dock panel hosting a popover (deferred draw) whose
     /// content opens another popover (a deferred draw created while
     /// prepainting the first one's content).

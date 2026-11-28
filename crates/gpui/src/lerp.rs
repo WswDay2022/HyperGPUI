@@ -291,6 +291,26 @@ where
     from + (to - from) * alpha
 }
 
+#[cfg(test)]
+mod tuple_tests {
+    use crate::{Lerp, px};
+
+    #[test]
+    fn tuples_interpolate_members_in_order_at_endpoints_and_between() {
+        let from = (px(8.), -20.0_f64);
+        let to = (px(0.), 60.0_f64);
+        assert_eq!(from.lerp(&to, 0.), from);
+        assert_eq!(from.lerp(&to, 0.25), (px(6.), 0.0));
+        assert_eq!(from.lerp(&to, 1.), to);
+
+        let from = (from, 4_i32, 0.0_f32);
+        let to = (to, 12_i32, 1.0_f32);
+        assert_eq!(from.lerp(&to, 0.), from);
+        assert_eq!(from.lerp(&to, 0.25), ((px(6.), 0.0), 6, 0.25));
+        assert_eq!(from.lerp(&to, 1.), to);
+    }
+}
+
 #[cfg(all(test, feature = "test-support"))]
 mod tests {
     use super::*;
