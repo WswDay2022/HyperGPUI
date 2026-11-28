@@ -568,16 +568,22 @@ impl MetalRenderer {
         }
     }
 
-    /// Full-res scene target + half-res ping/pong for blur. Allocated on the first blur frame.
-    fn ensure_blur_textures(&mut self, size: Size<DevicePixels>) {
-        if self.scene_color_texture.is_some() || size.width.0 <= 0 || size.height.0 <= 0 {
+    /// Allocates the sampleable full-resolution scene target independently of blur scratch.
+    fn ensure_scene_color(&mut self, size: Size<DevicePixels>) {
+        if self.scene_color_texture.is_none() && size.width.0 > 0 && size.height.0 > 0 {
+            self.scene_color_texture = Some(self.new_color_texture(size.width.0 as u64, size.height.0 as u64));
+        }
+    }
+
+    /// Allocates half-resolution ping/pong on the first Gaussian frame.
+    fn ensure_gaussian_targets(&mut self, size: Size<DevicePixels>) {
+        if self.blur_ping_texture.is_some() || size.width.0 <= 0 || size.height.0 <= 0 {
             return;
         }
-        let full_w = size.width.0 as u64;
-        let full_h = size.height.0 as u64;
-        self.scene_color_texture = Some(self.new_color_texture(full_w, full_h));
-        self.blur_ping_texture = Some(self.new_color_texture(full_w / 2, full_h / 2));
-        self.blur_pong_texture = Some(self.new_color_texture(full_w / 2, full_h / 2));
+        let half_w = (size.width.0 as u64 / 2).max(1);
+        let half_h = (size.height.0 as u64 / 2).max(1);
+        self.blur_ping_texture = Some(self.new_color_texture(half_w, half_h));
+        self.blur_pong_texture = Some(self.new_color_texture(half_w, half_h));
     }
 
     /// Full-resolution snapshot for color-only backdrop filters, allocated on first use.
@@ -1011,7 +1017,10 @@ impl MetalRenderer {
         let use_offscreen =
             !scene.backdrop_filters.is_empty() || !scene.filter_boundaries.is_empty();
         if use_offscreen {
-            self.ensure_blur_textures(viewport_size);
+            self.ensure_scene_color(viewport_size);
+            if hgpui_render::needs_gaussian_targets(scene) {
+                self.ensure_gaussian_targets(viewport_size);
+            }
             // A color-only backdrop filter reads and writes the same target; snapshot it first.
             if scene.backdrop_filters.iter().any(|filter| {
                 combined_blur_radius(&filter.filters) <= 0.0
@@ -1040,6 +1049,7 @@ impl MetalRenderer {
         let scene_color_owned = self.scene_color_texture.clone();
         let blur_ping_owned = self.blur_ping_texture.clone();
         let blur_pong_owned = self.blur_pong_texture.clone();
+        let gaussian_scratch = blur_ping_owned.as_deref().zip(blur_pong_owned.as_deref());
         let group_owned = self.group_textures.clone();
         let filter_scratch_owned = self.filter_scratch_texture.clone();
         let scene_color: &metal::TextureRef = if use_offscreen {
@@ -1181,25 +1191,20 @@ impl MetalRenderer {
                             );
                             continue;
                         }
-                        if let (Some(ping), Some(pong)) =
-                            (blur_ping_owned.as_deref(), blur_pong_owned.as_deref())
-                        {
-                            self.metal_blur_and_composite(
-                                command_buffer,
-                                current_target,
-                                current_target,
-                                ping,
-                                pong,
-                                viewport_size,
-                                filter.bounds,
-                                filter.content_mask,
-                                filter.mask_chain,
-                                filter.corner_radii,
-                                &filter.filters,
-                                filter.opacity,
-                                true,
-                            );
-                        }
+                        self.metal_blur_and_composite(
+                            command_buffer,
+                            current_target,
+                            current_target,
+                            gaussian_scratch,
+                            viewport_size,
+                            filter.bounds,
+                            filter.content_mask,
+                            filter.mask_chain,
+                            filter.corner_radii,
+                            &filter.filters,
+                            filter.opacity,
+                            true,
+                        );
                     }
                     command_encoder = new_command_encoder_for_texture(
                         command_buffer,
@@ -1250,15 +1255,12 @@ impl MetalRenderer {
                                     boundary.corner_radii,
                                     boundary.opacity,
                                 );
-                            } else if let (Some(ping), Some(pong)) =
-                                (blur_ping_owned.as_deref(), blur_pong_owned.as_deref())
-                            {
+                            } else {
                                 self.metal_blur_and_composite(
                                     command_buffer,
                                     current_target,
                                     parent,
-                                    ping,
-                                    pong,
+                                    gaussian_scratch,
                                     viewport_size,
                                     boundary.bounds,
                                     boundary.content_mask,
@@ -1431,8 +1433,7 @@ impl MetalRenderer {
         command_buffer: &metal::CommandBufferRef,
         source: &metal::TextureRef,
         target: &metal::TextureRef,
-        ping: &metal::TextureRef,
-        pong: &metal::TextureRef,
+        scratch: Option<(&metal::TextureRef, &metal::TextureRef)>,
         viewport_size: Size<DevicePixels>,
         bounds: Bounds<ScaledPixels>,
         content_mask: ContentMask<ScaledPixels>,
@@ -1480,6 +1481,10 @@ impl MetalRenderer {
         };
         let half_w = i32::from(half.width) as f32;
         let half_h = i32::from(half.height) as f32;
+        let Some((ping, pong)) = scratch else {
+            debug_assert!(false, "a Gaussian pass requires ping/pong targets");
+            return;
+        };
 
         // Downsample source -> ping, then separable gaussian ping -> pong -> ping.
         self.run_metal_blur_pass(

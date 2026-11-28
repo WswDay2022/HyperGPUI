@@ -1522,24 +1522,29 @@ impl WgpuRenderer {
         resources.path_msaa_view = path_msaa_view;
     }
 
-    /// Lazily allocate the blur offscreen targets — the full-res scene texture, half-res
-    /// ping/pong, and one full-res group texture per nesting level. Called only on frames that
-    /// actually use a blur filter, so non-blurring apps never pay this VRAM. A no-op once
-    /// allocated (invalidated alongside the path intermediates on resize / device loss).
-    fn ensure_blur_textures(&mut self) {
+    /// Allocates the sampleable root without creating half-resolution scratch.
+    fn ensure_scene_color(&mut self) {
         if self.resources().scene_color_texture.is_some() {
             return;
         }
         let format = self.surface_config.format;
         let width = self.surface_config.width;
         let height = self.surface_config.height;
-        let blur_width = (width / 2).max(1);
-        let blur_height = (height / 2).max(1);
         let resources = self.resources_mut();
-
         let (t, v) = Self::create_path_intermediate(&resources.device, format, width, height);
         resources.scene_color_texture = Some(t);
         resources.scene_color_view = Some(v);
+    }
+
+    /// Allocates the half-resolution scratch pair only for frames that use Gaussian passes.
+    fn ensure_gaussian_targets(&mut self) {
+        if self.resources().blur_ping_texture.is_some() {
+            return;
+        }
+        let format = self.surface_config.format;
+        let blur_width = (self.surface_config.width / 2).max(1);
+        let blur_height = (self.surface_config.height / 2).max(1);
+        let resources = self.resources_mut();
         let (t, v) =
             Self::create_path_intermediate(&resources.device, format, blur_width, blur_height);
         resources.blur_ping_texture = Some(t);
@@ -1726,12 +1731,13 @@ impl WgpuRenderer {
             self.ensure_intermediate_textures();
         }
 
-        // Blur is the only thing that needs the offscreen scene texture; allocate it (and the
-        // ping/pong/group targets) lazily so non-blurring apps pay no extra VRAM or blit.
         let use_offscreen =
             !scene.backdrop_filters.is_empty() || !scene.filter_boundaries.is_empty();
         if use_offscreen {
-            self.ensure_blur_textures();
+            self.ensure_scene_color();
+            if hgpui_render::needs_gaussian_targets(scene) {
+                self.ensure_gaussian_targets();
+            }
             // A color-only backdrop filter reads and writes the same target; snapshot it first.
             if scene.backdrop_filters.iter().any(|filter| {
                 combined_blur_radius(&filter.filters) <= 0.0
@@ -1858,7 +1864,7 @@ impl WgpuRenderer {
                     self.resources()
                         .scene_color_view
                         .as_ref()
-                        .expect("scene_color_view allocated by ensure_blur_textures")
+                        .expect("scene_color_view allocated by ensure_scene_color")
                         .clone(),
                 )
             } else {
@@ -1876,7 +1882,7 @@ impl WgpuRenderer {
                     .resources()
                     .scene_color_texture
                     .as_ref()
-                    .expect("scene_color_texture allocated by ensure_blur_textures")
+                    .expect("scene_color_texture allocated by ensure_scene_color")
                     .clone(),
                 None => frame.texture.clone(),
             };

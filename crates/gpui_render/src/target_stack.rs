@@ -1,4 +1,5 @@
-use hgpui::MAX_FILTER_GROUP_DEPTH;
+use crate::filter_matrix::combined_blur_radius;
+use hgpui::{MAX_FILTER_GROUP_DEPTH, ScaledFilter, Scene};
 use smallvec::SmallVec;
 
 /// Counts the isolation targets required by filter markers in paint order.
@@ -17,6 +18,38 @@ pub fn filter_group_depth(boundaries: impl IntoIterator<Item = bool>) -> usize {
         }
     }
     peak
+}
+
+/// Whether this frame's backdrop filters or isolated content groups can run Gaussian passes.
+/// Color-only filters and clip groups never need the half-resolution scratch.
+pub fn needs_gaussian_targets(scene: &Scene) -> bool {
+    let uses_blur = |filters: &[ScaledFilter]| {
+        let sigma = combined_blur_radius(filters) * 0.5;
+        sigma.is_finite() && sigma > 0.0
+    };
+    if scene
+        .backdrop_filters
+        .iter()
+        .any(|filter| uses_blur(&filter.filters))
+    {
+        return true;
+    }
+
+    let mut depth = 0usize;
+    for boundary in &scene.filter_boundaries {
+        if boundary.is_start {
+            depth += 1;
+            if depth <= MAX_FILTER_GROUP_DEPTH
+                && !boundary.clip_group
+                && uses_blur(&boundary.filters)
+            {
+                return true;
+            }
+        } else {
+            depth = depth.saturating_sub(1);
+        }
+    }
+    false
 }
 
 /// Active render target and the parents visible to backdrop filters.
@@ -95,8 +128,60 @@ mod tests {
         // Same number of markers; only their actual lifetimes determine allocation.
         assert_eq!(filter_group_depth([true, false, true, false]), 1);
         assert_eq!(filter_group_depth([true, true, false, false]), 2);
-        assert_eq!(filter_group_depth([true, true, true, false, false, false]), 2);
+        assert_eq!(
+            filter_group_depth([true, true, true, false, false, false]),
+            2
+        );
         assert_eq!(filter_group_depth([]), 0);
+    }
+
+    #[test]
+    fn gaussian_scratch_is_only_needed_by_rendered_blur_filters() {
+        use hgpui::{BackdropFilter, FilterBoundary, ScaledPixels};
+
+        let group = |clip_group, filters| FilterBoundary {
+            order: 0,
+            bounds: Default::default(),
+            content_mask: Default::default(),
+            corner_radii: Default::default(),
+            filters,
+            opacity: 1.0,
+            is_start: true,
+            mask_chain: 0,
+            clip_group,
+        };
+        let mut scene = Scene::default();
+        assert!(!needs_gaussian_targets(&scene));
+        scene.backdrop_filters.push(BackdropFilter {
+            filters: [ScaledFilter::Brightness(0.5)].into_iter().collect(),
+            ..Default::default()
+        });
+        scene
+            .filter_boundaries
+            .push(group(true, Default::default()));
+        scene.filter_boundaries.push(group(
+            false,
+            [ScaledFilter::Grayscale(0.5)].into_iter().collect(),
+        ));
+        assert!(!needs_gaussian_targets(&scene));
+
+        let blur = ScaledFilter::Blur(ScaledPixels(12.0));
+        scene
+            .filter_boundaries
+            .push(group(false, [blur].into_iter().collect()));
+        assert!(
+            !needs_gaussian_targets(&scene),
+            "a third group renders inline"
+        );
+        scene.filter_boundaries.remove(1);
+        assert!(
+            needs_gaussian_targets(&scene),
+            "the same blur at depth two is rendered"
+        );
+
+        scene.filter_boundaries.clear();
+        scene.backdrop_filters[0].filters.push(blur);
+        assert!(needs_gaussian_targets(&scene));
     }
 
     #[test]

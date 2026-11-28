@@ -147,26 +147,26 @@ impl BlurResources {
         }
     }
 
-    /// Allocate the full-resolution scene target and half-resolution ping/pong scratch on the
-    /// first frame that actually paints a filter. Non-filtering apps never pay this VRAM.
-    fn ensure_offscreen_targets(
-        &mut self,
-        device: &ID3D11Device,
-        width: u32,
-        height: u32,
-    ) -> Result<()> {
-        if self.scene_color.is_some() {
+    /// Allocate the sampleable full-resolution scene target without Gaussian scratch.
+    fn ensure_scene_color(&mut self, device: &ID3D11Device, width: u32, height: u32) -> Result<()> {
+        if self.scene_color.is_none() {
+            let (texture, rtv, srv) = create_color_target(device, width, height)?;
+            self.scene_color = Some(texture);
+            self.scene_color_rtv = rtv;
+            self.scene_color_srv = srv;
+        }
+        Ok(())
+    }
+
+    /// Allocate the half-resolution scratch pair on the first Gaussian frame.
+    fn ensure_gaussian_targets(&mut self, device: &ID3D11Device, width: u32, height: u32) -> Result<()> {
+        if self.ping.is_some() {
             return Ok(());
         }
         let half_w = (width / 2).max(1);
         let half_h = (height / 2).max(1);
-        let (scene_color, scene_color_rtv, scene_color_srv) =
-            create_color_target(device, width, height)?;
         let (ping, ping_rtv, ping_srv) = create_color_target(device, half_w, half_h)?;
         let (pong, pong_rtv, pong_srv) = create_color_target(device, half_w, half_h)?;
-        self.scene_color = Some(scene_color);
-        self.scene_color_rtv = scene_color_rtv;
-        self.scene_color_srv = scene_color_srv;
         self.ping = Some(ping);
         self.ping_rtv = ping_rtv;
         self.ping_srv = ping_srv;
@@ -503,21 +503,14 @@ impl DirectXRenderer {
         let use_offscreen =
             !scene.backdrop_filters.is_empty() || !scene.filter_boundaries.is_empty();
 
-        // The full-size filter targets are allocated on the first filtered frame: reserving a
-        // full-resolution scene texture plus the half-res ping/pong for every window costs tens
-        // of MB on 4K displays even in apps that never filter.
         if use_offscreen {
-            let device = self
-                .devices
-                .as_ref()
-                .context("devices missing")?
-                .device
-                .clone();
-            self.resources
-                .as_mut()
-                .context("resources missing")?
-                .blur
-                .ensure_offscreen_targets(&device, self.width.max(1), self.height.max(1))?;
+            let device = &self.devices.as_ref().context("devices missing")?.device;
+            let blur = &mut self.resources.as_mut().context("resources missing")?.blur;
+            let (width, height) = (self.width.max(1), self.height.max(1));
+            blur.ensure_scene_color(device, width, height)?;
+            if hgpui_render::needs_gaussian_targets(scene) {
+                blur.ensure_gaussian_targets(device, width, height)?;
+            }
         }
 
         // A backdrop filter whose chain has no blur reads the target it writes. Snapshot the
@@ -6150,19 +6143,25 @@ mod tests {
     /// them; windows that never filter should not pay the VRAM.
     #[test]
     fn blur_offscreen_targets_are_lazy() -> Result<()> {
-        let Some((device, _context)) = create_hardware_device().or_else(create_warp_device) else {
-            eprintln!("[blur_lazy] Direct3D device unavailable, skipping");
-            return Ok(());
-        };
+        let (device, _) = create_warp_device().expect("WARP is required to audit blur targets");
         let mut blur = BlurResources::new();
         assert!(blur.scene_color.is_none(), "scene target allocated eagerly");
         assert!(blur.ping_rtv.is_none(), "ping target allocated eagerly");
-        blur.ensure_offscreen_targets(&device, TEST_SIZE, TEST_SIZE)?;
+        blur.ensure_scene_color(&device, TEST_SIZE + 1, TEST_SIZE + 1)?;
         assert!(blur.scene_color.is_some());
         assert!(blur.scene_color_rtv.is_some());
         assert!(blur.scene_color_srv.is_some());
-        assert!(blur.ping_rtv.is_some());
-        assert!(blur.pong_rtv.is_some());
+        assert!(blur.ping_rtv.is_none(), "scene-only filtering must not allocate ping");
+        assert!(blur.pong_rtv.is_none(), "scene-only filtering must not allocate pong");
+
+        let original_scene = blur.scene_color.clone();
+        blur.ensure_gaussian_targets(&device, TEST_SIZE + 1, TEST_SIZE + 1)?;
+        assert_eq!(blur.scene_color, original_scene, "first blur must reuse the scene target");
+        for target in [&blur.ping, &blur.pong] {
+            let mut desc = D3D11_TEXTURE2D_DESC::default();
+            unsafe { target.as_ref().unwrap().GetDesc(&mut desc) };
+            assert_eq!((desc.Width, desc.Height), (TEST_SIZE / 2, TEST_SIZE / 2));
+        }
         Ok(())
     }
 
