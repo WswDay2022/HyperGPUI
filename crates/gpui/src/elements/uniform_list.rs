@@ -73,7 +73,6 @@ pub struct UniformList {
 pub struct UniformListFrameState {
     items: SmallVec<[AnyElement; 32]>,
     decorations: SmallVec<[AnyElement; 2]>,
-    measured_item_size: Option<Size<Pixels>>,
 }
 
 /// A handle for controlling the scroll position of a uniform list.
@@ -331,8 +330,6 @@ impl Element for UniformList {
             UniformListFrameState {
                 items: SmallVec::new(),
                 decorations: SmallVec::new(),
-                measured_item_size: (self.sizing_behavior == ListSizingBehavior::Infer)
-                    .then_some(item_size),
             },
         )
     }
@@ -365,12 +362,10 @@ impl Element for UniformList {
             ListHorizontalSizingBehavior::Unconstrained
         );
 
-        // Infer already measured this representative row during request_layout; reuse it here.
-        // Auto intentionally waits until prepaint to measure, avoiding a throw-away layout.
-        // Previous unconditional implementation: let longest_item_size = self.measure_item(None, window, cx);
-        let longest_item_size = frame_state
-            .measured_item_size
-            .unwrap_or_else(|| self.measure_item(None, window, cx));
+        // The row builder can read the current Window and App. In particular, the
+        // ancestor clip is available now but not during Infer's intrinsic measurement.
+        // Measure in the same phase that builds visible rows. Auto only measures here.
+        let longest_item_size = self.measure_item(None, window, cx);
         let content_width = if can_scroll_horizontally {
             padded_bounds.size.width.max(longest_item_size.width)
         } else {
@@ -754,7 +749,49 @@ mod test {
     use crate::TestAppContext;
 
     #[hgpui::test]
-    fn uniform_list_measures_once_per_frame_in_auto_and_infer(cx: &mut TestAppContext) {
+    fn uniform_list_infer_sizes_visible_rows_in_the_ancestor_clip(cx: &mut TestAppContext) {
+        use crate::{
+            Context, ListSizingBehavior, Render, UniformListScrollHandle, Window, div, prelude::*,
+            px, size, uniform_list,
+        };
+
+        struct ClippedList(UniformListScrollHandle);
+        impl Render for ClippedList {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div().size_full().items_start().flex().flex_col().child(
+                    div().w(px(200.)).h(px(160.)).overflow_hidden().child(
+                        uniform_list("clipped-list", 100, |range, window, _| {
+                            let clip_width = window.content_mask().bounds.size.width;
+                            let height = if clip_width < px(250.) { px(40.) } else { px(20.) };
+                            range.map(|_| div().h(height)).collect()
+                        })
+                        .with_sizing_behavior(ListSizingBehavior::Infer)
+                        .track_scroll(&self.0)
+                        .w_full()
+                        .h(px(140.)),
+                    ),
+                )
+            }
+        }
+
+        let scroll = UniformListScrollHandle::new();
+        let list_scroll = scroll.clone();
+        let _window = cx.open_window(size(px(400.), px(300.)), move |_, _| {
+            ClippedList(list_scroll)
+        });
+        cx.run_until_parked();
+
+        assert_eq!(
+            scroll.0.borrow().last_item_size.unwrap().contents.height,
+            px(4000.),
+            "the scroll extent must reflect the rows built inside the 200px ancestor clip"
+        );
+    }
+
+    #[hgpui::test]
+    fn uniform_list_remeasures_changed_rows_without_an_extra_auto_measurement(
+        cx: &mut TestAppContext,
+    ) {
         use crate::{
             Context, ListSizingBehavior, Pixels, Render, UniformListScrollHandle, Window, div,
             prelude::*, px, size, uniform_list,
@@ -811,12 +848,13 @@ mod test {
                 .unwrap();
             cx.run_until_parked();
 
-            let calls_this_frame = calls.get() - before;
-            eprintln!("{sizing:?} row-builder callbacks per frame: {calls_this_frame}");
-            assert_eq!(
-                calls_this_frame, 2,
-                "one measurement and one visible-range build"
-            );
+            if sizing == ListSizingBehavior::Auto {
+                assert_eq!(
+                    calls.get() - before,
+                    2,
+                    "Auto needs one prepaint measurement and one visible-range build"
+                );
+            }
             assert_eq!(
                 scroll.0.borrow().last_item_size.unwrap().contents.height,
                 px(3000.),
