@@ -91,8 +91,13 @@ pub struct RenderSvgParams {
 #[derive(Clone)]
 /// A struct holding everything necessary to render SVGs.
 pub struct SvgRenderer {
+    state: Arc<SvgRendererState>,
+}
+
+struct SvgRendererState {
     asset_source: Arc<dyn AssetSource>,
-    usvg_options: Arc<usvg::Options<'static>>,
+    // Keep the options themselves off the unused path, including their inline storage.
+    options: OnceLock<Box<usvg::Options<'static>>>,
 }
 
 /// The size in which to render the SVG.
@@ -106,6 +111,15 @@ pub enum SvgSize {
 impl SvgRenderer {
     /// Creates a new SVG renderer with the provided asset source.
     pub fn new(asset_source: Arc<dyn AssetSource>) -> Self {
+        Self {
+            state: Arc::new(SvgRendererState {
+                asset_source,
+                options: OnceLock::new(),
+            }),
+        }
+    }
+
+    fn build_options(asset_source: &Arc<dyn AssetSource>) -> usvg::Options<'static> {
         static SYSTEM_FONT_DB: LazyLock<Arc<usvg::fontdb::Database>> = LazyLock::new(|| {
             let mut db = usvg::fontdb::Database::new();
             db.load_system_fonts();
@@ -157,16 +171,12 @@ impl SvgRenderer {
                 default_fallback_selection(ch, fonts, db)
             },
         );
-        let options = usvg::Options {
+        usvg::Options {
             font_resolver: usvg::FontResolver {
                 select_font: font_resolver,
                 select_fallback: fallback_selection,
             },
             ..Default::default()
-        };
-        Self {
-            asset_source,
-            usvg_options: Arc::new(options),
         }
     }
 
@@ -221,7 +231,7 @@ impl SvgRenderer {
 
         if let Some(bytes) = bytes {
             render_pixmap(bytes)
-        } else if let Some(bytes) = self.asset_source.load(&params.path)? {
+        } else if let Some(bytes) = self.state.asset_source.load(&params.path)? {
             render_pixmap(&bytes)
         } else {
             Ok(None)
@@ -233,7 +243,10 @@ impl SvgRenderer {
         // Related issue: #56466
         const MAX_SIZE: f32 = 8192.0;
 
-        let tree = usvg::Tree::from_data(bytes, &self.usvg_options)?;
+        let options = self.state.options.get_or_init(|| {
+            Box::new(Self::build_options(&self.state.asset_source))
+        });
+        let tree = usvg::Tree::from_data(bytes, options)?;
         let svg_size = tree.size();
         let mut scale = match size {
             SvgSize::Size(size) => size.width.0 as f32 / svg_size.width(),
@@ -323,6 +336,68 @@ mod tests {
     const IBM_PLEX_REGULAR: &[u8] =
         include_bytes!("../../../assets/fonts/ibm-plex-sans/IBMPlexSans-Regular.ttf");
     const LILEX_REGULAR: &[u8] = include_bytes!("../../../assets/fonts/lilex/Lilex-Regular.ttf");
+
+    #[test]
+    fn unused_svg_renderer_does_not_allocate_parser_or_font_resolvers() {
+        use crate::elements::test_allocations::measure;
+
+        let source: Arc<dyn AssetSource> = Arc::new(());
+        let (renderer, allocations) = measure(|| SvgRenderer::new(source));
+        assert_eq!(allocations.count, 1, "only the shared renderer handle: {allocations:?}");
+        assert!(allocations.requested_bytes <= 64, "{allocations:?}");
+
+        let (clone, allocations) = measure(|| renderer.clone());
+        assert_eq!(allocations.count, 0, "cloning the handle must not initialize SVG options");
+
+        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"><rect width="2" height="2" fill="#38bdf8"/></svg>"##;
+        for renderer in [renderer, clone] {
+            let image = renderer.render_single_frame(svg, 1.0).unwrap();
+            assert_eq!(image.as_bytes(0).unwrap()[..4], [0xf8, 0xbd, 0x38, 0xff]);
+        }
+    }
+
+    #[test]
+    #[ignore = "same-process construction benchmark; run in Release"]
+    fn unused_svg_renderer_benchmark() {
+        use crate::elements::test_allocations::measure;
+        use std::{hint::black_box, time::Instant};
+
+        const RENDERERS: usize = 10_000;
+        let source: Arc<dyn AssetSource> = Arc::new(());
+        let run = |eager: bool| {
+            let start = Instant::now();
+            let (_, allocations) = measure(|| {
+                for _ in 0..RENDERERS {
+                    if eager {
+                        black_box((source.clone(), Arc::new(SvgRenderer::build_options(&source))));
+                    } else {
+                        black_box(SvgRenderer::new(source.clone()));
+                    }
+                }
+            });
+            (start.elapsed(), allocations)
+        };
+        let mut old = Vec::new();
+        let mut new = Vec::new();
+        for i in 0..7 {
+            if i % 2 == 0 {
+                old.push(run(true));
+                new.push(run(false));
+            } else {
+                new.push(run(false));
+                old.push(run(true));
+            }
+        }
+        old.sort_by_key(|sample| sample.0);
+        new.sort_by_key(|sample| sample.0);
+        let (old, new) = (old[3], new[3]);
+        assert!(old.1.count > new.1.count);
+        assert_eq!(new.1.count, RENDERERS);
+        eprintln!("unused SVG x{RENDERERS}: requests {}->{}, bytes {}->{}, median ns/renderer {:.2}->{:.2}",
+            old.1.count, new.1.count, old.1.requested_bytes, new.1.requested_bytes,
+            old.0.as_secs_f64() * 1e9 / RENDERERS as f64,
+            new.0.as_secs_f64() * 1e9 / RENDERERS as f64);
+    }
 
     fn db_with_bundled_fonts() -> Database {
         let mut db = Database::new();
