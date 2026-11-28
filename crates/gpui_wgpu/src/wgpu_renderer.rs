@@ -1731,13 +1731,9 @@ impl WgpuRenderer {
             self.ensure_intermediate_textures();
         }
 
-        let use_offscreen =
-            !scene.backdrop_filters.is_empty() || !scene.filter_boundaries.is_empty();
+        let use_offscreen = hgpui_render::needs_sampleable_root(scene);
         if use_offscreen {
             self.ensure_scene_color();
-            if hgpui_render::needs_gaussian_targets(scene) {
-                self.ensure_gaussian_targets();
-            }
             // A color-only backdrop filter reads and writes the same target; snapshot it first.
             if scene.backdrop_filters.iter().any(|filter| {
                 combined_blur_radius(&filter.filters) <= 0.0
@@ -1745,12 +1741,15 @@ impl WgpuRenderer {
             }) {
                 self.ensure_filter_scratch();
             }
-            let required_groups = hgpui_render::filter_group_depth(
-                scene.filter_boundaries.iter().map(|boundary| boundary.is_start),
-            );
-            if required_groups > 0 {
-                self.ensure_group_textures(required_groups);
-            }
+        }
+        if hgpui_render::needs_gaussian_targets(scene) {
+            self.ensure_gaussian_targets();
+        }
+        let required_groups = hgpui_render::filter_group_depth(
+            scene.filter_boundaries.iter().map(|boundary| boundary.is_start),
+        );
+        if required_groups > 0 {
+            self.ensure_group_textures(required_groups);
         }
 
         let frame_view = frame
@@ -1855,10 +1854,8 @@ impl WgpuRenderer {
                         label: Some("main_encoder"),
                     });
 
-            // When the scene contains filters, render into the offscreen scene texture (so
-            // filters can sample already-painted content mid-frame) and blit to the swapchain at
-            // the end; otherwise render straight to the swapchain. `use_offscreen` and the
-            // offscreen textures were computed/allocated above.
+            // Backdrop filters sample already-painted pixels. Without a backdrop, composite
+            // directly into the swapchain, including when isolated content groups are present.
             let scene_color_view = if use_offscreen {
                 Some(
                     self.resources()
@@ -1886,17 +1883,9 @@ impl WgpuRenderer {
                     .clone(),
                 None => frame.texture.clone(),
             };
-            // One group texture per nesting depth; empty when not blurring.
-            let group_views = if use_offscreen {
-                self.resources().group_views.clone()
-            } else {
-                Vec::new()
-            };
-            let group_textures = if use_offscreen {
-                self.resources().group_textures.clone()
-            } else {
-                Vec::new()
-            };
+            // Isolated content groups may still run when the root is the swapchain image.
+            let group_views = self.resources().group_views[..required_groups].to_vec();
+            let group_textures = self.resources().group_textures[..required_groups].to_vec();
             // (boundary, parent target + texture to composite back into, whether isolated).
             let mut filter_stack: Vec<(
                 FilterBoundary,

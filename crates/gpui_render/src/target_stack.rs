@@ -20,6 +20,12 @@ pub fn filter_group_depth(boundaries: impl IntoIterator<Item = bool>) -> usize {
     peak
 }
 
+/// Whether a filter may read already-painted pixels in the root target.
+/// A content group reads its own isolated texture, not its parent.
+pub fn needs_sampleable_root(scene: &Scene) -> bool {
+    !scene.backdrop_filters.is_empty()
+}
+
 /// Whether this frame's backdrop filters or isolated content groups can run Gaussian passes.
 /// Color-only filters and clip groups never need the half-resolution scratch.
 pub fn needs_gaussian_targets(scene: &Scene) -> bool {
@@ -133,6 +139,40 @@ mod tests {
             2
         );
         assert_eq!(filter_group_depth([]), 0);
+    }
+
+    #[test]
+    fn content_groups_do_not_sample_root_but_backdrops_do() {
+        use hgpui::{BackdropFilter, FilterBoundary, ScaledPixels};
+        let mut scene = Scene::default();
+        let group = FilterBoundary {
+            order: 0,
+            bounds: Default::default(),
+            content_mask: Default::default(),
+            corner_radii: Default::default(),
+            filters: [ScaledFilter::Blur(ScaledPixels(6.0))]
+                .into_iter()
+                .collect(),
+            opacity: 1.0,
+            is_start: true,
+            mask_chain: 0,
+            clip_group: false,
+        };
+        scene.filter_boundaries.push(group.clone());
+        scene.filter_boundaries.push(FilterBoundary {
+            is_start: false,
+            ..group
+        });
+        assert!(!needs_sampleable_root(&scene));
+        assert!(
+            needs_gaussian_targets(&scene),
+            "group scratch is independent of root"
+        );
+        scene.backdrop_filters.push(BackdropFilter {
+            filters: [ScaledFilter::Brightness(0.5)].into_iter().collect(),
+            ..Default::default()
+        });
+        assert!(needs_sampleable_root(&scene));
     }
 
     #[test]

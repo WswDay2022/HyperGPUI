@@ -498,67 +498,32 @@ impl DirectXRenderer {
 
         self.upload_scene_buffers(scene)?;
 
-        // Only route through the offscreen scene texture when the scene contains filters;
-        // otherwise render straight to the swapchain exactly as before.
-        let use_offscreen =
-            !scene.backdrop_filters.is_empty() || !scene.filter_boundaries.is_empty();
-
-        if use_offscreen {
+        // Only backdrop filters read already-painted pixels in the root. A content group
+        // reads its own texture and can composite straight into the swapchain.
+        let use_offscreen = hgpui_render::needs_sampleable_root(scene);
+        let needs_gaussian = hgpui_render::needs_gaussian_targets(scene);
+        let required_groups = hgpui_render::filter_group_depth(
+            scene.filter_boundaries.iter().map(|boundary| boundary.is_start),
+        );
+        if use_offscreen || needs_gaussian || required_groups > 0 {
             let device = &self.devices.as_ref().context("devices missing")?.device;
-            let blur = &mut self.resources.as_mut().context("resources missing")?.blur;
+            let resources = self.resources.as_mut().context("resources missing")?;
             let (width, height) = (self.width.max(1), self.height.max(1));
-            blur.ensure_scene_color(device, width, height)?;
-            if hgpui_render::needs_gaussian_targets(scene) {
-                blur.ensure_gaussian_targets(device, width, height)?;
+            if use_offscreen {
+                resources.blur.ensure_scene_color(device, width, height)?;
+                // A color-only backdrop must snapshot the box before writing to the same target.
+                if scene.backdrop_filters.iter().any(|filter| {
+                    combined_blur_radius(&filter.filters) <= 0.0
+                        && color_filter_matrix(&filter.filters).is_some()
+                }) {
+                    resources.ensure_filter_scratch(device, width, height)?;
+                }
             }
-        }
-
-        // A backdrop filter whose chain has no blur reads the target it writes. Snapshot the
-        // element's box into a scratch texture first so the composite never samples a bound
-        // render target. Blur chains use the ping/pong scratch instead.
-        let needs_filter_scratch = scene.backdrop_filters.iter().any(|filter| {
-            combined_blur_radius(&filter.filters) <= 0.0
-                && color_filter_matrix(&filter.filters).is_some()
-        });
-        if needs_filter_scratch {
-            let device = self
-                .devices
-                .as_ref()
-                .context("devices missing")?
-                .device
-                .clone();
-            self.resources
-                .as_mut()
-                .context("resources missing")?
-                .ensure_filter_scratch(&device, self.width.max(1), self.height.max(1))?;
-        }
-
-        // Allocate only the content-filter group targets this frame actually uses. Each is a
-        // full-resolution color target; reserving the maximum depth for every window was a
-        // significant fixed VRAM cost for apps that only use backdrop filters.
-        if use_offscreen {
-            let required_groups = hgpui_render::filter_group_depth(
-                scene.filter_boundaries.iter().map(|boundary| boundary.is_start),
-            );
+            if needs_gaussian {
+                resources.blur.ensure_gaussian_targets(device, width, height)?;
+            }
             if required_groups > 0 {
-                let device = self
-                    .devices
-                    .as_ref()
-                    .context("devices missing")?
-                    .device
-                    .clone();
-                let (width, height) = {
-                    let resources = self.resources.as_ref().context("resources missing")?;
-                    (
-                        resources.viewport.Width.max(1.0) as u32,
-                        resources.viewport.Height.max(1.0) as u32,
-                    )
-                };
-                self.resources
-                    .as_mut()
-                    .context("resources missing")?
-                    .blur
-                    .ensure_group_targets(&device, width, height, required_groups)?;
+                resources.blur.ensure_group_targets(device, width, height, required_groups)?;
             }
         }
 
@@ -576,14 +541,14 @@ impl DirectXRenderer {
         ) = {
             let r = self.resources.as_ref().context("resources missing")?;
             (
-                r.blur.scene_color_rtv.clone(),
-                r.blur.scene_color_srv.clone(),
-                r.blur.scene_color.clone(),
+                if use_offscreen { r.blur.scene_color_rtv.clone() } else { None },
+                if use_offscreen { r.blur.scene_color_srv.clone() } else { None },
+                if use_offscreen { r.blur.scene_color.clone() } else { None },
                 r.render_target_view.clone(),
                 r.render_target.clone(),
-                r.blur.group_rtvs.clone(),
-                r.blur.group_srvs.clone(),
-                r.blur.groups.clone(),
+                r.blur.group_rtvs[..required_groups].to_vec(),
+                r.blur.group_srvs[..required_groups].to_vec(),
+                r.blur.groups[..required_groups].to_vec(),
             )
         };
         let ctx = self

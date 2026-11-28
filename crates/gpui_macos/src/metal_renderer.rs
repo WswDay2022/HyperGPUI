@@ -1014,13 +1014,9 @@ impl MetalRenderer {
         if !scene.paths.is_empty() {
             self.ensure_path_intermediate_textures(viewport_size);
         }
-        let use_offscreen =
-            !scene.backdrop_filters.is_empty() || !scene.filter_boundaries.is_empty();
+        let use_offscreen = hgpui_render::needs_sampleable_root(scene);
         if use_offscreen {
             self.ensure_scene_color(viewport_size);
-            if hgpui_render::needs_gaussian_targets(scene) {
-                self.ensure_gaussian_targets(viewport_size);
-            }
             // A color-only backdrop filter reads and writes the same target; snapshot it first.
             if scene.backdrop_filters.iter().any(|filter| {
                 combined_blur_radius(&filter.filters) <= 0.0
@@ -1028,25 +1024,24 @@ impl MetalRenderer {
             }) {
                 self.ensure_filter_scratch(viewport_size);
             }
-            let required_groups = hgpui_render::filter_group_depth(
-                scene.filter_boundaries.iter().map(|boundary| boundary.is_start),
-            );
-            if required_groups > 0 {
-                self.ensure_group_textures(viewport_size, required_groups);
-            }
+        }
+        if hgpui_render::needs_gaussian_targets(scene) {
+            self.ensure_gaussian_targets(viewport_size);
+        }
+        let required_groups = hgpui_render::filter_group_depth(
+            scene.filter_boundaries.iter().map(|boundary| boundary.is_start),
+        );
+        if required_groups > 0 {
+            self.ensure_group_textures(viewport_size, required_groups);
         }
         let command_queue = self.command_queue.clone();
         let command_buffer = command_queue.new_command_buffer();
         let alpha = if self.opaque { 1. } else { 0. };
         let mut instance_offset = 0;
 
-        // Render the scene into an offscreen color texture (so filters can sample it), then
-        // blit it to `texture`. Owned clones keep the textures borrowable without borrowing
-        // `self` across the batch loop (which calls `&mut self` methods like `draw_surfaces`).
-        // Only route through the offscreen scene texture when the scene actually contains
-        // filters; otherwise render straight to `texture` exactly as before (no regression, no
-        // extra blit for the common case).
-        let scene_color_owned = self.scene_color_texture.clone();
+        // A sampled root is needed for backdrops, not for isolated content groups. Owned
+        // handles avoid borrowing `self` across draws into the selected targets.
+        let scene_color_owned = if use_offscreen { self.scene_color_texture.clone() } else { None };
         let blur_ping_owned = self.blur_ping_texture.clone();
         let blur_pong_owned = self.blur_pong_texture.clone();
         let gaussian_scratch = blur_ping_owned.as_deref().zip(blur_pong_owned.as_deref());
