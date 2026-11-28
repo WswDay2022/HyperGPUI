@@ -2946,6 +2946,35 @@ pub(crate) fn decode_static_image_from_decoder(
     let orientation = decoder
         .orientation()
         .context("reading decoder's orientation")?;
+    if orientation == image::metadata::Orientation::NoTransforms
+        && decoder.color_type() == image::ColorType::Rgb8
+    {
+        let (width, height) = decoder.dimensions();
+        let output_len = u64::from(width)
+            .checked_mul(u64::from(height))
+            .and_then(|pixels| pixels.checked_mul(4))
+            .and_then(|bytes| usize::try_from(bytes).ok())
+            .context("RGB image is too large to convert to BGRA")?;
+        let pixel_count = output_len / 4;
+        let mut data = Vec::new();
+        data.try_reserve_exact(output_len)
+            .context("allocating the decoded BGRA image")?;
+        data.resize(output_len, 0);
+        decoder
+            .read_image(&mut data[..pixel_count * 3])
+            .context("decoding image")?;
+        // Expand the packed RGB backwards in the final BGRA buffer so writes never
+        // overwrite unread pixels. No full-size RGB intermediate or swizzle pass.
+        for pixel in (0..pixel_count).rev() {
+            let src = pixel * 3;
+            let (r, g, b) = (data[src], data[src + 1], data[src + 2]);
+            data[pixel * 4..][..4].copy_from_slice(&[b, g, r, 255]);
+        }
+        let data = image::RgbaImage::from_raw(width, height, data)
+            .context("invalid BGRA image size")?;
+        return Ok(smallvec::smallvec![Frame::new(data)]);
+    }
+
     let mut image = DynamicImage::from_decoder(decoder).context("decoding image")?;
     image.apply_orientation(orientation);
 
@@ -2954,7 +2983,7 @@ pub(crate) fn decode_static_image_from_decoder(
         pixel.swap(0, 2);
     }
 
-    Ok(SmallVec::from_elem(Frame::new(data), 1))
+    Ok(smallvec::smallvec![Frame::new(data)])
 }
 
 impl Hash for Image {
@@ -3140,6 +3169,60 @@ impl From<String> for ClipboardString {
 mod image_tests {
     use super::*;
     use std::sync::Arc;
+
+    #[test]
+    fn static_rgb_decode_uses_one_image_sized_allocation() {
+        use crate::elements::test_allocations::measure;
+        use image::{ColorType, ImageDecoder, ImageResult};
+
+        // Isolate the output allocation from codec-specific scratch. Use the same seam as
+        // resource and clipboard JPEG/PNG, with the launcher background's full dimensions.
+        struct Rgb<'a>(&'a [u8]);
+        impl ImageDecoder for Rgb<'_> {
+            fn dimensions(&self) -> (u32, u32) {
+                (1920, 1080)
+            }
+            fn color_type(&self) -> ColorType {
+                ColorType::Rgb8
+            }
+            fn read_image(self, buf: &mut [u8]) -> ImageResult<()> {
+                buf.copy_from_slice(self.0);
+                Ok(())
+            }
+            fn read_image_boxed(self: Box<Self>, buf: &mut [u8]) -> ImageResult<()> {
+                self.read_image(buf)
+            }
+        }
+        let pixels: Vec<_> = (0..1920 * 1080)
+            .flat_map(|i| [i as u8, (i / 2) as u8, (255 - i % 251) as u8])
+            .collect();
+        let (result, allocations) = measure(|| decode_static_image_from_decoder(Rgb(&pixels)));
+        let frames = result.unwrap();
+        for (src, dst) in pixels.chunks_exact(3).zip(frames[0].buffer().chunks_exact(4)) {
+            assert_eq!(dst, &[src[2], src[1], src[0], 255]);
+        }
+        assert_eq!(allocations.count, 1, "{allocations:?}");
+        assert_eq!(allocations.requested_bytes, 1920 * 1080 * 4);
+    }
+
+    #[test]
+    fn static_rgb_jpeg_matches_the_original_bgra_conversion() {
+        let pixels = [250, 90, 30, 20, 220, 110, 90, 10, 220, 180, 200, 50];
+        let mut bytes = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new(&mut bytes)
+            .encode(&pixels, 2, 2, image::ExtendedColorType::Rgb8)
+            .unwrap();
+        let expected = image::load_from_memory_with_format(&bytes, image::ImageFormat::Jpeg)
+            .unwrap()
+            .into_rgba8();
+        let actual = Image::from_bytes(ImageFormat::Jpeg, bytes)
+            .to_image_data(SvgRenderer::new(Arc::new(())))
+            .unwrap();
+        assert_eq!(actual.size(0), size(2.into(), 2.into()));
+        for (src, dst) in expected.chunks_exact(4).zip(actual.as_bytes(0).unwrap().chunks_exact(4)) {
+            assert_eq!(dst, &[src[2], src[1], src[0], src[3]]);
+        }
+    }
 
     #[test]
     fn test_image_to_image_data_applies_exif_orientation() {

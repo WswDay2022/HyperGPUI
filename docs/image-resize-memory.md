@@ -25,3 +25,9 @@ IshiTone 通过 `NewWindow` 启动，实际加载的是 1920×1080 JPEG（`Objec
 最后一行实际数据为旧 49.13 → 123.29 MiB，新 49.26 → 41.04 MiB；负值表示首次 trim 也释放了启动时仍在私有提交中的空闲驱动分配，不表示活跃图片资源被移除，也不承诺每个驱动都精确回落到同一数值。调试构建的最小窗口证据不外推整应用 Release、帧率或显存。
 
 Windows 原生库回归（含 WARP）为 **51 通过 / 4 忽略**。本机复跑夹具留存在工作区 `tmp`，无生产调试开关：将 `hgpui-image-resize-memory.rs` 临时放入 `crates/gpui/examples/image_resize_memory.rs`，然后 `cargo build -p hgpui --example image_resize_memory --locked --offline`。用 `hgpui-image-resize-memory.ps1 -Exe <binary> -Image <jpeg> -Cases 'c,b,ibcs' -IdleMs 2500 -MaxRetainedMiB 15` 驱动新旧二进制，分别要求基线复现、修复后通过。阈值用于本机对照，不作为跨 GPU/驱动的通用预算。
+
+## 单独优化：静态 RGB 图片解码
+
+无 EXIF 旋转或翻转的 RGB8 图片直接解码到最终 BGRA 缓冲的前 3/4，再从后往前原地扩展和交换通道。移除原先 `SmallVec::from_elem` 对单帧像素的隐式复制。其他色深、透明度、EXIF 变换、动画及 SVG 渲染语义不变。
+
+1920×1080 的生产解码路径夹具（扣除编码器和解码器内部开销）从 **3 次 / 22,809,600 B** 的分配请求降到 **1 次 / 8,294,400 B**；这是加载阶段的请求总量，不是持久内存或 JPEG 端到端耗时。真实彩色 JPEG 与原 BGRA 转换逐像素相同，EXIF 保持原测试覆盖。核心库 **485 通过 / 6 忽略**；Windows `wgpu` feature 与宿主 workspace `--all-targets` 检查通过。两笔补丁同时启用后再次运行原生 resize 矩阵：仅裁剪 +0.16 MiB、仅模糊 +0.20 MiB、图+裁剪+模糊+阴影 −8.09 MiB。未启动 IshiTone，未测其 Release 工作集或帧耗时。
