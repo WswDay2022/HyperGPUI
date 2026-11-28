@@ -44,7 +44,16 @@ impl From<Bounds<ScaledPixels>> for PodBounds {
     }
 }
 
-/// Per-frame draw statistics for profiling overdraw
+// Diagnostics are compile-time opt-in: disabled renderers neither store counters nor
+// evaluate the update expressions (including in unoptimized builds).
+macro_rules! collect_frame_stats {
+    ($($update:tt)*) => {
+        #[cfg(feature = "frame-stats")]
+        { $($update)* }
+    };
+}
+
+/// Per-frame draw statistics for profiling overdraw. Enable `frame-stats` to collect them.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct FrameDrawStats {
     pub total_batches: usize,
@@ -61,6 +70,34 @@ pub struct FrameDrawStats {
     pub surfaces: usize,
     pub backdrop_filters: usize,
     pub filter_boundaries: usize,
+}
+
+#[cfg(test)]
+mod frame_stats_tests {
+    use std::cell::Cell;
+
+    #[test]
+    fn frame_stats_operands_are_evaluated_only_with_the_feature() {
+        let visits = Cell::new(0);
+        collect_frame_stats! { visits.set(visits.get() + 1); }
+        assert_eq!(visits.get(), usize::from(cfg!(feature = "frame-stats")));
+    }
+
+    #[test]
+    #[ignore = "deterministic per-batch counter-write benchmark"]
+    fn frame_stats_counter_write_budget() {
+        const DRAWN_BATCHES: usize = 10_000;
+        let writes = Cell::new(0);
+        let increment = || writes.set(writes.get() + 1);
+        for _ in 0..DRAWN_BATCHES {
+            // A visible ordinary quad batch updates batch, quad and draw-call counts.
+            collect_frame_stats! { increment(); increment(); increment(); }
+        }
+        std::hint::black_box(&increment);
+        let always_on = 3 * DRAWN_BATCHES;
+        assert_eq!(writes.get(), if cfg!(feature = "frame-stats") { always_on } else { 0 });
+        eprintln!("WGPU stats writes per {DRAWN_BATCHES} drawn batches: {always_on} -> {}", writes.get());
+    }
 }
 
 #[repr(C)]
@@ -532,6 +569,7 @@ impl WgpuRenderer {
     ///
     /// The `gpu_context` is a shared reference that coordinates GPU context across
     /// multiple windows. The first window to create a renderer will initialize the
+    #[cfg(feature = "frame-stats")]
     /// context; subsequent windows will share it.
     ///
     /// # Safety
@@ -546,6 +584,7 @@ impl WgpuRenderer {
         extra_requirements: Option<WgpuDeviceRequirements>,
     ) -> anyhow::Result<Self>
     where
+    #[cfg(feature = "frame-stats")]
         W: HasWindowHandle + HasDisplayHandle + std::fmt::Debug + Send + Sync + Clone + 'static,
     {
         let window_handle = window
@@ -911,6 +950,7 @@ impl WgpuRenderer {
                         visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Uniform,
+            #[cfg(feature = "frame-stats")]
                             has_dynamic_offset: false,
                             min_binding_size: NonZeroU64::new(
                                 std::mem::size_of::<GlobalParams>() as u64
@@ -924,6 +964,7 @@ impl WgpuRenderer {
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Uniform,
                             has_dynamic_offset: false,
+            #[cfg(feature = "frame-stats")]
                             min_binding_size: NonZeroU64::new(
                                 std::mem::size_of::<GammaParams>() as u64
                             ),
@@ -1720,14 +1761,15 @@ impl WgpuRenderer {
         self.max_texture_size
     }
 
-    /// Returns the draw statistics from the last frame.
+    /// Returns the draw statistics from the last frame. Requires the `frame-stats` feature.
+    #[cfg(feature = "frame-stats")]
     pub fn frame_stats(&self) -> FrameDrawStats {
         self.frame_stats
     }
 
     pub fn draw(&mut self, scene: &Scene) -> bool {
         // Reset per-frame stats
-        self.frame_stats = FrameDrawStats::default();
+        collect_frame_stats! { self.frame_stats = FrameDrawStats::default(); }
 
         // Bail out early if the surface has been unconfigured (e.g. during
         // Android background/rotation transitions).  Attempting to acquire
@@ -1903,10 +1945,10 @@ impl WgpuRenderer {
             // retained across frames so a filter-heavy scene does not reallocate them every
             // frame; they are still referenced only by bind groups from the current frame.
             self.blur_params_slot.set(0);
-            self.draw_call_count.set(0);
+            collect_frame_stats! { self.draw_call_count.set(0); }
             // An overflow restarts the whole scene; reset the per-batch counters too, otherwise
             // the aborted attempt's counts are added again on the retry.
-            self.frame_stats = FrameDrawStats::default();
+            collect_frame_stats! { self.frame_stats = FrameDrawStats::default(); }
             let mut overflow = false;
 
             let mut encoder =
@@ -1974,14 +2016,14 @@ impl WgpuRenderer {
 
                 for batch in scene.batches() {
                     // Counted here instead of a separate `batches().count()` pass.
-                    self.frame_stats.total_batches += 1;
+                    collect_frame_stats! { self.frame_stats.total_batches += 1; }
                     let ok = match batch {
                         PrimitiveBatch::Quads { range, smoothed } => {
                             let quads = &scene.quads[range];
                             let visible_quads = visible_transformed_items(quads, &viewport_bounds, |q| {
                                 (q.bounds, &q.transformation)
                             });
-                            self.frame_stats.quads += visible_quads.len();
+                            collect_frame_stats! { self.frame_stats.quads += visible_quads.len(); }
                             if !visible_quads.is_empty() {
                                 self.draw_quads(&visible_quads, smoothed, &mut instance_offset, &mut pass)
                             } else {
@@ -1992,7 +2034,7 @@ impl WgpuRenderer {
                             let shadows = &scene.shadows[range];
                             let visible_shadows =
                                 visible_items(shadows, &viewport_bounds, |s| s.bounds);
-                            self.frame_stats.shadows += visible_shadows.len();
+                            collect_frame_stats! { self.frame_stats.shadows += visible_shadows.len(); }
                             if !visible_shadows.is_empty() {
                                 self.draw_shadows(&visible_shadows, smoothed, &mut instance_offset, &mut pass)
                             } else {
@@ -2003,7 +2045,7 @@ impl WgpuRenderer {
                             let paths = &scene.paths[range];
                             let visible_paths =
                                 visible_items(paths, &viewport_bounds, |p| p.bounds);
-                            self.frame_stats.paths += visible_paths.len();
+                            collect_frame_stats! { self.frame_stats.paths += visible_paths.len(); }
                             if visible_paths.is_empty() {
                                 continue;
                             }
@@ -2053,7 +2095,7 @@ impl WgpuRenderer {
                                 visible_transformed_items(underlines, &viewport_bounds, |u| {
                                     (u.bounds, &u.transformation)
                                 });
-                            self.frame_stats.underlines += visible_underlines.len();
+                            collect_frame_stats! { self.frame_stats.underlines += visible_underlines.len(); }
                             if !visible_underlines.is_empty() {
                                 self.draw_underlines(&visible_underlines, &mut instance_offset, &mut pass)
                             } else {
@@ -2066,7 +2108,7 @@ impl WgpuRenderer {
                                 visible_transformed_items(sprites, &viewport_bounds, |s| {
                                     (s.bounds, &s.transformation)
                                 });
-                            self.frame_stats.monochrome_sprites += visible_sprites.len();
+                            collect_frame_stats! { self.frame_stats.monochrome_sprites += visible_sprites.len(); }
                             if !visible_sprites.is_empty() {
                                 self.draw_monochrome_sprites(&visible_sprites, texture_id, &mut instance_offset, &mut pass)
                             } else {
@@ -2079,7 +2121,7 @@ impl WgpuRenderer {
                                 visible_transformed_items(sprites, &viewport_bounds, |s| {
                                     (s.bounds, &s.transformation)
                                 });
-                            self.frame_stats.subpixel_sprites += visible_sprites.len();
+                            collect_frame_stats! { self.frame_stats.subpixel_sprites += visible_sprites.len(); }
                             if !visible_sprites.is_empty() {
                                 self.draw_subpixel_sprites(&visible_sprites, texture_id, &mut instance_offset, &mut pass)
                             } else {
@@ -2092,7 +2134,7 @@ impl WgpuRenderer {
                                 visible_transformed_items(sprites, &viewport_bounds, |s| {
                                     (s.bounds, &s.transformation)
                                 });
-                            self.frame_stats.polychrome_sprites += visible_sprites.len();
+                            collect_frame_stats! { self.frame_stats.polychrome_sprites += visible_sprites.len(); }
                             if !visible_sprites.is_empty() {
                                 self.draw_polychrome_sprites(&visible_sprites, texture_id, smoothed, &mut instance_offset, &mut pass)
                             } else {
@@ -2103,7 +2145,7 @@ impl WgpuRenderer {
                             let surfaces = &scene.surfaces[range];
                             let visible_surfaces =
                                 visible_items(surfaces, &viewport_bounds, |s| s.bounds);
-                            self.frame_stats.surfaces += visible_surfaces.len();
+                            collect_frame_stats! { self.frame_stats.surfaces += visible_surfaces.len(); }
                             if !visible_surfaces.is_empty() {
                                 self.draw_surfaces(&visible_surfaces, &mut pass)
                             } else {
@@ -2114,7 +2156,7 @@ impl WgpuRenderer {
                             let filters = &scene.backdrop_filters[range];
                             let visible_filters =
                                 visible_items(filters, &viewport_bounds, |f| f.bounds);
-                            self.frame_stats.backdrop_filters += visible_filters.len();
+                            collect_frame_stats! { self.frame_stats.backdrop_filters += visible_filters.len(); }
                             if !visible_filters.is_empty() {
                                 // Interrupt the current pass, blur the content painted so far behind
                                 // each backdrop's rounded rect, then resume drawing on top.
@@ -2145,7 +2187,7 @@ impl WgpuRenderer {
                             true
                         }
                         PrimitiveBatch::FilterBoundary(ix) => {
-                            self.frame_stats.filter_boundaries += 1;
+                            collect_frame_stats! { self.frame_stats.filter_boundaries += 1; }
                             let boundary = scene.filter_boundaries[ix].clone();
                             if boundary.is_start {
                                 // Each isolated nesting level uses its own group texture from the
@@ -2268,7 +2310,7 @@ impl WgpuRenderer {
                 continue;
             }
 
-            self.frame_stats.total_draw_calls = self.draw_call_count.get();
+            collect_frame_stats! { self.frame_stats.total_draw_calls = self.draw_call_count.get(); }
 
             // Present the offscreen scene by copying it into the swapchain texture. Skipped when
             // rendering went straight to the swapchain (no filters this frame).
@@ -2423,7 +2465,7 @@ impl WgpuRenderer {
             pass.set_bind_group(0, &resources.globals_bind_group, &[]);
             pass.set_bind_group(1, &bind_group, &[]);
             pass.draw(0..interface::SURFACES.fixed_draw().unwrap().1, 0..1);
-            self.draw_call_count.set(self.draw_call_count.get() + 1);
+            collect_frame_stats! { self.draw_call_count.set(self.draw_call_count.get() + 1); }
         }
         true
     }
@@ -2951,7 +2993,7 @@ impl WgpuRenderer {
         pass.set_bind_group(1, &bind_group, &[]);
         pass.draw(0..4, 0..instance_count);
         // One batched draw call regardless of instance count.
-        self.draw_call_count.set(self.draw_call_count.get() + 1);
+        collect_frame_stats! { self.draw_call_count.set(self.draw_call_count.get() + 1); }
         true
     }
 
@@ -2995,7 +3037,7 @@ impl WgpuRenderer {
         pass.set_bind_group(0, &resources.globals_bind_group, &[]);
         pass.set_bind_group(1, &bind_group, &[]);
         pass.draw(0..4, 0..instance_count);
-        self.draw_call_count.set(self.draw_call_count.get() + 1);
+        collect_frame_stats! { self.draw_call_count.set(self.draw_call_count.get() + 1); }
         true
     }
 
@@ -3108,7 +3150,7 @@ impl WgpuRenderer {
             pass.set_bind_group(0, &resources.path_globals_bind_group, &[]);
             pass.set_bind_group(1, &data_bind_group, &[]);
             pass.draw(0..vertices.len() as u32, 0..1);
-            self.draw_call_count.set(self.draw_call_count.get() + 1);
+            collect_frame_stats! { self.draw_call_count.set(self.draw_call_count.get() + 1); }
         }
 
         true
