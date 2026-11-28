@@ -27,6 +27,10 @@
 
 收益是**符合条件时每帧少 1 次全屏绘制**，4K 对应 8,294,400 个名义覆盖像素，以及冷态少 1 张 **31.64 MiB** BGRA8 根纹理；不等于实测带宽、现存缓存回收，或适用于仍启用 backdrop 的窗口。保留组内合成、清屏、颜色格式和现有 Present。
 
+## 交叉审查修正 — 隔离组边界优先于空间合批
+
+已有相交夹具通过，但与组 bounds 不相交的后代能复用组前的低 order，实际批次为 `quad, start, end`（两个 quad 都在第一批），从而绕过自己的裁剪或内容滤镜。共享 Scene 必须在 start 和 end 后都提高 order floor；不能要求后代先与组 bounds 相交。外层 `paint_layer` 另有预留 order，跨边界后只在该层首次再绘制时重新登记其 bounds，同一段仍复用一个 order。不新增后端状态、不改变 shader、不关闭裁剪或筛掉后代。回归覆盖组外几何、嵌套、外层 paint layer 和重放到新场景；原实现两个回归均失败，修正后核心库 488 通过 / 6 忽略。这是三端共用的批次契约，不等同于三端实机像素回读。
+
 ## G05 — 全屏三角和矩形提交各归共享契约
 
 共享 shader 的 fullscreen 入口只用 3 个顶点；矩形 `rectangle_corner` 用 vertex ID 的低两位得到四个角，其拓扑是 4 顶点 triangle strip。Metal 旧实现统一发 6 顶点 triangle list：fullscreen 多提交一个三角，合成和视频 Surface 的矩形还会重叠/漏覆盖。WARP 使用同一个共享合成 shader，重现旧提交在 (18,58) 为 alpha=0；使用共享契约后该点回读为预期完整红色。不是 Mac 实机回读。Metal 下采样另需用全尺寸来源纹理定义 UV，不能用半尺寸 raster viewport 归一化；DX/WGPU 原本已经绑定全尺寸场景。

@@ -57,7 +57,7 @@ impl From<bool> for PaddedBool32 {
 pub struct Scene {
     pub(crate) paint_operations: Vec<PaintOperation>,
     primitive_bounds: BoundsTree<ScaledPixels>,
-    layer_stack: Vec<DrawOrder>,
+    layer_stack: Vec<PaintLayer>,
     pub shadows: Vec<Shadow>,
     pub quads: Vec<Quad>,
     pub paths: Vec<Path<ScaledPixels>>,
@@ -84,6 +84,11 @@ pub struct Scene {
     /// Incrementally updated fingerprint of [`Scene::mask_chains`]. Backends use it to skip
     /// re-uploading an arena whose contents did not change since the previous frame.
     mask_chains_fingerprint: u64,
+}
+
+struct PaintLayer {
+    bounds: Bounds<ScaledPixels>,
+    order: DrawOrder,
 }
 
 /// Fingerprint of an empty mask-chain arena. `Scene` derives `Default`, so this must be zero.
@@ -195,7 +200,7 @@ impl Scene {
 
     pub fn push_layer(&mut self, bounds: Bounds<ScaledPixels>) {
         let order = self.primitive_bounds.insert(bounds);
-        self.layer_stack.push(order);
+        self.layer_stack.push(PaintLayer { bounds, order });
         self.paint_operations
             .push(PaintOperation::StartLayer(bounds));
     }
@@ -220,16 +225,8 @@ impl Scene {
             .ordering_bounds()
             .intersect(&primitive.content_mask().bounds);
 
-        // Content-filter boundaries must always be inserted as matched pairs — dropping one
-        // (e.g. for an empty clipped region) would orphan its partner and corrupt the renderer's
-        // target stack. Each marker takes an order strictly above ALL prior content, so the start
-        // sorts after everything painted before it and the element's own children (which overlap
-        // the marker bounds) sort strictly above the start. This keeps a marker's order range from
-        // colliding with unrelated non-overlapping content that reuses low orderings (e.g. a
-        // background grid), which would otherwise sweep that content into the group. Content
-        // painted *after* the group is held above it by raising the order floor when the end
-        // marker is inserted (see below) — otherwise a later non-overlapping sibling could reuse a
-        // low order that lands inside the start..end range and be swept into the group.
+        // Keep boundary pairs even if clipped out: an unmatched marker would corrupt the
+        // renderer's target stack. Both markers are ordering barriers, regardless of overlap.
         let is_filter_boundary = matches!(primitive, Primitive::FilterBoundary(_));
 
         if clipped_bounds.is_empty() && !is_filter_boundary {
@@ -242,12 +239,20 @@ impl Scene {
             } else {
                 clipped_bounds
             };
-            self.primitive_bounds.insert_above_all(order_bounds)
+            let order = self.primitive_bounds.insert_above_all(order_bounds);
+            // Even a disjoint child must follow the start, and all subsequent siblings
+            // must follow the end. Neither is guaranteed by spatial ordering alone.
+            self.primitive_bounds.set_order_floor(order + 1);
+            order
+        } else if let Some(layer) = self.layer_stack.last_mut() {
+            if layer.order < self.primitive_bounds.order_floor() {
+                // A layer may span a boundary. Reserve a new order on first use in this
+                // segment, then resume sharing it rather than inserting each primitive.
+                layer.order = self.primitive_bounds.insert(layer.bounds);
+            }
+            layer.order
         } else {
-            self.layer_stack
-                .last()
-                .copied()
-                .unwrap_or_else(|| self.primitive_bounds.insert(clipped_bounds))
+            self.primitive_bounds.insert(clipped_bounds)
         };
         match &mut primitive {
             Primitive::Shadow(shadow) => {
@@ -289,14 +294,6 @@ impl Scene {
             }
             Primitive::FilterBoundary(boundary) => {
                 boundary.order = order;
-                if !boundary.is_start {
-                    // A closed content-filter group is a draw-order barrier: everything painted
-                    // afterwards must sort above the group's end marker so it can't fall back
-                    // inside the group's order range (subsequent non-overlapping content otherwise
-                    // reuses a low order). Mirrors the floor raised before deferred draws in
-                    // `raise_order_floor`.
-                    self.primitive_bounds.set_order_floor(order + 1);
-                }
                 self.filter_boundaries.push(boundary.clone());
             }
         }
@@ -366,10 +363,8 @@ impl Scene {
             .sort_by_key(|sprite| (sprite.order, sprite.tile.tile_id));
         self.surfaces.sort_by_key(|surface| surface.order);
         self.backdrop_filters.sort_by_key(|filter| filter.order);
-        // Markers normally get distinct, monotonically-increasing orders (children overlap
-        // their group bounds and so sort strictly between the start and end). The `!is_start`
-        // tiebreak only matters for a degenerate empty group whose start and end tie: it keeps
-        // the start (false = 0) ahead of the end (true = 1) so the pair stays well-formed.
+        // Boundary markers have distinct orders; the order floor keeps children strictly
+        // between their markers, even if their bounds don't overlap the group.
         self.filter_boundaries
             .sort_by_key(|boundary| (boundary.order, !boundary.is_start));
     }
@@ -1754,6 +1749,58 @@ mod tests {
             batch_kinds(&mut scene),
             vec!["quad", "start", "quad", "end"]
         );
+    }
+
+    #[test]
+    fn clip_group_brackets_children_outside_its_bounds() {
+        let mut scene = Scene::default();
+        let clip_boundary = |is_start| FilterBoundary {
+            clip_group: true,
+            filters: Default::default(),
+            corner_radii: Corners::all(sp(8.0)),
+            ..boundary(is_start)
+        };
+        scene.insert_primitive(quad());
+        scene.insert_primitive(clip_boundary(true));
+        scene.insert_primitive(detached_quad());
+        scene.insert_primitive(clip_boundary(false));
+
+        assert_eq!(batch_kinds(&mut scene), ["quad", "start", "quad", "end"]);
+    }
+
+    #[test]
+    fn filter_boundaries_split_enclosing_paint_layer_batches_on_replay() {
+        let layer_bounds = Bounds {
+            origin: full_bounds().origin,
+            size: Size {
+                width: sp(320.0),
+                height: sp(320.0),
+            },
+        };
+        let expected = ["quad", "start", "quad", "start", "quad", "end", "quad", "end", "quad"];
+        let mut scene = Scene::default();
+        scene.push_layer(layer_bounds);
+        scene.insert_primitive(quad());
+        let start = scene.len();
+        scene.insert_primitive(boundary(true));
+        scene.insert_primitive(quad());
+        scene.insert_primitive(boundary(true));
+        scene.insert_primitive(detached_quad());
+        scene.insert_primitive(boundary(false));
+        scene.insert_primitive(quad());
+        scene.insert_primitive(boundary(false));
+        let subtree = start..scene.len();
+        scene.insert_primitive(quad());
+        scene.pop_layer();
+        assert_eq!(batch_kinds(&mut scene), expected);
+
+        let mut replayed = Scene::default();
+        replayed.push_layer(layer_bounds);
+        replayed.insert_primitive(quad());
+        replayed.replay(subtree, &scene);
+        replayed.insert_primitive(quad());
+        replayed.pop_layer();
+        assert_eq!(batch_kinds(&mut replayed), expected);
     }
 
     // Note: this validates only the *scene ordering* of nested filter boundaries (start/child/

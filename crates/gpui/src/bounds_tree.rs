@@ -130,6 +130,10 @@ where
         self.order_floor = self.order_floor.max(floor);
     }
 
+    pub(crate) fn order_floor(&self) -> u32 {
+        self.order_floor
+    }
+
     /// The highest ordering assigned to any bounds so far (0 if empty).
     pub fn max_order(&self) -> u32 {
         self.max_leaf.map_or(0, |idx| self.nodes[idx].max_order)
