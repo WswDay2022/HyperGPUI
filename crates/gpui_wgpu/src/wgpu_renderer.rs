@@ -54,6 +54,7 @@ macro_rules! collect_frame_stats {
 }
 
 /// Per-frame draw statistics for profiling overdraw. Enable `frame-stats` to collect them.
+#[cfg(feature = "frame-stats")]
 #[derive(Debug, Default, Clone, Copy)]
 pub struct FrameDrawStats {
     pub total_batches: usize,
@@ -445,7 +446,7 @@ struct WgpuResources {
     /// One reused uniform buffer holding [`BlurParams`] for every blur pass in a frame, each at a
     /// distinct (alignment-strided) offset. Avoids allocating a buffer per pass; distinct offsets
     /// mean `write_buffer`'s last-write-at-submit semantics don't clobber earlier passes.
-    blur_params_buffer: wgpu::Buffer,
+    blur_params_buffer: OnceCell<wgpu::Buffer>,
     /// Spill buffers for frames that need more than [`BLUR_PARAMS_SLOTS`] blur passes. Reusing a
     /// slot would rewrite params that already-recorded (but not yet submitted) passes still read
     /// at execution time, corrupting earlier blurs. Retained across frames and dropped with the
@@ -508,6 +509,40 @@ impl WgpuResources {
 /// parameters (see [`WgpuRenderer::make_blur_bind_group`]).
 const BLUR_PARAMS_SLOTS: u64 = 256;
 
+fn blur_uniform_buffer<'a>(
+    storage: &'a OnceCell<wgpu::Buffer>,
+    device: &wgpu::Device,
+    stride: u64,
+) -> &'a wgpu::Buffer {
+    storage.get_or_init(|| device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("blur_params_buffer"),
+        size: stride * BLUR_PARAMS_SLOTS,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    }))
+}
+
+#[cfg(all(test, not(target_family = "wasm")))]
+#[test]
+#[ignore = "real GPU resource benchmark; run this test in isolation"]
+fn filter_uniforms_allocate_only_on_first_pass() {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) else {
+        eprintln!("WGPU filter buffer measurement skipped (no adapter)");
+        return;
+    };
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
+    let stride = (std::mem::size_of::<BlurParams>() as u64)
+        .next_multiple_of(u64::from(device.limits().min_uniform_buffer_offset_alignment));
+    let storage = OnceCell::new();
+    assert!(storage.get().is_none());
+    let first = blur_uniform_buffer(&storage, &device, stride);
+    assert_eq!(first.size(), stride * BLUR_PARAMS_SLOTS);
+    assert!(std::ptr::eq(first, blur_uniform_buffer(&storage, &device, stride)));
+    queue.write_buffer(first, 0, bytemuck::bytes_of(&BlurParams::zeroed()));
+    eprintln!("WGPU filter parameter ByteWidth without effects: {} -> 0; first active pass allocates the same buffer", first.size());
+}
+
 pub struct WgpuRenderer {
     /// Shared GPU context for device recovery coordination (unused on WASM).
     #[allow(dead_code)]
@@ -535,6 +570,7 @@ pub struct WgpuRenderer {
     blur_params_overflow_warned: std::cell::Cell<bool>,
     /// Scene draw calls recorded during the current frame. A `Cell` because the `&self` draw
     /// helpers issue the draws; copied into `frame_stats` when the frame is submitted.
+    #[cfg(feature = "frame-stats")]
     draw_call_count: std::cell::Cell<usize>,
     rendering_params: RenderingParameters,
     is_bgr: bool,
@@ -549,6 +585,7 @@ pub struct WgpuRenderer {
     surface_configured: bool,
     needs_redraw: bool,
     /// Per-frame draw statistics for profiling overdraw
+    #[cfg(feature = "frame-stats")]
     frame_stats: FrameDrawStats,
 }
 
@@ -569,7 +606,6 @@ impl WgpuRenderer {
     ///
     /// The `gpu_context` is a shared reference that coordinates GPU context across
     /// multiple windows. The first window to create a renderer will initialize the
-    #[cfg(feature = "frame-stats")]
     /// context; subsequent windows will share it.
     ///
     /// # Safety
@@ -584,7 +620,6 @@ impl WgpuRenderer {
         extra_requirements: Option<WgpuDeviceRequirements>,
     ) -> anyhow::Result<Self>
     where
-    #[cfg(feature = "frame-stats")]
         W: HasWindowHandle + HasDisplayHandle + std::fmt::Debug + Send + Sync + Clone + 'static,
     {
         let window_handle = window
@@ -773,15 +808,8 @@ impl WgpuRenderer {
         });
 
         let uniform_alignment = device.limits().min_uniform_buffer_offset_alignment as u64;
-        // Shared blur-params buffer: BLUR_PARAMS_SLOTS slots, each one alignment stride apart.
         let blur_params_stride =
             (std::mem::size_of::<BlurParams>() as u64).next_multiple_of(uniform_alignment);
-        let blur_params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("blur_params_buffer"),
-            size: blur_params_stride * BLUR_PARAMS_SLOTS,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
 
         let globals_size = std::mem::size_of::<GlobalParams>() as u64;
         let gamma_size = std::mem::size_of::<GammaParams>() as u64;
@@ -886,7 +914,7 @@ impl WgpuRenderer {
             bind_group_layouts,
             atlas_sampler,
             surface_sampler,
-            blur_params_buffer,
+            blur_params_buffer: OnceCell::new(),
             blur_params_extra: RefCell::new(Vec::new()),
             globals_buffer,
             globals_bind_group,
@@ -923,6 +951,7 @@ impl WgpuRenderer {
             blur_params_stride,
             blur_params_slot: std::cell::Cell::new(0),
             blur_params_overflow_warned: std::cell::Cell::new(false),
+            #[cfg(feature = "frame-stats")]
             draw_call_count: std::cell::Cell::new(0),
             rendering_params,
             is_bgr: false,
@@ -936,6 +965,7 @@ impl WgpuRenderer {
             device_lost: context.device_lost_flag(),
             surface_configured: true,
             needs_redraw: false,
+            #[cfg(feature = "frame-stats")]
             frame_stats: FrameDrawStats::default(),
         })
     }
@@ -950,7 +980,6 @@ impl WgpuRenderer {
                         visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Uniform,
-            #[cfg(feature = "frame-stats")]
                             has_dynamic_offset: false,
                             min_binding_size: NonZeroU64::new(
                                 std::mem::size_of::<GlobalParams>() as u64
@@ -964,7 +993,6 @@ impl WgpuRenderer {
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Uniform,
                             has_dynamic_offset: false,
-            #[cfg(feature = "frame-stats")]
                             min_binding_size: NonZeroU64::new(
                                 std::mem::size_of::<GammaParams>() as u64
                             ),
@@ -2496,7 +2524,11 @@ impl WgpuRenderer {
         let offset = slot * self.blur_params_stride;
 
         let params_buffer = if buffer_index == 0 {
-            resources.blur_params_buffer.clone()
+            blur_uniform_buffer(
+                &resources.blur_params_buffer,
+                &resources.device,
+                self.blur_params_stride,
+            ).clone()
         } else {
             let mut extra = resources.blur_params_extra.borrow_mut();
             if extra.len() < buffer_index {

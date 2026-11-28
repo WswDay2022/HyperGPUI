@@ -224,7 +224,7 @@ struct DirectXRenderPipelines {
     blur_fragment: ID3D11PixelShader,
     blur_composite_vertex: ID3D11VertexShader,
     blur_composite_fragment: ID3D11PixelShader,
-    blur_params_buffer: ID3D11Buffer,
+    blur_params_buffer: std::cell::OnceCell<ID3D11Buffer>,
     blur_blend_replace: ID3D11BlendState,
     blur_blend_composite: ID3D11BlendState,
 }
@@ -1178,7 +1178,8 @@ impl DirectXRenderer {
         let (topology, vertex_count) = dx_fixed_draw(geometry);
         let devices = self.devices.as_ref().context("devices missing")?;
         let ctx = &devices.device_context;
-        update_buffer(ctx, &self.pipelines.blur_params_buffer, &[params])?;
+        let params_buffer = self.pipelines.blur_params_buffer(&devices.device)?;
+        update_buffer(ctx, params_buffer, &[params])?;
         let null_srv: [Option<ID3D11ShaderResourceView>; 1] = [None];
         unsafe {
             // Unbind the source at t3 in both stages: the target texture must not stay bound as
@@ -1215,9 +1216,7 @@ impl DirectXRenderer {
             ctx.IASetPrimitiveTopology(topology);
             ctx.VSSetShader(vertex, None);
             ctx.PSSetShader(fragment, None);
-            let constant_buffers =
-                self.globals
-                    .constant_buffers(Some(&self.pipelines.blur_params_buffer));
+            let constant_buffers = self.globals.constant_buffers(Some(params_buffer));
             ctx.VSSetConstantBuffers(0, Some(&constant_buffers));
             ctx.PSSetConstantBuffers(0, Some(&constant_buffers));
             // Blur passes sample with a clamp sampler: gaussian taps that leave the texture at
@@ -1804,7 +1803,6 @@ impl DirectXRenderPipelines {
             device,
             RawShaderBytes::new(ShaderModule::BlurComposite, ShaderTarget::Fragment)?.as_bytes(),
         )?;
-        let blur_params_buffer = create_constant_buffer(device, std::mem::size_of::<BlurParams>())?;
         let blur_blend_replace = create_blend_state_no_blend(device)?;
         // Premultiplied over for both color and alpha: the composite outputs a premultiplied
         // sample, so straight-alpha blending would darken faded edges and additive alpha would
@@ -1826,10 +1824,19 @@ impl DirectXRenderPipelines {
             blur_fragment,
             blur_composite_vertex,
             blur_composite_fragment,
-            blur_params_buffer,
+            blur_params_buffer: std::cell::OnceCell::new(),
             blur_blend_replace,
             blur_blend_composite,
         })
+    }
+
+    fn blur_params_buffer(&self, device: &ID3D11Device) -> Result<&ID3D11Buffer> {
+        if self.blur_params_buffer.get().is_none() {
+            // Leave the slot empty on allocation failure so recovery can retry.
+            let buffer = create_constant_buffer(device, std::mem::size_of::<BlurParams>())?;
+            let _ = self.blur_params_buffer.set(buffer);
+        }
+        Ok(self.blur_params_buffer.get().unwrap())
     }
 }
 
@@ -3229,6 +3236,24 @@ mod tests {
     };
 
     const TEST_SIZE: u32 = 64;
+
+    #[test]
+    fn filter_uniforms_allocate_only_on_first_pass() -> Result<()> {
+        let Some((device, context)) = create_warp_device() else {
+            eprintln!("DX11 filter buffer measurement skipped (no WARP device)");
+            return Ok(());
+        };
+        let pipelines = DirectXRenderPipelines::new(&device)?;
+        assert!(pipelines.blur_params_buffer.get().is_none());
+        let first = pipelines.blur_params_buffer(&device)?;
+        let mut desc = windows::Win32::Graphics::Direct3D11::D3D11_BUFFER_DESC::default();
+        unsafe { first.GetDesc(&mut desc) };
+        assert_eq!(desc.ByteWidth as usize, std::mem::size_of::<BlurParams>().next_multiple_of(16));
+        assert!(std::ptr::eq(first, pipelines.blur_params_buffer(&device)?));
+        update_buffer(&context, first, &[BlurParams::default()])?;
+        eprintln!("DX11 filter parameter ByteWidth without effects: {} -> 0", desc.ByteWidth);
+        Ok(())
+    }
 
     #[test]
     fn disabled_batch_trace_does_not_format_a_label() {
