@@ -255,9 +255,15 @@ struct DirectXGlobalElements {
 struct Annotation<'a>(&'a ID3DUserDefinedAnnotation);
 
 impl<'a> Annotation<'a> {
-    fn new(annotation: &'a ID3DUserDefinedAnnotation, label: HSTRING) -> Self {
-        unsafe { annotation.BeginEvent(&label) };
-        Self(annotation)
+    #[inline]
+    fn if_active(
+        annotation: Option<&'a ID3DUserDefinedAnnotation>,
+        label: impl FnOnce() -> String,
+    ) -> Option<Self> {
+        annotation.map(|annotation| {
+            unsafe { annotation.BeginEvent(&HSTRING::from(label().as_str())) };
+            Self(annotation)
+        })
     }
 }
 
@@ -629,39 +635,36 @@ impl DirectXRenderer {
             .and_then(|devices| devices.annotation.clone())
             .filter(|annotation| unsafe { annotation.GetStatus().as_bool() });
         for batch in scene.batches() {
-            let batch_label = batch.label();
-            let _annotation = annotation
-                .as_ref()
-                .map(|annotation| Annotation::new(annotation, HSTRING::from(batch_label.as_str())));
+            let _annotation = Annotation::if_active(annotation.as_ref(), || batch.label());
             let batch_result = match batch {
-                PrimitiveBatch::Shadows { range, smoothed } => {
+                PrimitiveBatch::Shadows { ref range, smoothed } => {
                     self.draw_shadows(range.start, range.len(), smoothed)
                 }
-                PrimitiveBatch::Quads { range, smoothed } => {
+                PrimitiveBatch::Quads { ref range, smoothed } => {
                     self.draw_quads(range.start, range.len(), smoothed)
                 }
-                PrimitiveBatch::Paths(range) => {
-                    let paths = &scene.paths[range];
+                PrimitiveBatch::Paths(ref range) => {
+                    let paths = &scene.paths[range.clone()];
                     let target = PathTarget::for_paths([self.width, self.height], paths);
                     self.draw_paths_to_intermediate(paths, target)?;
                     self.draw_paths_from_intermediate(paths, target)
                 }
-                PrimitiveBatch::Underlines(range) => self.draw_underlines(range.start, range.len()),
-                PrimitiveBatch::MonochromeSprites { texture_id, range } => {
+                PrimitiveBatch::Underlines(ref range) => self.draw_underlines(range.start, range.len()),
+                PrimitiveBatch::MonochromeSprites { texture_id, ref range } => {
                     self.draw_monochrome_sprites(texture_id, range.start, range.len())
                 }
-                PrimitiveBatch::SubpixelSprites { texture_id, range } => {
+                PrimitiveBatch::SubpixelSprites { texture_id, ref range } => {
                     self.draw_subpixel_sprites(texture_id, range.start, range.len())
                 }
                 PrimitiveBatch::PolychromeSprites {
                     texture_id,
-                    range,
+                    ref range,
                     smoothed,
                 } => self.draw_polychrome_sprites(texture_id, range.start, range.len(), smoothed),
-                PrimitiveBatch::Surfaces(range) => self.draw_surfaces(&scene.surfaces[range]),
-                PrimitiveBatch::BackdropFilters(range) => {
+                PrimitiveBatch::Surfaces(ref range) => self.draw_surfaces(&scene.surfaces[range.clone()]),
+                PrimitiveBatch::BackdropFilters(ref range) => {
                     let result = (|| {
-                        for filter in &scene.backdrop_filters[range] {
+                        for filter in &scene.backdrop_filters[range.clone()] {
                             self.dx_blur_and_composite(
                                 &current_srv,
                                 &current_texture,
@@ -761,8 +764,9 @@ impl DirectXRenderer {
             };
             batch_result.with_context(|| {
                 format!(
-                    "scene too large (batch {batch_label}):\
+                    "scene too large (batch {}):\
                     {} paths, {} shadows, {} quads, {} underlines, {} mono, {} subpixel, {} poly, {} surfaces",
+                    batch.label(),
                     scene.paths.len(),
                     scene.shadows.len(),
                     scene.quads.len(),
@@ -3225,6 +3229,58 @@ mod tests {
     };
 
     const TEST_SIZE: u32 = 64;
+
+    #[test]
+    fn disabled_batch_trace_does_not_format_a_label() {
+        let mut calls = 0;
+        let trace = super::Annotation::if_active(None, || {
+            calls += 1;
+            hgpui::PrimitiveBatch::Quads { range: 0..4, smoothed: true }.label()
+        });
+        assert!(trace.is_none());
+        assert_eq!(calls, 0);
+    }
+
+    #[test]
+    #[ignore = "CPU timing comparison; run in Release"]
+    fn disabled_batch_trace_benchmark() {
+        use std::{hint::black_box, time::Instant};
+
+        const BATCHES: usize = 100_000;
+        let batch = hgpui::PrimitiveBatch::Quads { range: 0..4, smoothed: true };
+        let run = |eager: bool| {
+            let mut formatted = 0;
+            let start = Instant::now();
+            for _ in 0..BATCHES {
+                let batch = black_box(&batch);
+                let mut format_label = || {
+                    formatted += 1;
+                    batch.label()
+                };
+                if eager {
+                    black_box(format_label());
+                } else {
+                    black_box(super::Annotation::if_active(black_box(None), format_label));
+                }
+            }
+            assert_eq!(formatted, if eager { BATCHES } else { 0 });
+            start.elapsed().as_secs_f64() * 1e9 / BATCHES as f64
+        };
+        let mut old = [0.0; 7];
+        let mut new = [0.0; 7];
+        for i in 0..7 {
+            if i % 2 == 0 {
+                old[i] = run(true);
+                new[i] = run(false);
+            } else {
+                new[i] = run(false);
+                old[i] = run(true);
+            }
+        }
+        old.sort_by(f64::total_cmp);
+        new.sort_by(f64::total_cmp);
+        eprintln!("DX11 labels formatted {BATCHES}->0; median ns/batch {:.2}->{:.2}", old[3], new[3]);
+    }
 
     #[path = "path_msaa_benchmark.rs"]
     mod path_msaa_benchmark;

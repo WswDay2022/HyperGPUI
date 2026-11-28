@@ -63,6 +63,7 @@ D 盘曾 ENOSPC=0，暂停后用户清理至约123GB；2026-11-22 查询仍约82
 | [图片背景与 Resize 内存](image-resize-memory.md) | 图片/隔离裁剪/背景模糊对照，DX11 驱动资源回落和静态图片解码。 |
 | 交叉审查首批正确性修复 | [Infer 行高恢复按阶段测量](core-elements-performance.md#c09--uniform_list-infer-复用代表行测量历史已撤销)；[隔离组边界与 paint layer](render-pipeline-resource-audit.md#交叉审查修正--隔离组边界优先于空间合批)。 |
 | [交叉审查功能一致性后续](optimization-correctness-followup.md) | WGPU 变换后剔除、Deferred 祖先裁剪、缓存与 AccessKit 动作；未将正确性回退解释为提速。 |
+| [默认 Release 诊断开销检查](release-diagnostics-audit.md) | 无障碍诊断快照、DX11 未开启 ETW 时的标签，以及保留的主动诊断与功能验证。 |
 
 原始完整报告最初在 `D:/WswDay2022/tmp/Hgpui_Performance_Memory_Audit_2026-11-15_e484.md`。仓库中的基线副本在本次整理前已存在且未跟踪，SHA-256与原件一致：`c9e46f5833417bfeb0a373af8fa69388f413f94a0cb3430de9cd2de3dedb77ae`。纳入版本管理时保留原文，不把“报告在仓库外/未修”等历史描述改为当前结论。原行号按基线查，当前源码重新定位。
 
