@@ -6,7 +6,7 @@ use hgpui::{
     PrimitiveBatch, Quad, ScaledFilter, ScaledPixels, Scene, Shadow, Size, SubpixelSprite,
     Underline, get_gamma_correction_ratios,
 };
-use hgpui_render::blur_region::filter_copy_region;
+use hgpui_render::blur_region::{blur_pass_plan, filter_copy_region};
 use hgpui_render::filter_matrix::{
     ColorFilterMatrix, color_filter_matrix, combined_blur_radius,
 };
@@ -2579,48 +2579,13 @@ impl WgpuRenderer {
             }
             return;
         }
-        // Span ±3σ. If that needs more than 32 taps, spread the taps apart (tap_step > 1) rather
-        // than truncating the kernel — keeps very large radii from clipping (review #6).
-        let ideal_taps = (3.0 * sigma).ceil();
-        let tap_count = ideal_taps.clamp(1.0, 32.0);
-        let tap_step = (ideal_taps / tap_count).max(1.0);
         let full_w = self.surface_config.width;
         let full_h = self.surface_config.height;
+        let Some(plan) = blur_pass_plan(bounds, blur_radius, clip_rounded, full_w, full_h) else {
+            return;
+        };
         let blur_width = (full_w / 2).max(1) as f32;
         let blur_height = (full_h / 2).max(1) as f32;
-
-        // The composite covers `bounds` (backdrop) or `bounds` dilated by the kernel reach
-        // (content blur bleeds past the box like CSS `filter: blur`). The gaussian reads up to
-        // one kernel reach beyond every pixel it computes, so the scissored passes must carry
-        // an extra kernel reach of valid data around the composite region — otherwise taps near
-        // the scissor edge read stale texels and paint a contaminated band along the border.
-        let kernel_reach = 3.0 * blur_radius; // 3σ at half resolution, in full-res pixels
-        let composite_dilation = if clip_rounded { 0.0 } else { kernel_reach };
-        let scissor_dilation = composite_dilation + kernel_reach;
-        let hw = (full_w / 2).max(1);
-        let hh = (full_h / 2).max(1);
-        let x0 = (((bounds.origin.x.0 - scissor_dilation) * 0.5)
-            .floor()
-            .max(0.0) as u32)
-            .min(hw);
-        let y0 = (((bounds.origin.y.0 - scissor_dilation) * 0.5)
-            .floor()
-            .max(0.0) as u32)
-            .min(hh);
-        let x1 = ((((bounds.origin.x.0 + bounds.size.width.0 + scissor_dilation) * 0.5)
-            .ceil()
-            .max(0.0) as u32)
-            .min(hw))
-        .max(x0);
-        let y1 = ((((bounds.origin.y.0 + bounds.size.height.0 + scissor_dilation) * 0.5)
-            .ceil()
-            .max(0.0) as u32)
-            .min(hh))
-        .max(y0);
-        let scissor = [x0, y0, x1 - x0, y1 - y0];
-        if scissor[2] == 0 || scissor[3] == 0 {
-            return;
-        }
 
         // Owned handles so the passes below don't borrow `self`.
         let (ping, pong) = {
@@ -2648,7 +2613,7 @@ impl WgpuRenderer {
                 bounds: bounds.into(),
                 ..Default::default()
             },
-            scissor,
+            plan.downsample,
         );
         self.run_blur_pass(
             encoder,
@@ -2658,12 +2623,12 @@ impl WgpuRenderer {
             &ping,
             BlurParams {
                 direction: [1.0 / blur_width, 0.0],
-                sigma,
-                tap_count,
-                tap_step,
+                sigma: plan.sigma,
+                tap_count: plan.tap_count,
+                tap_step: plan.tap_step,
                 ..Default::default()
             },
-            scissor,
+            plan.horizontal,
         );
         self.run_blur_pass(
             encoder,
@@ -2673,28 +2638,20 @@ impl WgpuRenderer {
             &pong,
             BlurParams {
                 direction: [0.0, 1.0 / blur_height],
-                sigma,
-                tap_count,
-                tap_step,
+                sigma: plan.sigma,
+                tap_count: plan.tap_count,
+                tap_step: plan.tap_step,
                 ..Default::default()
             },
-            scissor,
+            plan.vertical,
         );
 
-        // Composite the blurred result into the target (loads existing content). For content blur
-        // the quad covers the dilated region, so the element's edge content (mirrored by the
-        // downsample) spreads past the box without a sharp clip; for backdrop the quad is the
-        // element bounds and the shader clips to the rounded rect.
-        let composite_bounds = if clip_rounded {
-            bounds
-        } else {
-            bounds.dilate(ScaledPixels(composite_dilation))
-        };
+        // The plan preserves the original backdrop box / expanded content-blur geometry.
         self.filter_composite(
             encoder,
             &ping,
             target,
-            composite_bounds,
+            plan.composite_bounds,
             content_mask,
             mask_chain,
             corner_radii,

@@ -23,7 +23,7 @@ use crate::directx_renderer::shader_resources::{RawShaderBytes, ShaderModule, Sh
 use crate::*;
 use hgpui::*;
 use hgpui_render::artifacts::Dx11DrawConstants;
-use hgpui_render::blur_region::{blur_scissor_region, filter_copy_region};
+use hgpui_render::blur_region::{blur_pass_plan, filter_copy_region};
 use hgpui_render::filter_matrix::{
     ColorFilterMatrix, color_filter_matrix, combined_blur_radius,
 };
@@ -1332,16 +1332,10 @@ impl DirectXRenderer {
                 clip_rounded,
             );
         }
-        // Span ±3σ. If that needs more than 32 taps, spread the taps apart (tap_step > 1) rather
-        // than truncating the kernel — keeps very large radii from clipping. Matches wgpu.
-        let ideal_taps = (3.0 * sigma).ceil();
-        let tap_count = ideal_taps.clamp(1.0, 32.0);
-        let tap_step = (ideal_taps / tap_count).max(1.0);
-        // Content blur bleeds ~3·radius past the box, so its composite quad covers a dilated rect.
-        let composite_bounds = if clip_rounded {
-            bounds
-        } else {
-            bounds.dilate(ScaledPixels(3.0 * blur_radius))
+        let Some(plan) =
+            blur_pass_plan(bounds, blur_radius, clip_rounded, self.width, self.height)
+        else {
+            return Ok(());
         };
         let half_w = (self.width / 2).max(1);
         let half_h = (self.height / 2).max(1);
@@ -1352,15 +1346,6 @@ impl DirectXRenderer {
             Height: half_h as f32,
             MinDepth: 0.0,
             MaxDepth: 1.0,
-        };
-        // Match the wgpu backend: the gaussian reads up to one kernel reach beyond every pixel
-        // it writes, so the scissored passes carry an extra reach of valid data around the
-        // composite region. Without this, taps near the scissor edge read stale texels from a
-        // previous frame and paint a contaminated band along the blur's border.
-        let Some(scissor) =
-            blur_scissor_region(bounds, blur_radius, clip_rounded, self.width, self.height)
-        else {
-            return Ok(());
         };
         let (ping_rtv, ping_srv, pong_rtv, pong_srv) = {
             let r = self.resources.as_ref().context("resources missing")?;
@@ -1394,7 +1379,7 @@ impl DirectXRenderer {
                 ..Default::default()
             },
             &half_vp,
-            Some(scissor),
+            Some(plan.downsample),
             D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
             3,
             true,
@@ -1407,13 +1392,13 @@ impl DirectXRenderer {
             &ping_srv,
             BlurParams {
                 direction: [1.0 / half_w as f32, 0.0],
-                sigma,
-                tap_count,
-                tap_step,
+                sigma: plan.sigma,
+                tap_count: plan.tap_count,
+                tap_step: plan.tap_step,
                 ..Default::default()
             },
             &half_vp,
-            Some(scissor),
+            Some(plan.horizontal),
             D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
             3,
             true,
@@ -1426,13 +1411,13 @@ impl DirectXRenderer {
             &pong_srv,
             BlurParams {
                 direction: [0.0, 1.0 / half_h as f32],
-                sigma,
-                tap_count,
-                tap_step,
+                sigma: plan.sigma,
+                tap_count: plan.tap_count,
+                tap_step: plan.tap_step,
                 ..Default::default()
             },
             &half_vp,
-            Some(scissor),
+            Some(plan.vertical),
             D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
             3,
             true,
@@ -1441,7 +1426,7 @@ impl DirectXRenderer {
         self.dx_filter_composite(
             &ping_srv,
             target_rtv,
-            composite_bounds,
+            plan.composite_bounds,
             content_mask,
             mask_chain,
             corner_radii,
@@ -4078,6 +4063,393 @@ mod tests {
             context.PSSetShaderResources(3, Some(&null_srv));
         }
         Ok(())
+    }
+
+    #[test]
+    fn hlsl_blur_pass_scissors_match_unrestricted_pixels() -> Result<()> {
+        let (device, context) = create_warp_device().expect("WARP is required for blur readback");
+        let viewport = [257, 191];
+        let check = |run: &BlurFixtureDraw<'_>, output: &ID3D11Texture2D| -> Result<()> {
+            use hgpui_render::blur_region::blur_pass_plan;
+            let [width, height] = viewport;
+            let mut desc = D3D11_TEXTURE2D_DESC::default();
+            unsafe { output.GetDesc(&mut desc) };
+            desc.Usage = D3D11_USAGE_STAGING;
+            desc.BindFlags = 0;
+            desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ.0 as u32;
+            let mut staging = None;
+            unsafe { device.CreateTexture2D(&desc, None, Some(&mut staging)) }?;
+            let staging = staging.unwrap();
+            let readback = || -> Result<Vec<u8>> {
+                let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+                unsafe {
+                    context.OMSetRenderTargets(None, None);
+                    context.CopyResource(&staging, output);
+                    context.Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))?;
+                    let pitch = mapped.RowPitch as usize;
+                    let rows =
+                        slice::from_raw_parts(mapped.pData.cast::<u8>(), pitch * height as usize);
+                    let result = rows
+                        .chunks_exact(pitch)
+                        .flat_map(|row| row[..width as usize * 4].iter().copied())
+                        .collect();
+                    context.Unmap(&staging, 0);
+                    Ok(result)
+                }
+            };
+            for (x, y, w, h, radius, backdrop) in [
+                (-9.25, 0.0, 270.75, 29.5, 40.0, true),
+                (22.5, 17.5, 71.5, 28.25, 5.25, false),
+                (239.25, 170.5, 40.0, 31.0, 0.2, true),
+                (154.25, 37.0, 43.0, 121.25, 25.7, true),
+            ] {
+                let bounds = bounds(
+                    point(ScaledPixels(x), ScaledPixels(y)),
+                    size(ScaledPixels(w), ScaledPixels(h)),
+                );
+                run(bounds, (radius, backdrop), None)?;
+                let unrestricted = readback()?;
+                assert!(unrestricted.chunks_exact(4).any(|pixel| pixel[3] > 0));
+                let plan = blur_pass_plan(bounds, radius, backdrop, width, height).unwrap();
+                run(
+                    bounds,
+                    (radius, backdrop),
+                    Some([plan.downsample, plan.horizontal, plan.vertical]),
+                )?;
+                let scissored = readback()?;
+                let mismatch = unrestricted
+                    .iter()
+                    .zip(&scissored)
+                    .position(|(a, b)| a != b);
+                assert!(
+                    mismatch.is_none(),
+                    "first mismatched BGRA byte {mismatch:?} for {bounds:?} radius {radius} backdrop={backdrop}"
+                );
+            }
+            Ok(())
+        };
+        with_blur_scissor_fixture(&device, &context, viewport, [1.0, 0.0, 1.0, 1.0], check)
+    }
+
+    #[test]
+    #[ignore = "hardware GPU timestamp comparison; run by itself"]
+    fn hlsl_blur_pass_scissors_hardware_timing() -> Result<()> {
+        use hgpui_render::blur_region::{blur_pass_plan, blur_scissor_region};
+        use std::time::{Duration, Instant};
+        use windows::Win32::Graphics::{
+            Direct3D11::{
+                D3D11_QUERY_DATA_TIMESTAMP_DISJOINT, D3D11_QUERY_DESC, D3D11_QUERY_TIMESTAMP,
+                D3D11_QUERY_TIMESTAMP_DISJOINT, ID3D11Query,
+            },
+            Dxgi::IDXGIDevice,
+        };
+
+        let (device, context) =
+            create_hardware_device().expect("D3D11 hardware is required for GPU timestamps");
+        let adapter = unsafe { device.cast::<IDXGIDevice>()?.GetAdapter()?.GetDesc()? };
+        let description = String::from_utf16_lossy(&adapter.Description);
+        eprintln!(
+            "D3D11 timestamp adapter: {}",
+            description.trim_end_matches('\0')
+        );
+        let viewport = [1920, 1080];
+        let region = bounds(
+            point(ScaledPixels(0.0), ScaledPixels(0.0)),
+            size(ScaledPixels(1920.0), ScaledPixels(50.0)),
+        );
+        let radius = 40.0;
+        let legacy = blur_scissor_region(region, radius, true, viewport[0], viewport[1]).unwrap();
+        let plan = blur_pass_plan(region, radius, true, viewport[0], viewport[1]).unwrap();
+        let scissors = [
+            [legacy; 3],
+            [plan.downsample, plan.horizontal, plan.vertical],
+        ];
+        let pixels = scissors.map(|regions| {
+            regions
+                .map(|[_, _, w, h]| u64::from(w) * u64::from(h))
+                .into_iter()
+                .sum::<u64>()
+        });
+        let query = |kind| -> Result<ID3D11Query> {
+            let mut query = None;
+            unsafe {
+                device.CreateQuery(
+                    &D3D11_QUERY_DESC {
+                        Query: kind,
+                        MiscFlags: 0,
+                    },
+                    Some(&mut query),
+                )
+            }?;
+            Ok(query.unwrap())
+        };
+        let disjoint = query(D3D11_QUERY_TIMESTAMP_DISJOINT)?;
+        let start = query(D3D11_QUERY_TIMESTAMP)?;
+        let end = query(D3D11_QUERY_TIMESTAMP)?;
+        const ITERATIONS: usize = 16;
+        with_blur_scissor_fixture(&device, &context, viewport, [0.0; 4], |run, _| {
+            let measure = |regions| -> Result<f64> {
+                unsafe {
+                    context.Begin(&disjoint);
+                    context.End(&start);
+                }
+                for _ in 0..ITERATIONS {
+                    run(region, (radius, true), Some(regions))?;
+                }
+                unsafe {
+                    context.End(&end);
+                    context.End(&disjoint);
+                    context.Flush();
+                }
+                let deadline = Instant::now() + Duration::from_secs(8);
+                let wait = |query: &ID3D11Query,
+                            data: *mut std::ffi::c_void,
+                            bytes: u32|
+                 -> Result<()> {
+                    loop {
+                        // windows-rs maps S_FALSE (not ready) and S_OK to the same Ok(()).
+                        // Call the vtable entry so each result is read only after S_OK.
+                        let status = unsafe {
+                            (context.vtable().GetData)(
+                                context.as_raw(),
+                                query.as_raw(),
+                                data,
+                                bytes,
+                                0,
+                            )
+                        };
+                        status.ok()?;
+                        if status == windows::Win32::Foundation::S_OK {
+                            return Ok(());
+                        }
+                        anyhow::ensure!(Instant::now() < deadline, "GPU timestamp query timed out");
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                };
+                let mut interval = D3D11_QUERY_DATA_TIMESTAMP_DISJOINT::default();
+                wait(
+                    &disjoint,
+                    (&mut interval as *mut D3D11_QUERY_DATA_TIMESTAMP_DISJOINT).cast(),
+                    std::mem::size_of_val(&interval) as u32,
+                )?;
+                anyhow::ensure!(
+                    interval.Frequency != 0 && !interval.Disjoint.as_bool(),
+                    "GPU timer became disjoint"
+                );
+                let stamp = |query| -> Result<u64> {
+                    let mut ticks = 0u64;
+                    wait(query, (&mut ticks as *mut u64).cast(), 8)?;
+                    Ok(ticks)
+                };
+                let first = stamp(&start)?;
+                let last = stamp(&end)?;
+                anyhow::ensure!(
+                    last > first,
+                    "GPU returned invalid timestamps ({first}, {last})"
+                );
+                Ok((last - first) as f64 * 1e3 / interval.Frequency as f64 / ITERATIONS as f64)
+            };
+            for regions in scissors {
+                measure(regions)?;
+            }
+            let mut samples = [Vec::new(), Vec::new()];
+            for round in 0..7 {
+                for i in [round % 2, 1 - round % 2] {
+                    samples[i].push(measure(scissors[i])?);
+                }
+            }
+            for sample in &mut samples {
+                sample.sort_by(f64::total_cmp);
+            }
+            eprintln!(
+                "GPU: {}; half-res scissor area {pixels:?}; blur chain GPU ms median7 old={:.4}, new={:.4}; sorted samples={samples:?}",
+                description.trim_end_matches('\0'),
+                samples[0][3],
+                samples[1][3]
+            );
+            Ok(())
+        })
+    }
+
+    type BlurFixtureDraw<'a> =
+        dyn Fn(Bounds<ScaledPixels>, (f32, bool), Option<[[u32; 4]; 3]>) -> Result<()> + 'a;
+
+    fn with_blur_scissor_fixture(
+        device: &ID3D11Device,
+        context: &ID3D11DeviceContext,
+        [width, height]: [u32; 2],
+        scratch_clear: [f32; 4],
+        check: impl FnOnce(&BlurFixtureDraw<'_>, &ID3D11Texture2D) -> Result<()>,
+    ) -> Result<()> {
+        use super::create_rasterizer_state;
+        use windows::Win32::Foundation::RECT;
+
+        let (source, _, source_view) = create_color_target(device, width, height)?;
+        let image: Vec<_> = (0..height)
+            .flat_map(|y| {
+                (0..width).flat_map(move |x| {
+                    [(x * 7 + y * 17) as u8, (y * 23) as u8, (x * 11) as u8, 255]
+                })
+            })
+            .collect();
+        unsafe { context.UpdateSubresource(&source, 0, None, image.as_ptr().cast(), width * 4, 0) };
+        let (half_w, half_h) = ((width / 2).max(1), (height / 2).max(1));
+        let (_, ping, ping_view) = create_color_target(device, half_w, half_h)?;
+        let (_, pong, pong_view) = create_color_target(device, half_w, half_h)?;
+        let (output, output_rtv, _) = create_color_target(device, width, height)?;
+        let (ping, ping_view) = (ping.unwrap(), ping_view.unwrap());
+        let (pong, pong_view) = (pong.unwrap(), pong_view.unwrap());
+        let (output_rtv, source_view) = (output_rtv.unwrap(), source_view.unwrap());
+        let globals = test_globals(device, context)?;
+        update_buffer(
+            context,
+            globals[0].as_ref().unwrap(),
+            &[GlobalUniforms {
+                viewport_size: [width as f32, height as f32],
+                premultiplied_alpha: 0,
+                padding: 0,
+            }],
+        )?;
+        let params_buffer = create_constant_buffer(device, std::mem::size_of::<BlurParams>())?;
+        let sampler = create_blur_sampler(device)?.unwrap();
+        let replace = create_blend_state_no_blend(device)?;
+        let composite_blend = create_blend_state_for_filter_composite(device)?;
+        let pipeline = |module| -> Result<_> {
+            Ok((
+                create_vertex_shader(
+                    device,
+                    RawShaderBytes::new(module, ShaderTarget::Vertex)?.as_bytes(),
+                )?,
+                create_fragment_shader(
+                    device,
+                    RawShaderBytes::new(module, ShaderTarget::Fragment)?.as_bytes(),
+                )?,
+            ))
+        };
+        let downsample = pipeline(ShaderModule::BlurDownsample)?;
+        let gaussian = pipeline(ShaderModule::Blur)?;
+        let composite = pipeline(ShaderModule::BlurComposite)?;
+        let scissor_state = create_rasterizer_state(device, true)?;
+        let normal_state = create_rasterizer_state(device, false)?;
+        let viewport = |w, h| D3D11_VIEWPORT {
+            Width: w as f32,
+            Height: h as f32,
+            MaxDepth: 1.0,
+            ..Default::default()
+        };
+        let half_viewport = viewport(half_w, half_h);
+        let full_viewport = viewport(width, height);
+        let viewport_bounds = bounds(
+            point(ScaledPixels(0.0), ScaledPixels(0.0)),
+            size(ScaledPixels(width as f32), ScaledPixels(height as f32)),
+        );
+        let run = |bounds: Bounds<ScaledPixels>,
+                   (radius, backdrop): (f32, bool),
+                   scissors: Option<[[u32; 4]; 3]>|
+         -> Result<()> {
+            let sigma = 0.5 * radius;
+            let ideal = (3.0 * sigma).ceil();
+            let tap_count = ideal.clamp(1.0, 32.0);
+            let tap_step = (ideal / tap_count).max(1.0);
+            let blur = |direction| BlurParams {
+                direction,
+                sigma,
+                tap_count,
+                tap_step,
+                ..Default::default()
+            };
+            for (i, (pipeline, rtv, srv, params)) in [
+                (
+                    &downsample,
+                    &ping,
+                    &source_view,
+                    BlurParams {
+                        bounds,
+                        downsample: 1.0,
+                        ..Default::default()
+                    },
+                ),
+                (
+                    &gaussian,
+                    &pong,
+                    &ping_view,
+                    blur([1.0 / half_w as f32, 0.0]),
+                ),
+                (
+                    &gaussian,
+                    &ping,
+                    &pong_view,
+                    blur([0.0, 1.0 / half_h as f32]),
+                ),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                unsafe {
+                    // The pixel test supplies a sentinel; the timed path uses transparent black.
+                    context.ClearRenderTargetView(rtv, &scratch_clear);
+                    if let Some([x, y, w, h]) = scissors.map(|regions| regions[i]) {
+                        context.RSSetState(&scissor_state);
+                        context.RSSetScissorRects(Some(&[RECT {
+                            left: x as i32,
+                            top: y as i32,
+                            right: (x + w) as i32,
+                            bottom: (y + h) as i32,
+                        }]));
+                    } else {
+                        context.RSSetState(&normal_state);
+                    }
+                }
+                draw_blur_pass(
+                    context,
+                    device,
+                    &pipeline.0,
+                    &pipeline.1,
+                    &replace,
+                    rtv,
+                    srv,
+                    &sampler,
+                    &globals,
+                    &params_buffer,
+                    params,
+                    &half_viewport,
+                    D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
+                    3,
+                )?;
+            }
+            unsafe {
+                context.RSSetState(&normal_state);
+                context.ClearRenderTargetView(&output_rtv, &[0.0; 4]);
+            }
+            draw_blur_pass(
+                context,
+                device,
+                &composite.0,
+                &composite.1,
+                &composite_blend,
+                &output_rtv,
+                &ping_view,
+                &sampler,
+                &globals,
+                &params_buffer,
+                BlurParams {
+                    bounds: if backdrop {
+                        bounds
+                    } else {
+                        bounds.dilate(ScaledPixels(3.0 * radius))
+                    },
+                    content_mask: viewport_bounds,
+                    corner_radii: [6.0; 4],
+                    opacity: 1.0,
+                    clip_rounded: if backdrop { 1.0 } else { 0.0 },
+                    ..Default::default()
+                },
+                &full_viewport,
+                D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP,
+                4,
+            )
+        };
+        check(&run, &output)
     }
 
     /// A blurred element must not dissolve at its own border. The downsample reflects taps that

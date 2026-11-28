@@ -7,7 +7,7 @@ use cocoa::{
     quartzcore::AutoresizingMask,
 };
 use hgpui_render::artifacts::NATIVE_SHADERS;
-use hgpui_render::blur_region::{blur_scissor_region, filter_copy_region};
+use hgpui_render::blur_region::{blur_pass_plan, filter_copy_region};
 use hgpui_render::filter_matrix::{
     ColorFilterMatrix, color_filter_matrix, combined_blur_radius,
 };
@@ -1474,24 +1474,7 @@ impl MetalRenderer {
             }
             return;
         }
-        // Span ±3σ. If that needs more than 32 taps, spread the taps apart (tap_step > 1) rather
-        // than truncating the kernel — keeps very large radii from clipping. Matches wgpu.
-        let ideal_taps = (3.0 * sigma).ceil();
-        let tap_count = ideal_taps.clamp(1.0, 32.0);
-        let tap_step = (ideal_taps / tap_count).max(1.0);
-        // Content blur bleeds ~3·radius past the box, so its composite quad covers a dilated rect.
-        let composite_bounds = if clip_rounded {
-            bounds
-        } else {
-            bounds.dilate(ScaledPixels(3.0 * blur_radius))
-        };
-        let half = Size {
-            width: DevicePixels((i32::from(viewport_size.width) / 2).max(1)),
-            height: DevicePixels((i32::from(viewport_size.height) / 2).max(1)),
-        };
-        let half_w = i32::from(half.width) as f32;
-        let half_h = i32::from(half.height) as f32;
-        let Some(scissor) = blur_scissor_region(
+        let Some(plan) = blur_pass_plan(
             bounds,
             blur_radius,
             clip_rounded,
@@ -1500,6 +1483,12 @@ impl MetalRenderer {
         ) else {
             return;
         };
+        let half = Size {
+            width: DevicePixels((i32::from(viewport_size.width) / 2).max(1)),
+            height: DevicePixels((i32::from(viewport_size.height) / 2).max(1)),
+        };
+        let half_w = i32::from(half.width) as f32;
+        let half_h = i32::from(half.height) as f32;
 
         // Downsample source -> ping, then separable gaussian ping -> pong -> ping.
         self.run_metal_blur_pass(
@@ -1516,7 +1505,7 @@ impl MetalRenderer {
                 ..Default::default()
             },
             false,
-            Some(scissor),
+            Some(plan.downsample),
         );
         self.run_metal_blur_pass(
             command_buffer,
@@ -1526,13 +1515,13 @@ impl MetalRenderer {
             half,
             BlurUniform {
                 direction: [1.0 / half_w, 0.0],
-                sigma,
-                tap_count,
-                tap_step,
+                sigma: plan.sigma,
+                tap_count: plan.tap_count,
+                tap_step: plan.tap_step,
                 ..Default::default()
             },
             false,
-            Some(scissor),
+            Some(plan.horizontal),
         );
         self.run_metal_blur_pass(
             command_buffer,
@@ -1542,13 +1531,13 @@ impl MetalRenderer {
             half,
             BlurUniform {
                 direction: [0.0, 1.0 / half_h],
-                sigma,
-                tap_count,
-                tap_step,
+                sigma: plan.sigma,
+                tap_count: plan.tap_count,
+                tap_step: plan.tap_step,
                 ..Default::default()
             },
             false,
-            Some(scissor),
+            Some(plan.vertical),
         );
 
         // Composite the blurred result into the target (preserving its contents).
@@ -1557,7 +1546,7 @@ impl MetalRenderer {
             ping,
             target,
             viewport_size,
-            composite_bounds,
+            plan.composite_bounds,
             content_mask,
             mask_chain,
             corner_radii,
